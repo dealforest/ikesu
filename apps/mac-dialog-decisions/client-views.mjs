@@ -98,7 +98,11 @@ export function displayedByFocusedClient(entry, clientViews, views) {
   const pane = entry.decision.origin?.pane_id;
   const session = clientViews?.sessionFor(entry.machineId);
   if (!pane || !session || !Array.isArray(views)) return false;
+  // The user is looking at the space of the decision: hold the panel while the
+  // focused client shows that space, even when the pane itself is behind a
+  // popup or menu, or another pane or tab of the same space is selected.
+  // Clients older than 0.4.147 report only pane_ids.
   return views.some(view => view.focused === true && view.machine_id === entry.machineId &&
     view.session === session && typeof view.workspace_id === "string" && view.workspace_id &&
-    Array.isArray(view.pane_ids) && view.pane_ids.includes(pane));
+    (Array.isArray(view.workspace_pane_ids) ? view.workspace_pane_ids : Array.isArray(view.pane_ids) ? view.pane_ids : []).includes(pane));
 }
