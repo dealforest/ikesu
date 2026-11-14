@@ -27,12 +27,11 @@ import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.FrameLayout
 import android.widget.ImageView
-import android.widget.MediaController
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
-import android.widget.VideoView
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -118,7 +117,7 @@ class MainActivity : Activity() {
         render()
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); receiveIntent(intent); render() }
-    override fun onDestroy() { viewer?.dismiss(); unregisterReceiver(receiver); super.onDestroy() }
+    override fun onDestroy() { viewer?.dismiss(); videoViewer?.dismiss(); unregisterReceiver(receiver); super.onDestroy() }
     private fun receiveIntent(intent: Intent) {
         TextScale.fromIntent((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0, intent.hasExtra("text_scale"), intent.getFloatExtra("text_scale", 1f))?.let { textScale = it; appliedScale = textScale; getSharedPreferences("ui", MODE_PRIVATE).edit().putFloat("textScale", textScale).apply() }
         val url = intent.getStringExtra("url")
@@ -131,6 +130,9 @@ class MainActivity : Activity() {
         intent.getStringExtra("decision")?.let { selectedId = it; showList = false; settingsVisible = false }
     }
     private fun handleUpdate() {
+        // A video removed with its decision closes the player and frees its preview.
+        videoPreviews.keys.retainAll(DecisionState.videos.keys)
+        videoViewer?.let { if (it.key !in DecisionState.videos) it.dismiss() }
         if (!DecisionState.connected && drafts.values.any { it.sequence != null && !it.waitingReconnect }) {
             drafts.values.filter { it.sequence != null }.forEach { it.waitingReconnect = true }
             Toast.makeText(this, "接続が切れました。再接続後に保存状態を確認してください", Toast.LENGTH_LONG).show()
@@ -313,14 +315,9 @@ class MainActivity : Activity() {
             addImage(card.optString("image")); block(text("${card.optString("title")}\n${card.optString("url")}"))
         }
         val videos = item.optJSONArray("videos") ?: JSONArray()
-        for (i in 0 until videos.length()) videos.optJSONObject(i)?.let { video ->
-            DecisionState.videos[video.optString("key")]?.let { file ->
-                val player = VideoView(this)
-                player.setMediaController(MediaController(this).apply { setAnchorView(player) })
-                player.setOnPreparedListener { it.setVolume(0f, 0f) }; player.setVideoPath(file.absolutePath)
-                layout.addView(player, LinearLayout.LayoutParams(-1, dp(200)))
-            }
-        }
+        for (i in 0 until videos.length()) videos.optJSONObject(i)?.let { video -> block(videoTile(video.optString("key"))) }
+        val mediaErrors = item.optJSONArray("media_errors") ?: JSONArray()
+        for (i in 0 until mediaErrors.length()) mediaErrors.optString(i).takeIf { it.isNotEmpty() }?.let { block(text(it, 18f).apply { setTextColor(warn) }) }
         val options = item.optJSONArray("options") ?: JSONArray()
         val allowText = item.optBoolean("allow_text")
         val slots = DetailCursor.slots(options.length(), allowText)
@@ -381,6 +378,45 @@ class MainActivity : Activity() {
             setOnClickListener { action() }
         }
     }
+    private val videoPreviews = mutableMapOf<String, VideoPreview>()
+    private val loadingPreviews = mutableSetOf<String>()
+    private val previewLoader = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private var videoViewer: VideoViewerDialog? = null
+    /**
+     * A received video shows its first frame with a play label; a tap opens the
+     * full-screen player. The frame is read off the main thread, scaled like
+     * images. Until every chunk arrives, the tile says it is receiving.
+     */
+    private fun videoTile(key: String): View {
+        val file = DecisionState.videos[key]
+        if (file == null) return text("動画を受け取り中…", 18f).apply { setTextColor(dim) }
+        val preview = videoPreviews[key]
+        if (preview == null && loadingPreviews.add(key)) previewLoader.execute {
+            val read = VideoPreviews.read(file)
+            runOnUiThread {
+                loadingPreviews.remove(key)
+                if (isDestroyed || DecisionState.videos[key] != file) return@runOnUiThread
+                videoPreviews[key] = read; render()
+            }
+        }
+        val tile = FrameLayout(this).apply { background = frame(); setPadding(dp(2), dp(2), dp(2), dp(2)) }
+        val picture = ImageView(this).apply { adjustViewBounds = true; setBackgroundColor(Color.BLACK); preview?.frame?.let { setImageBitmap(it) } }
+        tile.addView(picture, FrameLayout.LayoutParams(-1, if (preview?.frame == null) dp(160) else -2))
+        val length = VideoPreviews.length(preview?.millis ?: 0L)
+        val label = if (length.isEmpty()) "▶ 動画を再生" else "▶ 動画を再生  $length"
+        tile.addView(TextView(this).apply {
+            text = label
+            textSize = 22f * textScale; setTextColor(Color.BLACK); setTypeface(typeface, Typeface.BOLD)
+            background = GradientDrawable().apply { setColor(green); cornerRadius = dp(8).toFloat() }
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+        }, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply { setMargins(dp(12), dp(12), dp(12), dp(12)) })
+        tile.contentDescription = label; tile.isClickable = true; tile.isFocusable = true
+        tile.setOnClickListener {
+            videoViewer?.dismiss()
+            videoViewer = VideoViewerDialog(this, key, file).also { it.setOnDismissListener { if (videoViewer === it) videoViewer = null }; it.show() }
+        }
+        return tile
+    }
     private var viewer: ImageViewerDialog? = null
     private fun showViewer(bitmap: android.graphics.Bitmap) {
         viewer?.dismiss()
@@ -395,7 +431,7 @@ class MainActivity : Activity() {
             var sample = 1
             while (bounds.outWidth / sample > 1600 || bounds.outHeight / sample > 1600) sample *= 2
             val bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }) ?: return
-            layout.addView(ImageView(this).apply { setImageBitmap(bitmap); adjustViewBounds = true; setOnClickListener { showViewer(bitmap) } })
+            block(ImageView(this).apply { setImageBitmap(bitmap); adjustViewBounds = true; setOnClickListener { showViewer(bitmap) } })
         } catch (_: Exception) { /* Display failures do not prevent answering. */ }
     }
     private fun renderSettings() {

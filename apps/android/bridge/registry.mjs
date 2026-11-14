@@ -33,7 +33,7 @@ export class DecisionRegistry extends MacDialogDecisionsDaemon {
     const entry = [...this.entries.values()].find(item => item.machineId === machineId && item.decision.decision_id === decision.decision_id);
     if (entry && !this.publicIds.has(entry.key)) {
       this.publicIds.set(entry.key, createHash('sha256').update(entry.key).digest('base64url'));
-      entry.media = { images: [], cards: [], videos: [] };
+      entry.media = { images: [], cards: [], videos: [], errors: [] };
       entry.mediaAbort = new AbortController();
       if (this.rich) void this.rich.load(buildDialogSpec(decision, machine), machineId, entry.mediaAbort.signal, event => {
         void this.recordMedia(entry, event).catch(error => this.log(`表示素材を読めません: ${error.message}`));
@@ -63,6 +63,10 @@ export class DecisionRegistry extends MacDialogDecisionsDaemon {
     if (event.status === 'rich_card') entry.media.cards[event.index] = { title: event.title, url: event.url, site: event.site,
       image: event.path ? (await fs.readFile(event.path)).toString('base64') : '' };
     if (event.status === 'rich_video') entry.media.videos[event.index] = { key: randomUUID(), path: event.path };
+    // The Mac panel shows why a picture or video is missing; the phone shows the same text.
+    // At most four distinct reasons, so a repeating failure does not grow every snapshot.
+    if (event.status === 'rich_error' && event.message && entry.media.errors.length < 4 && !entry.media.errors.includes(String(event.message)))
+      entry.media.errors.push(String(event.message));
     if (!entry.mediaAbort.signal.aborted) this.notify();
   }
   onResolved(machineId, decision) {
@@ -89,6 +93,7 @@ export class DecisionRegistry extends MacDialogDecisionsDaemon {
       images: entry.media?.images || [],
       cards: entry.media?.cards || [],
       videos: (entry.media?.videos || []).map(video => video ? { key: video.key } : null),
+      media_errors: entry.media?.errors || [],
     })).filter(entry => entry.id);
   }
   videoPath(id, key) { return this.find(id)?.media?.videos.find(video => video?.key === key)?.path; }
