@@ -7,7 +7,6 @@ import android.graphics.Color
 import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
 import android.view.Gravity
-import android.view.KeyEvent
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.MediaController
@@ -24,7 +23,8 @@ object VideoPreviews {
         return try {
             retriever.setDataSource(file.absolutePath)
             val millis = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
-            VideoPreview(retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC), millis)
+            // Scaled to the same 1600px bound as images, so a 4K video does not hold a full-size frame.
+            VideoPreview(retriever.getScaledFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 1600, 1600), millis)
         } catch (_: Exception) { VideoPreview(null, 0L) }
         finally { try { retriever.release() } catch (_: Exception) {} }
     }
@@ -38,15 +38,18 @@ object VideoPreviews {
 
 /**
  * Full-screen player above the activity. It starts at once, muted, and loops;
- * the sound button turns the sound on. Back, the close button or a long
- * volume-up press closes it, like the image viewer.
+ * the sound button turns the sound on. Back or the close button closes it.
+ * Volume keys are left to the system so the sound level can be changed while
+ * a video plays (unlike the image viewer, which uses them for navigation).
  */
-class VideoViewerDialog(context: Context, file: File, private val onVolumeUpClose: () -> Unit = {}) : Dialog(context, android.R.style.Theme_Black_NoTitleBar_Fullscreen) {
+class VideoViewerDialog(context: Context, val key: String, file: File) : Dialog(context, android.R.style.Theme_Black_NoTitleBar_Fullscreen) {
     private var player: MediaPlayer? = null
+    private val video: VideoView
+    private val controller: MediaController
     private var muted = true
     init {
         val root = FrameLayout(context).apply { setBackgroundColor(Color.BLACK) }
-        val video = VideoView(context)
+        video = VideoView(context)
         root.addView(video, FrameLayout.LayoutParams(-1, -2, Gravity.CENTER))
         val density = context.resources.displayMetrics.density
         fun label(text: String, gravity: Int) = TextView(context).apply {
@@ -66,24 +69,17 @@ class VideoViewerDialog(context: Context, file: File, private val onVolumeUpClos
         root.addView(close); root.addView(sound)
         setContentView(root, ViewGroup.LayoutParams(-1, -1))
         window?.setBackgroundDrawableResource(android.R.color.black)
-        val controller = MediaController(context)
+        controller = MediaController(context)
         controller.setAnchorView(video)
         video.setMediaController(controller)
         video.setOnPreparedListener { mp -> player = mp; mp.isLooping = true; mp.setVolume(0f, 0f); video.start(); controller.show(3000) }
+        var errorShown = false
         video.setOnErrorListener { _, _, _ ->
-            root.addView(label("この動画はこの端末で再生できません", Gravity.CENTER)); true
+            if (!errorShown) { errorShown = true; root.addView(label("この動画はこの端末で再生できません", Gravity.CENTER)) }
+            true
         }
         video.setVideoPath(file.absolutePath)
-        setOnDismissListener { video.stopPlayback(); player = null }
     }
-    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        if (keyCode == VolumeNav.UP || keyCode == VolumeNav.DOWN) { if (keyCode == VolumeNav.UP && event.repeatCount == 0) event.startTracking(); return true }
-        return super.onKeyDown(keyCode, event)
-    }
-    override fun onKeyLongPress(keyCode: Int, event: KeyEvent): Boolean {
-        if (keyCode == VolumeNav.UP) { onVolumeUpClose(); dismiss(); return true }
-        return super.onKeyLongPress(keyCode, event)
-    }
-    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean =
-        if (keyCode == VolumeNav.UP || keyCode == VolumeNav.DOWN) true else super.onKeyUp(keyCode, event)
+    /** Runs on every dismiss; the activity's own dismiss listener does not replace it. */
+    override fun onStop() { controller.hide(); video.stopPlayback(); player = null; super.onStop() }
 }

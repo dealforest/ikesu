@@ -64,7 +64,9 @@ export class DecisionRegistry extends MacDialogDecisionsDaemon {
       image: event.path ? (await fs.readFile(event.path)).toString('base64') : '' };
     if (event.status === 'rich_video') entry.media.videos[event.index] = { key: randomUUID(), path: event.path };
     // The Mac panel shows why a picture or video is missing; the phone shows the same text.
-    if (event.status === 'rich_error' && event.message) entry.media.errors.push(String(event.message));
+    // At most four distinct reasons, so a repeating failure does not grow every snapshot.
+    if (event.status === 'rich_error' && event.message && entry.media.errors.length < 4 && !entry.media.errors.includes(String(event.message)))
+      entry.media.errors.push(String(event.message));
     if (!entry.mediaAbort.signal.aborted) this.notify();
   }
   onResolved(machineId, decision) {
