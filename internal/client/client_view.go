@@ -5,6 +5,7 @@ import (
 	"github.com/kazuph/ikesu/internal/api"
 	"github.com/kazuph/ikesu/internal/endpoint"
 	"github.com/kazuph/ikesu/internal/layout"
+	"github.com/kazuph/ikesu/internal/model"
 	"github.com/kazuph/ikesu/internal/render"
 	"image"
 	"reflect"
@@ -43,8 +44,40 @@ func (m *machineClient) currentClientView() api.ClientView {
 			view.PaneIDs = append(view.PaneIDs, fmt.Sprintf("p%d", state.Popup.PaneID))
 		}
 		sort.Strings(view.PaneIDs)
+		view.WorkspacePaneIDs = workspacePaneIDs(state, ws)
 	}
 	return view
+}
+
+// workspacePaneIDs lists every pane of the displayed workspace: all tabs,
+// including panes hidden behind menus, dialogs, popups or another tab, plus a
+// visible popup or overlay pane.
+func workspacePaneIDs(state *model.AppState, ws *model.Workspace) []string {
+	seen := map[string]bool{}
+	ids := []string{}
+	add := func(id int) {
+		key := fmt.Sprintf("p%d", id)
+		if !seen[key] {
+			seen[key] = true
+			ids = append(ids, key)
+		}
+	}
+	for _, tab := range ws.Tabs {
+		if tab == nil || tab.Layout == nil {
+			continue
+		}
+		for _, id := range tab.Layout.PaneIDs() {
+			add(id)
+		}
+	}
+	if state.PopupVisible() {
+		add(int(state.Popup.PaneID))
+	}
+	if state.OverlayVisible() {
+		add(int(state.Overlay.PaneID))
+	}
+	sort.Strings(ids)
+	return ids
 }
 func (m *machineClient) reportClientView(in render.Input) {
 	view := m.currentClientView()

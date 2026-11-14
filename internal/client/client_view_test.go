@@ -153,3 +153,37 @@ func TestClientViewOnlyExcludesPaneCoveredByPaintedDialog(t *testing.T) {
 	}
 
 }
+
+// The Mac panel holds a decision while the user is in its space, so the view
+// lists every pane of the displayed space, whether or not it is painted.
+func TestClientViewListsEveryPaneOfTheDisplayedSpace(t *testing.T) {
+	state := model.New(t.TempDir(), 160, 40)
+	state.Apply(model.CmdSplitPane{Pane: 1, Dir: layout.Vertical, Ratio: 0.5})
+	state.Apply(model.CmdNewTab{Workspace: 0})
+	peer := endpoint.Current()
+	c := &endpointConnection{writer: &writer{available: peer.Generation, methods: peer.Methods}, wake: make(chan struct{}, 1)}
+	e := &managedEndpoint{connection: c, snapshot: &render.Input{State: state}}
+	m := &machineClient{session: "isolated", active: "local", endpoints: map[string]*managedEndpoint{"local": e}}
+	all := []string{"p1", "p2", "p3"}
+	if got := m.currentClientView(); !reflect.DeepEqual(got.PaneIDs, []string{"p3"}) || !reflect.DeepEqual(got.WorkspacePaneIDs, all) {
+		t.Fatalf("other tab: %+v", got)
+	}
+	state.ActiveWorkspace().ActiveTab = 0
+	state.ActiveWorkspace().TabRef().Zoomed = 2
+	if got := m.currentClientView(); !reflect.DeepEqual(got.PaneIDs, []string{"p2"}) || !reflect.DeepEqual(got.WorkspacePaneIDs, all) {
+		t.Fatalf("zoomed neighbour: %+v", got)
+	}
+	state.ActiveWorkspace().TabRef().Zoomed = 0
+	state.Apply(model.CmdOpenPopup{WorkspaceID: state.ActiveWorkspace().ID, Width: api.PopupSize{Cells: 150}, Height: api.PopupSize{Cells: 38}})
+	popup := fmt.Sprintf("p%d", state.Popup.PaneID)
+	in := render.Input{State: state}
+	m.regions = render.ComposeClient(in, nil, "test", false)
+	m.reportClientView(in)
+	if got := m.lastClientView; !reflect.DeepEqual(got.PaneIDs, []string{popup}) || !reflect.DeepEqual(got.WorkspacePaneIDs, append(append([]string{}, all...), popup)) {
+		t.Fatalf("popup over the space: %+v", got)
+	}
+	state.Apply(model.CmdNewWorkspace{})
+	if got := m.currentClientView(); got.WorkspaceID != "s2" || !reflect.DeepEqual(got.WorkspacePaneIDs, []string{fmt.Sprintf("p%d", state.ActiveWorkspace().TabRef().Layout.PaneIDs()[0])}) {
+		t.Fatalf("another space: %+v", got)
+	}
+}

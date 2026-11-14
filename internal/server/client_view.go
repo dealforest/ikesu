@@ -13,6 +13,9 @@ func (s *Server) updateClientView(c *clientConn, view *api.ClientView) {
 	copy := *view
 	copy.ClientID = c.id
 	copy.PaneIDs = append([]string{}, view.PaneIDs...)
+	if view.WorkspacePaneIDs != nil {
+		copy.WorkspacePaneIDs = append([]string{}, view.WorkspacePaneIDs...)
+	}
 	if view.Focused != nil {
 		focused := *view.Focused
 		copy.Focused = &focused

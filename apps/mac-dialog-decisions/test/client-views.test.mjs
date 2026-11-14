@@ -125,7 +125,11 @@ test('a real API refusal falls back foreground and teardown exits even when serv
 
 test('real API: focused same workspace suppresses, unknown/other space/session/machine/origin do not',async t=>{
  const f=await fixture(t),e=f.entry();
- for(const [patch,want] of [[{},true],[{focused:null},false],[{focused:false},false],[{workspace_id:'s2',pane_ids:['p3']},false],[{session:'other'},false],[{machine_id:'unknown'},false]]) {
+ for(const [patch,want] of [[{},true],[{focused:null},false],[{focused:false},false],[{workspace_id:'s2',pane_ids:['p3']},false],[{session:'other'},false],[{machine_id:'unknown'},false],
+   // Same space: the pane is behind a popup, menu or the other tab, or a neighbouring pane is selected.
+   [{pane_ids:[],workspace_pane_ids:['p1','p3']},true],[{pane_ids:['p3'],workspace_pane_ids:['p1','p3']},true],
+   [{focused:false,pane_ids:[],workspace_pane_ids:['p1']},false],
+   [{workspace_id:'s2',pane_ids:['p3'],workspace_pane_ids:['p3','p4']},false]]) {
    await f.set({...local,...patch});assert.equal(await f.daemon.presentation(e),want,JSON.stringify(patch));
  }
  await f.set(local);assert.equal(await f.daemon.presentation(f.entry('no-origin','local',null)),false);
@@ -201,12 +205,27 @@ os.close(fd)
  await until(async()=>{actual=(await f.views.list()).find(view=>view.client_id===actual.client_id);return actual?.focused===true});
  const space=await f.rpc('workspace.create',{label:'actual-client-space',focus:true});
  await until(async()=>{actual=(await f.views.list()).find(view=>view.client_id===actual.client_id);return actual?.workspace_id===space.workspace.workspace_id});
- // The fresh HOME opens a setup dialog; a covered pane must not suppress notifications.
+ // The fresh HOME opens a setup dialog. The covered pane is not painted, but
+ // it is still a pane of the space the user is looking at.
  assert.deepEqual(actual.pane_ids,[]);
+ assert.deepEqual(actual.workspace_pane_ids,[space.root_pane.pane_id]);
  // Continue the actual onboarding dialog, then prove the painted pane returns.
  terminal.stdin.write('\r');
  await until(async()=>{actual=(await f.views.list()).find(view=>view.client_id===actual.client_id);return actual?.pane_ids.includes(space.root_pane.pane_id)});
  assert.deepEqual(actual.pane_ids,[space.root_pane.pane_id]);
+ // Another tab of the same space hides the first pane, but the space still holds it.
+ const tab=await f.rpc('tab.create',{workspace_id:space.workspace.workspace_id,focus:true});
+ const second=tab.root_pane.pane_id;
+ await until(async()=>{actual=(await f.views.list()).find(view=>view.client_id===actual.client_id);return actual?.pane_ids.includes(second)});
+ assert.deepEqual(actual.pane_ids,[second]);
+ assert.deepEqual(actual.workspace_pane_ids,[space.root_pane.pane_id,second].sort());
+ const held=f.entry('actual-other-tab','local',{pane_id:space.root_pane.pane_id});
+ assert.equal(await f.daemon.presentation(held),true);
+ // A different space releases it.
+ const other=await f.rpc('workspace.create',{label:'actual-other-space',focus:true});
+ await until(async()=>{actual=(await f.views.list()).find(view=>view.client_id===actual.client_id);return actual?.workspace_id===other.workspace.workspace_id});
+ assert.equal(actual.workspace_pane_ids.includes(space.root_pane.pane_id),false);
+ assert.equal(await f.daemon.presentation(held),false);
  terminal.stdin.write('\x1b[O');
  await until(async()=>{actual=(await f.views.list()).find(view=>view.client_id===actual.client_id);return actual?.focused===false});
  assert.equal(actual.machine_id,'local');
