@@ -507,6 +507,9 @@ func (s *Server) runAgentRestore(dryRun bool) api.AgentRestoreResult {
 				} else {
 					act.Status = "launched"
 					s.typeResume(pid, cmd)
+					if v.agent == "claude" && v.kind == "id" {
+						s.watchInterruptedBackground(pid, s.sup.Get(pid), v.value, time.Now())
+					}
 				}
 				actions = append(actions, act)
 			}
