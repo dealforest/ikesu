@@ -11,6 +11,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kazuph/ikesu/internal/api"
@@ -44,6 +45,10 @@ const (
 // them one or two at a time.
 var interruptedReadSlots = make(chan struct{}, 2)
 
+// One watcher per pane: a second restore of the same pane (before its agent
+// is detected) must not list the same commands twice.
+var interruptedWatching sync.Map // pane id -> struct{}
+
 var interruptedToolUseID = regexp.MustCompile(`<tool-use-id>(toolu_[A-Za-z0-9_-]+)</tool-use-id>`)
 
 type interruptedCommand struct {
@@ -63,7 +68,7 @@ func readInterruptedBackground(r io.Reader, since time.Time) ([]interruptedComma
 		line, err := reader.ReadBytes('\n')
 		if len(line) > 0 {
 			notice := bytes.Contains(line, []byte(interruptedBackgroundNotice))
-			if bytes.Contains(line, []byte(`"tool_use"`)) {
+			if bytes.Contains(line, []byte(`"tool_use"`)) && bytes.Contains(line, []byte(`"run_in_background":true`)) {
 				collectBackgroundToolUses(line, tools)
 			}
 			if notice {
@@ -174,7 +179,11 @@ func (s *Server) watchInterruptedBackground(pid int, owner *runtime.Pane, sessio
 		return
 	}
 	since := launched.Add(-interruptedNoticeSlack)
+	if _, busy := interruptedWatching.LoadOrStore(pid, struct{}{}); busy {
+		return
+	}
 	go func() {
+		defer interruptedWatching.Delete(pid)
 		deadline := time.Now().Add(interruptedWatchTimeout)
 		idle := 0
 		for time.Now().Before(deadline) {
@@ -191,25 +200,35 @@ func (s *Server) watchInterruptedBackground(pid int, owner *runtime.Pane, sessio
 				return
 			}
 			// Two idle polls in a row: Claude Code finished starting and is
-			// not showing a question that typed text would answer.
-			if status != "idle" {
+			// not showing a question that typed text would answer. "done" is
+			// idle with an unseen result.
+			if status != "idle" && status != "done" {
 				idle = 0
 				continue
 			}
 			if idle++; idle < 2 {
 				continue
 			}
-			s.sendInterruptedBackground(pid, owner, sessionID, since)
-			return
+			if s.sendInterruptedBackground(pid, owner, sessionID, since) {
+				return
+			}
+			// Claude Code is not detected in the pane yet; look again.
+			idle = 0
 		}
 		fmt.Fprintf(os.Stderr, "ikesu restore: pane p%d did not become idle; interrupted background commands were not listed\n", pid)
 	}()
 }
 
-func (s *Server) sendInterruptedBackground(pid int, owner *runtime.Pane, sessionID string, since time.Time) {
+// sendInterruptedBackground reports false only while the restored Claude
+// Code cannot be found yet, so the watcher tries again.
+func (s *Server) sendInterruptedBackground(pid int, owner *runtime.Pane, sessionID string, since time.Time) bool {
 	path, _, err := claudePermissionPath(owner)
-	if err != nil || !strings.HasSuffix(path, string(os.PathSeparator)+sessionID+".jsonl") {
-		return
+	if err != nil {
+		return false
+	}
+	if !strings.HasSuffix(path, string(os.PathSeparator)+sessionID+".jsonl") {
+		fmt.Fprintf(os.Stderr, "ikesu restore: pane p%d resumed a different conversation; interrupted background commands were not listed\n", pid)
+		return true
 	}
 	interruptedReadSlots <- struct{}{}
 	cmds, err := func() ([]interruptedCommand, error) {
@@ -223,14 +242,15 @@ func (s *Server) sendInterruptedBackground(pid int, owner *runtime.Pane, session
 	}()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ikesu restore: pane p%d: cannot read interrupted background commands: %v\n", pid, err)
-		return
+		return true
 	}
 	if len(cmds) == 0 {
-		return
+		return true
 	}
 	params, _ := json.Marshal(api.MsgSendParams{Room: dispatch.DefaultRoom, FromAgent: "ikesu", To: fmtPaneID(pid), Body: interruptedBackgroundMessage(cmds)})
 	response := s.dispatchContext(context.Background(), &api.Request{ID: "restore-interrupted", Method: api.MethodMsgSend, Params: params})
 	if response.Err != nil {
 		fmt.Fprintf(os.Stderr, "ikesu restore: pane p%d: cannot send interrupted background commands: %s\n", pid, response.Err.Message)
 	}
+	return true
 }
