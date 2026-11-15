@@ -15,6 +15,15 @@ class DecisionPresentationTest {
         assertEquals("コマンドの承認", decisionHeading("", "", "command_guard"))
         assertEquals("判断待ち", decisionHeading(" ", "", "other"))
     }
+    @Test fun detailNeverRepeatsTheQuestion() {
+        // Claude's question: the bridge dropped the repeated title, so the first line is the heading.
+        assertEquals("決めてほしい1点は？" to "経緯: 再起動で止まった。", detailHeadingAndBody("", "決めてほしい1点は？\n\n経緯: 再起動で止まった。", "agent_prompt"))
+        // An older bridge still sends the title: its copy at the top of the body is dropped.
+        assertEquals("決めてほしい1点は？" to "経緯: 再起動で止まった。", detailHeadingAndBody("決めてほしい1点は？", "決めてほしい1点は？\n\n経緯: 再起動で止まった。", "agent_prompt"))
+        assertEquals("同じ 文" to "", detailHeadingAndBody("同じ 文", "同じ\n文", "ask"))
+        assertEquals("実行確認: rm" to "申請文：片付ける", detailHeadingAndBody("実行確認: rm", "申請文：片付ける", "command_guard"))
+        assertEquals("エージェントの質問" to "", detailHeadingAndBody("", " ", "agent_prompt"))
+    }
     @Test fun onlyUnavailablePreviewsShowTheFallback() {
         assertEquals("", optionSupplement("", "", false))
         assertEquals("説明", optionSupplement("説明", "", false))

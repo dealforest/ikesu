@@ -290,7 +290,8 @@ class MainActivity : Activity() {
         val draft = drafts.getOrPut(id) { Draft() }
         block(text(item.optString("location"), 18f))
         if (item.optString("question_label").isNotBlank()) block(text(item.optString("question_label"), 18f))
-        block(text(decisionHeading(item.optString("raw_title"), item.optString("raw_body"), item.optString("kind")), 28f))
+        val (heading, rest) = detailHeadingAndBody(item.optString("title"), item.optString("body"), item.optString("kind"))
+        block(text(heading, 28f))
         val units = item.optJSONArray("approval_units")?.takeIf { it.length() > 0 }
         if (units != null) {
             item.optString("approval_units_heading").takeIf { it.isNotEmpty() }?.let { block(text(it, 20f).apply { setTypeface(typeface, Typeface.BOLD) }) }
@@ -307,7 +308,7 @@ class MainActivity : Activity() {
         if (item.optBoolean("machine_down")) block(text("出どころのマシンに接続できないため送れません", 18f).apply { setTextColor(warn) })
         if (item.optString("reauth_url").isNotEmpty()) block(text("SSH の再承認が必要です\n${item.optString("reauth_url")}", 18f).apply { setTextColor(warn) })
         if (item.optString("retry_error").isNotEmpty()) block(text(item.optString("retry_error"), 18f).apply { setTextColor(warn) })
-        if (item.optString("body").isNotEmpty()) block(text(item.optString("body")))
+        if (rest.isNotEmpty()) block(text(rest))
         val images = item.optJSONArray("images") ?: JSONArray()
         for (i in 0 until images.length()) addImage(images.optString(i, ""))
         val cards = item.optJSONArray("cards") ?: JSONArray()
