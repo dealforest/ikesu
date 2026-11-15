@@ -11,6 +11,36 @@ fun decisionHeading(title: String, body: String, kind: String): String =
         }
     }
 
+/**
+ * The detail's big heading and the smaller text under it, without saying the
+ * same sentence twice. The bridge already drops a title that only repeats the
+ * question (shared with the Mac panel and Slack); then the question's first
+ * line becomes the heading and the rest stays below.
+ */
+fun detailHeadingAndBody(title: String, body: String, kind: String): Pair<String, String> {
+    val normalize = { text: String -> text.replace(Regex("\\s+"), " ").trim() }
+    if (title.isNotBlank()) {
+        val head = normalize(title)
+        if (normalize(body) == head) return title.trim() to ""
+        if (normalize(body).startsWith(head)) {
+            // Drop the leading copy of the title from the body.
+            var consumed = 0
+            var matched = 0
+            val target = head.replace(" ", "")
+            while (consumed < body.length && matched < target.length) {
+                if (!body[consumed].isWhitespace()) matched++
+                consumed++
+            }
+            return title.trim() to body.substring(consumed).trimStart()
+        }
+        return title.trim() to body
+    }
+    val lines = body.trim().lines()
+    val first = lines.firstOrNull()?.trim().orEmpty()
+    if (first.isEmpty()) return decisionHeading("", "", kind) to ""
+    return first to lines.drop(1).joinToString("\n").trim()
+}
+
 fun optionSupplement(description: String, preview: String, previewUnavailable: Boolean): String =
     listOf(description, preview, if (previewUnavailable) "画面で確認" else "")
         .filter { it.isNotEmpty() }.joinToString("\n")

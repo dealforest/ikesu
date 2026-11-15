@@ -156,7 +156,7 @@ class DecisionService : Service() {
             val intent = Intent(this, MainActivity::class.java).putExtra("decision", id).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
             val pending = PendingIntent.getActivity(this, number, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
             manager.notify(number, Notification.Builder(this, QUESTIONS).setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle(item.optString("title", "判断待ち"))
+                .setContentTitle(decisionHeading(item.optString("raw_title"), item.optString("raw_body"), item.optString("kind")))
                 .setContentText(item.optString("location", "判断を待っています"))
                 .setColor(0xFF33FF66.toInt())
                 .setStyle(Notification.BigTextStyle().bigText(item.optString("location", "判断を待っています")))
