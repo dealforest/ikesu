@@ -1,9 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { WebSocket } from 'ws';
-import { once } from 'node:events';
 import { DecisionRegistry } from '../registry.mjs';
-import { listen, validateShown, MAX_SHOWN_IDS } from '../socket.mjs';
+import { validateShown, MAX_SHOWN_IDS } from '../messages.mjs';
 
 const machine = { id: 'm1', label: 'mini' };
 const decision = id => ({ decision_id: id, kind: 'ask', title: 't', status: 'pending', options: [{ id: 'yes', label: 'はい', role: 'approve' }], origin: {}, created_unix_ms: 1 });
@@ -62,31 +60,3 @@ test('接続があるときは no_client を送らない', async () => {
   assert.equal(reachCalls(calls).length, 0);
 });
 
-test('WebSocket: shown を受け付け、不正な shown と未認証は拒否する。clientCount は認証済みだけ数える', async t => {
-  const received = [];
-  const token = '01'.repeat(32);
-  const bridge = await listen({ address: '127.0.0.1', port: 0, token, snapshot: async () => [], answer: async () => ({}), later: async () => {}, shown: async ids => { received.push(ids); } });
-  t.after(() => bridge.close());
-  const url = `ws://127.0.0.1:${bridge.address.port}/`;
-  const ws = new WebSocket(url);
-  await once(ws, 'open');
-  assert.equal(bridge.clientCount(), 0);
-  const messages = [];
-  ws.on('message', bytes => messages.push(JSON.parse(bytes.toString())));
-  ws.send(JSON.stringify({ type: 'auth', token }));
-  while (!messages.some(message => message.type === 'snapshot')) await new Promise(resolve => setTimeout(resolve, 5));
-  assert.equal(bridge.clientCount(), 1);
-  ws.send(JSON.stringify({ type: 'shown', ids: ['a', 'b'] }));
-  while (received.length < 1) await new Promise(resolve => setTimeout(resolve, 5));
-  assert.deepEqual(received, [['a', 'b']]);
-  ws.send(JSON.stringify({ type: 'shown', ids: [1] }));
-  while (!messages.some(message => message.type === 'error')) await new Promise(resolve => setTimeout(resolve, 5));
-  assert.equal(received.length, 1);
-  ws.close();
-  const anon = new WebSocket(url);
-  await once(anon, 'open');
-  const closed = once(anon, 'close');
-  anon.send(JSON.stringify({ type: 'shown', ids: ['a'] }));
-  assert.equal((await closed)[0], 1008);
-  assert.equal(received.length, 1);
-});

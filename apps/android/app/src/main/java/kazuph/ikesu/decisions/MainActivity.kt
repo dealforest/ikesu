@@ -124,13 +124,6 @@ class MainActivity : Activity() {
     override fun onDestroy() { viewer?.dismiss(); videoViewer?.dismiss(); unregisterReceiver(receiver); super.onDestroy() }
     private fun receiveIntent(intent: Intent) {
         TextScale.fromIntent((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0, intent.hasExtra("text_scale"), intent.getFloatExtra("text_scale", 1f))?.let { textScale = it; appliedScale = textScale; getSharedPreferences("ui", MODE_PRIVATE).edit().putFloat("textScale", textScale).apply() }
-        val url = intent.getStringExtra("url")
-        val token = intent.getStringExtra("token")
-        if (url != null && token != null) {
-            try { ConnectionSettings(this).save(url, token); startService(Intent(this, DecisionService::class.java)) }
-            catch (error: Exception) { android.util.Log.e("IkesuDecisions", "接続設定を保存できません", error); Toast.makeText(this, error.message, Toast.LENGTH_LONG).show() }
-            intent.removeExtra("token")
-        }
         intent.getStringExtra("decision")?.let { selectedId = it; showList = false; settingsVisible = false }
     }
     private fun handleUpdate() {
@@ -566,20 +559,8 @@ class MainActivity : Activity() {
         })
     }
     private fun renderSettings() {
-        val current = try { ConnectionSettings(this).load() } catch (_: Exception) { null }
         block(text("接続設定", 28f))
         renderMachines()
-        block(text("Tailscale でつなぐ（今までの方式）", 22f), 4)
-        block(text("接続先", 18f), 4)
-        val url = input("ws://接続先:8776").apply { setText(current?.first ?: "") }
-        block(url)
-        block(text("合言葉", 18f), 4)
-        val token = input("合言葉を入力").apply { inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD }
-        block(token)
-        block(button("保存して接続", true) {
-            try { ConnectionSettings(this).save(url.text.toString().trim(), token.text.toString().trim()); settingsVisible = false; startService(Intent(this, DecisionService::class.java)); render() }
-            catch (error: Exception) { Toast.makeText(this, error.message, Toast.LENGTH_LONG).show() }
-        })
         val speech = SpeechSettings(this)
         block(text("音声の文字起こし", 22f), 4)
         block(text("話した答えを文字にする、OpenAI 互換の文字起こしの接続先（例: http://ubuntu-3090:8002）。音声はここへだけ送ります。", 16f), 4)

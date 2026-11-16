@@ -10,8 +10,6 @@ import { ClientViews } from '../../mac-dialog-decisions/client-views.mjs';
 import { RichService } from '../../mac-dialog-decisions/rich-service.mjs';
 import { ownerAlive, ownerProven, readOwner } from '../../mac-dialog-decisions/lifecycle.mjs';
 import { DecisionRegistry } from './registry.mjs';
-import { loadToken, rotateToken, tailscaleAddress } from './security.mjs';
-import { listen } from './socket.mjs';
 import { loadDevices, loadNoiseKey, loadRelay, PERMISSIONS, revokeDevice, saveRelay, addDeviceByHand, fingerprint, fromB64u } from './devices.mjs';
 import { localPairing, remotePairing, startMobile } from './mobile-runtime.mjs';
 import readline from 'node:readline/promises';
@@ -27,12 +25,22 @@ try { file = JSON.parse(fs.readFileSync(path.join(configDir, 'config.json'), 'ut
 catch (error) { if (error.code !== 'ENOENT') throw error; }
 const config = { pluginId, configDir, stateDir, enabled: file.enabled !== false,
   ikesuBin: process.env.IKESU_BIN_PATH || file.ikesu_bin || 'ikesu',
-  port: file.port ?? 8776, laterMs: (file.later_minutes ?? 10) * 60000,
-  tailscale: file.tailscale_path || 'tailscale' };
-if (!Number.isInteger(config.port) || config.port < 1 || config.port > 65535 || !Number.isFinite(config.laterMs) || config.laterMs < 0) throw Error('設定値が不正です');
+  laterMs: (file.later_minutes ?? 10) * 60000 };
+if (!Number.isFinite(config.laterMs) || config.laterMs < 0) throw Error('設定値が不正です');
 const log = message => process.stderr.write(`[android-decisions] ${message}\n`);
 
+// 中継の設定（relay.json）を読めるか。読めなければ1行の案内を出して false。
+async function relayReady() {
+  try {
+    if (await loadRelay(configDir)) return true;
+    log('relay.json がありません。main.mjs relay-setup --url <wss://…> で中継を設定してください');
+  } catch (error) { log(`relay.json を読めません: ${error.message}`); }
+  return false;
+}
+
 async function ensure() {
+  // 中継の設定が無いと run はすぐ終わるので、判断待ちのたびにジョブを起こさない。
+  if (!await relayReady()) return;
   fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const lock = path.join(stateDir, 'ensure.lock');
   try { fs.mkdirSync(lock, { mode: 0o700 }); }
@@ -57,40 +65,30 @@ async function ensure() {
 }
 
 async function run() {
+  // パネルの準備・ロック・daemon.json の前に確かめる（終わったプロセスの daemon.json を残さない）。
+  if (!await relayReady()) { process.exitCode = 1; return; }
   fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const nativeDialog = ensureNativeDialog(config, log);
   if (!nativeDialog) throw Error('画像の検査に使う Mac ダイアログを準備できません');
   const lock = await acquireDaemonLock(nativeDialog, stateDir);
   if (!lock) return;
   fs.writeFileSync(path.join(stateDir, 'daemon.json'), JSON.stringify({ pid: process.pid, stateDir: fs.realpathSync(stateDir), script: fileURLToPath(import.meta.url), node: process.execPath }), { mode: 0o600 });
-  const address = await tailscaleAddress(config.tailscale);
-  let token = await loadToken(configDir);
   const clientViews = new ClientViews();
   const rich = new RichService({ ...config, nativeDialog });
   const daemon = new DecisionRegistry({ config, clientViews, rich,
     spawnWatch: () => spawnDecisionWatch(config, log),
     runAnswer: createRunAnswer(config, log), getDecision: createGetDecision(config, log), log });
-  const socket = await listen({ address, port: config.port, token,
-    snapshot: () => daemon.snapshot(), answer: value => daemon.answer(value), later: id => daemon.later(id), shown: ids => daemon.shown(ids),
-    videoPath: (id, key) => daemon.videoPath(id, key) });
-  // 中継の設定が壊れていても、Tailscale の経路は止めない。
+  // スマホとは中継（relay.json）だけでつながる。Tailscale と合言葉の経路は 0.4.155 で消した。
   const mobile = await startMobile({ configDir, stateDir, log, decisions: {
     snapshot: () => daemon.snapshot(), answer: value => daemon.answer(value), later: id => daemon.later(id), shown: ids => daemon.shown(ids),
-    videoPath: (id, key) => daemon.videoPath(id, key), createdOf: id => daemon.find(id)?.decision?.created_unix_ms } })
-    .catch(error => { log(`中継の経路を使えません（Tailscale の経路は続けます）: ${error.message}`); return null; });
-  daemon.onSnapshot = value => { socket.publish(value); mobile?.hub.publish(); };
-  daemon.hasClients = () => socket.clientCount() + (mobile?.hub.clientCount() ?? 0) > 0;
+    videoPath: (id, key) => daemon.videoPath(id, key), createdOf: id => daemon.find(id)?.decision?.created_unix_ms } });
+  if (!mobile) { log('relay.json がありません。main.mjs relay-setup --url <wss://…> で中継を設定してください'); await lock.close(); return; }
+  daemon.onSnapshot = () => mobile.hub.publish();
+  daemon.hasClients = () => mobile.hub.clientCount() > 0;
   await daemon.start();
-  const watcher = fs.watch(configDir, async (_event, name) => {
-    if (name !== 'token') return;
-    socket.setToken(null);
-    try { token = await loadToken(configDir); socket.setToken(token); }
-    catch (error) { log(`合言葉の再読込に失敗: ${error.message}`); }
-  });
-  const stop = async () => { watcher.close(); await mobile?.stop(); await socket.close(); await daemon.stop(); await lock.close(); };
+  const stop = async () => { await mobile.stop(); await daemon.stop(); await lock.close(); };
   for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => { void stop().then(() => process.exit(0)); });
-  log(`Tailscale ${address}:${config.port} で待ち受けています`);
-  if (mobile) log(`中継 ${mobile.relay.url} につなぎます`);
+  log(`中継 ${mobile.relay.url} につなぎます`);
 }
 
 function option(name) { const index = process.argv.indexOf(`--${name}`); return index < 0 ? undefined : process.argv[index + 1]; }
@@ -155,8 +153,7 @@ async function revoke() {
 }
 
 const mode = process.argv[2];
-if (mode === 'rotate-token') await rotateToken(configDir);
-else if (mode === 'relay-setup') await relaySetup();
+if (mode === 'relay-setup') await relaySetup();
 else if (mode === 'pair') await pair();
 else if (mode === 'devices') await devices();
 else if (mode === 'revoke') await revoke();
@@ -164,4 +161,4 @@ else if (process.platform !== 'darwin') throw Error('bridge は macOS 専用で�
 else if (!config.enabled) log('設定で無効化されています');
 else if (mode === 'ensure') await ensure();
 else if (mode === 'run') await run();
-else throw Error('usage: main.mjs ensure|run|rotate-token|relay-setup|pair|devices|revoke');
+else throw Error('usage: main.mjs ensure|run|relay-setup|pair|devices|revoke');

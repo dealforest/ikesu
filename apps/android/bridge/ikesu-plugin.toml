@@ -14,9 +14,3 @@ id = "start"
 title = "Start Android decisions bridge"
 contexts = ["global"]
 command = ["./ensure-daemon"]
-
-[[actions]]
-id = "rotate-token"
-title = "Rotate Android decisions token"
-contexts = ["global"]
-command = ["./rotate-token"]

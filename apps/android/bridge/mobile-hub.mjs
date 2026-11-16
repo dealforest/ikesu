@@ -5,7 +5,7 @@ import { Assembler, encodeMessage, NoiseResponder } from './noise-channel.mjs';
 import { addDevice, b64u, loadDevices } from './devices.mjs';
 import { constantEqual, Pairing, verifyOperate } from './pairing.mjs';
 import { appTag } from './relay-client.mjs';
-import { validateAnswer, validateShown } from './socket.mjs';
+import { validateAnswer, validateShown } from './messages.mjs';
 
 const ONLY = (object, keys) => object && typeof object === 'object' && !Array.isArray(object) && Object.keys(object).every(key => keys.includes(key));
 const HANDSHAKE_WINDOW_MS = 60_000;
