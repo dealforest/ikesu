@@ -126,6 +126,8 @@ class ScreenActivity : Activity() {
     private var transcribing = false
     private var micView: TextView? = null
     private var input: android.widget.EditText? = null
+    /** The photo or file picker is in front: keep the PC's screen open, so the same space is still shown on return. */
+    private var picking = false
     /** A file read while the screen was (re)opening, sent once screen_opened arrives. */
     private var pendingFile: Pair<String, String>? = null
 
@@ -337,16 +339,19 @@ class ScreenActivity : Activity() {
             .putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/*", "video/*"))
         // Android 12 without the photo picker: the regular image chooser.
         val fallback = Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*")
+        picking = true
         startActivityForResult(if (picker.resolveActivity(packageManager) != null) picker else fallback, PICK_FILE)
     }
 
     private fun pickDocument() {
+        picking = true
         startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), PICK_FILE)
     }
 
     @Deprecated("Activity result API is not used in this app")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == PICK_FILE) picking = false
         if (requestCode != PICK_FILE || resultCode != RESULT_OK) return
         val uri = data?.data ?: return
         sendFile(uri)
@@ -367,7 +372,7 @@ class ScreenActivity : Activity() {
             runOnUiThread {
                 result.onSuccess { data ->
                     // Choosing the file sent the app to the background, which closed the screen; it is reopening now.
-                    if (screenId < 0) { pendingFile = name to data; status.text = "画面を開き直してから「$name」を送ります…" }
+                    if (screenId < 0) { pendingFile = name to data; status.text = "画面が開いたら「$name」を送ります…" }
                     else sendFileNow(name, data)
                 }.onFailure { error -> status.text = error.message ?: "ファイルを読めませんでした" }
             }
@@ -416,11 +421,16 @@ class ScreenActivity : Activity() {
         ScreenBus.listener = { from, message -> if (from == source) handle(message) }
         // Coming back after the unlock ended: do not keep showing the old screen.
         if (DecisionState.sources[source]?.operable != true) { view.clear(); finish(); return }
+        // Back from the picker with the screen still open: keep using it.
+        if (screenId >= 0 || opening) return
         if (view.cols > 0) open(view.cols, view.rows)
     }
 
     // Leaving the screen closes it on the PC (PROTOCOL 4). Coming back opens a new one.
     override fun onStop() {
+        // Choosing a photo or file is part of using this screen: closing it would start a new ikesu client on return,
+        // which shows its first space instead of the one being used.
+        if (picking) { super.onStop(); return }
         if (screenId >= 0) DecisionState.sources[source]?.send(JSONObject().put("type", "screen_close").put("screen", screenId))
         screenId = -1; opening = false; wanted = null
         if (voice.recording) voice.cancel()
