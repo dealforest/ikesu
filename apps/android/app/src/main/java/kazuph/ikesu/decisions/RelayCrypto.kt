@@ -37,7 +37,7 @@ object RelayMath {
 
     /** The text signed by the operate key: covers every connected PC at once. */
     fun operateMessage(hashes: List<ByteArray>): ByteArray {
-        require(hashes.size in 1..8 && hashes.all { it.size == 32 })
+        require(hashes.size in 1..8 && hashes.all { it.size == 64 })
         return ByteArrayOutputStream().apply { write(OPERATE.toByteArray()); write(hashes.size); hashes.forEach { write(it) } }.toByteArray()
     }
 }
@@ -70,7 +70,8 @@ class NoiseSession(private val localPrivate: ByteArray, private val bridgePublic
         val payload = ByteArray(256)
         handshake.readMessage(reply, 0, reply.size, payload, 0)
         check(handshake.action == HandshakeState.SPLIT) { "握手が終わりませんでした" }
-        handshakeHash = handshake.handshakeHash
+        // A copy: destroy() wipes the handshake state's own array.
+        handshakeHash = handshake.handshakeHash.copyOf()
         val pair = handshake.split()
         sender = pair.sender; receiver = pair.receiver
         handshake.destroy()

@@ -12,6 +12,10 @@ import { ownerAlive, ownerProven, readOwner } from '../../mac-dialog-decisions/l
 import { DecisionRegistry } from './registry.mjs';
 import { loadToken, rotateToken, tailscaleAddress } from './security.mjs';
 import { listen } from './socket.mjs';
+import { loadDevices, loadRelay, PERMISSIONS, revokeDevice, saveRelay, addDeviceByHand, fromB64u } from './devices.mjs';
+import { localPairing, remotePairing, startMobile } from './mobile-runtime.mjs';
+import readline from 'node:readline/promises';
+import qrcode from 'qrcode-terminal';
 
 const exec = promisify(execFile);
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -69,8 +73,11 @@ async function run() {
   const socket = await listen({ address, port: config.port, token,
     snapshot: () => daemon.snapshot(), answer: value => daemon.answer(value), later: id => daemon.later(id), shown: ids => daemon.shown(ids),
     videoPath: (id, key) => daemon.videoPath(id, key) });
-  daemon.onSnapshot = value => socket.publish(value);
-  daemon.hasClients = () => socket.clientCount() > 0;
+  const mobile = await startMobile({ configDir, stateDir, log, decisions: {
+    snapshot: () => daemon.snapshot(), answer: value => daemon.answer(value), later: id => daemon.later(id), shown: ids => daemon.shown(ids),
+    videoPath: (id, key) => daemon.videoPath(id, key), createdOf: id => daemon.find(id)?.decision?.created_unix_ms } });
+  daemon.onSnapshot = value => { socket.publish(value); mobile?.hub.publish(); };
+  daemon.hasClients = () => socket.clientCount() + (mobile?.hub.clientCount() ?? 0) > 0;
   await daemon.start();
   const watcher = fs.watch(configDir, async (_event, name) => {
     if (name !== 'token') return;
@@ -78,15 +85,78 @@ async function run() {
     try { token = await loadToken(configDir); socket.setToken(token); }
     catch (error) { log(`合言葉の再読込に失敗: ${error.message}`); }
   });
-  const stop = async () => { watcher.close(); await socket.close(); await daemon.stop(); await lock.close(); };
+  const stop = async () => { watcher.close(); await mobile?.stop(); await socket.close(); await daemon.stop(); await lock.close(); };
   for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => { void stop().then(() => process.exit(0)); });
   log(`Tailscale ${address}:${config.port} で待ち受けています`);
+  if (mobile) log(`中継 ${mobile.relay.url} につなぎます`);
+}
+
+function option(name) { const index = process.argv.indexOf(`--${name}`); return index < 0 ? undefined : process.argv[index + 1]; }
+
+async function relaySetup() {
+  const url = option('url');
+  if (!url) throw Error('usage: main.mjs relay-setup --url <wss://…> [--key <base64url 32バイト>] [--force]');
+  if (await loadRelay(configDir) && !process.argv.includes('--force')) throw Error('relay.json はすでにあります。作り直すと登録済みの端末がつながらなくなります（上書きは --force）');
+  const key = option('key') ?? process.env.RELAY_KEY;
+  const saved = await saveRelay(configDir, { url, relayKey: key ? fromB64u(key, 32) : undefined });
+  process.stdout.write(`relay.json を書きました。\n部屋 ID: ${saved.room}\nRELAY_KEY: ${saved.relayKey}\n中継の Worker に同じ値を入れてください:\n  printf '%s' '${saved.relayKey}' | npx wrangler secret put RELAY_KEY\n`);
+}
+
+async function pair() {
+  const name = option('name');
+  if (!name) throw Error('usage: main.mjs pair --name <PC の名前> [--permissions notify,answer,screen,input]');
+  const permissions = (option('permissions') ?? PERMISSIONS.join(',')).split(',').filter(Boolean);
+  if (!permissions.every(item => PERMISSIONS.includes(item))) throw Error(`権限は ${PERMISSIONS.join(',')} から選んでください`);
+  let session = await remotePairing(stateDir);
+  let mobile = null;
+  if (!session) {
+    mobile = await startMobile({ configDir, stateDir, log, control: false, decisions: { snapshot: async () => [], answer: async () => ({}), later: async () => {} } });
+    if (!mobile) throw Error('relay.json がありません。先に relay-setup --url <wss://…> を実行してください');
+    log('run 中の bridge が見つからないため、この端末で一時的に中継へつなぎます');
+    session = localPairing(mobile);
+  }
+  const qr = await session.start({ name, permissions });
+  qrcode.generate(qr, { small: true });
+  process.stdout.write('アプリのカメラで上の QR を読んでください（5分間有効）。アプリに出る6桁をここに入力します。\n');
+  session.onCandidate(candidate => process.stdout.write(`\n候補が接続しました（${candidate.name}）\n`));
+  const prompt = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    for (;;) {
+      const code = await prompt.question('6桁: ');
+      const result = await session.confirm(code);
+      if (result.device) { process.stdout.write(`登録しました（端末 ID ${result.device}）\n`); return; }
+      if (!result.active) { process.stdout.write('この QR は無効になりました。もう一度 pair を実行してください\n'); process.exitCode = 1; return; }
+      process.stdout.write('一致しません\n');
+    }
+  } finally { prompt.close(); await session.cancel().catch(() => {}); session.close(); await mobile?.stop(); }
+}
+
+async function devices() {
+  if (process.argv[3] === 'add') {
+    const { link } = await addDeviceByHand(configDir, { name: option('name'), noise: option('noise'), operate: option('operate'), pcName: option('pc-name') });
+    process.stdout.write(`${link}\n`);
+    return;
+  }
+  const list = await loadDevices(configDir);
+  if (!list.length) process.stdout.write('登録済みの端末はありません\n');
+  for (const device of list) process.stdout.write(`${device.device}\t${device.name}\t${device.permissions.join(',')}\t${device.created}\n`);
+}
+
+async function revoke() {
+  const id = process.argv[3];
+  if (!id) throw Error('usage: main.mjs revoke <device>');
+  if (!await revokeDevice(configDir, id)) throw Error('その端末 ID は登録されていません');
+  process.stdout.write('外しました。run 中の bridge は再起動なしでその端末の接続を切ります\n');
 }
 
 const mode = process.argv[2];
 if (mode === 'rotate-token') await rotateToken(configDir);
+else if (mode === 'relay-setup') await relaySetup();
+else if (mode === 'pair') await pair();
+else if (mode === 'devices') await devices();
+else if (mode === 'revoke') await revoke();
 else if (process.platform !== 'darwin') throw Error('bridge は macOS 専用です');
 else if (!config.enabled) log('設定で無効化されています');
 else if (mode === 'ensure') await ensure();
 else if (mode === 'run') await run();
-else throw Error('usage: main.mjs ensure|run|rotate-token');
+else throw Error('usage: main.mjs ensure|run|rotate-token|relay-setup|pair|devices|revoke');

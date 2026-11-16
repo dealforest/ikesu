@@ -1,0 +1,123 @@
+// 許可リスト devices.json・Noise の鍵 noise-key.json・中継の設定 relay.json の読み書き。
+// 壊れたファイルは失敗として扱い、推測で直さない。書くときは 0600 で一時ファイルから置き換える。
+import { createPublicKey, randomBytes } from 'node:crypto';
+import os from 'node:os';
+import { constants } from 'node:fs';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import dh from 'noise-handshake/dh.js';
+import { appTag } from './relay-client.mjs';
+
+export const b64u = bytes => Buffer.from(bytes).toString('base64url');
+export const fromB64u = (text, length) => {
+  if (typeof text !== 'string' || !/^[A-Za-z0-9_-]*$/.test(text)) throw Error('base64url ではありません');
+  const bytes = Buffer.from(text, 'base64url');
+  if (length !== undefined && bytes.length !== length) throw Error(`長さが ${length} バイトではありません`);
+  if (b64u(bytes) !== text) throw Error('base64url が正規の形ではありません');
+  return bytes;
+};
+export function validOperatePublicKey(text) {
+  try {
+    const key = createPublicKey({ key: fromB64u(text), format: 'der', type: 'spki' });
+    return key.asymmetricKeyType === 'ec' && key.asymmetricKeyDetails?.namedCurve === 'prime256v1';
+  } catch { return false; }
+}
+export const PERMISSIONS = ['notify', 'answer', 'screen', 'input'];
+
+async function readJson(file, { optional = false } = {}) {
+  let handle;
+  try { handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW); }
+  catch (error) { if (optional && error.code === 'ENOENT') return null; throw error; }
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || (stat.mode & 0o077) !== 0) throw Error(`${path.basename(file)} の権限が不正です（0600 にしてください）`);
+    try { return JSON.parse(await handle.readFile('utf8')); }
+    catch { throw Error(`${path.basename(file)} が壊れています。推測では直しません`); }
+  } finally { await handle.close(); }
+}
+
+export async function writeJson(file, value) {
+  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  const temporary = path.join(path.dirname(file), `.${path.basename(file)}-${randomBytes(8).toString('hex')}`);
+  const handle = await fs.open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  try { await handle.writeFile(JSON.stringify(value, null, 2)); await handle.sync(); }
+  finally { await handle.close(); }
+  try { await fs.rename(temporary, file); } catch (error) { await fs.unlink(temporary).catch(() => {}); throw error; }
+}
+
+export async function loadNoiseKey(configDir) {
+  const file = path.join(configDir, 'noise-key.json');
+  let value = await readJson(file, { optional: true });
+  if (!value) {
+    const pair = dh.generateKeyPair();
+    value = { public: b64u(pair.publicKey), secret: b64u(pair.secretKey) };
+    await writeJson(file, value);
+  }
+  const publicKey = fromB64u(value?.public, 32);
+  const secretKey = fromB64u(value?.secret, 32);
+  return { publicKey, secretKey };
+}
+
+export async function loadRelay(configDir) {
+  const value = await readJson(path.join(configDir, 'relay.json'), { optional: true });
+  if (!value) return null;
+  if (typeof value.url !== 'string' || !/^wss?:\/\//.test(value.url)) throw Error('relay.json の url が不正です');
+  fromB64u(value.room, 32); fromB64u(value.relay_key, 32);
+  return { url: value.url.replace(/\/+$/, ''), room: value.room, relayKey: fromB64u(value.relay_key, 32) };
+}
+
+export async function saveRelay(configDir, { url, room = b64u(randomBytes(32)), relayKey = randomBytes(32) }) {
+  if (!/^wss:\/\/[^/\s]+$/.test(url.replace(/\/+$/, '')) && !/^ws:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(url.replace(/\/+$/, ''))) throw Error('url は wss://… の形で指定してください');
+  fromB64u(room, 32);
+  await writeJson(path.join(configDir, 'relay.json'), { url: url.replace(/\/+$/, ''), room, relay_key: b64u(relayKey) });
+  return { room, relayKey: b64u(relayKey) };
+}
+
+const DEVICE_KEYS = ['device', 'noise_pub', 'operate_pub', 'name', 'permissions', 'created'];
+function validDevice(device) {
+  if (!device || typeof device !== 'object') return false;
+  try {
+    fromB64u(device.device, 16); fromB64u(device.noise_pub, 32); fromB64u(device.operate_pub);
+    return typeof device.name === 'string' && Array.isArray(device.permissions) && device.permissions.every(item => PERMISSIONS.includes(item)) && typeof device.created === 'string'
+      && DEVICE_KEYS.every(key => key in device);
+  } catch { return false; }
+}
+
+export async function loadDevices(configDir) {
+  const value = await readJson(path.join(configDir, 'devices.json'), { optional: true });
+  if (!value) return [];
+  if (!Array.isArray(value.devices) || !value.devices.every(validDevice)) throw Error('devices.json の形が不正です。推測では直しません');
+  return value.devices;
+}
+
+export async function saveDevices(configDir, devices) { await writeJson(path.join(configDir, 'devices.json'), { devices }); }
+
+export async function addDevice(configDir, device) {
+  const devices = await loadDevices(configDir);
+  devices.push(device);
+  await saveDevices(configDir, devices);
+  return device;
+}
+
+export async function revokeDevice(configDir, id) {
+  const devices = await loadDevices(configDir);
+  const kept = devices.filter(device => device.device !== id);
+  if (kept.length === devices.length) return false;
+  await saveDevices(configDir, kept);
+  return true;
+}
+
+// 公開鍵を手で登録する（アプリを QR で読めないとき）。接続情報（1行の JSON）を返す。秘密は含めない。
+export async function addDeviceByHand(configDir, { name, noise, operate, pcName }) {
+  if (typeof name !== 'string' || !name.trim() || name.length > 64) throw Error('端末名が不正です');
+  fromB64u(noise, 32);
+  if (!validOperatePublicKey(operate)) throw Error('操作用の公開鍵が P-256 の SPKI DER ではありません');
+  const relay = await loadRelay(configDir);
+  if (!relay) throw Error('relay.json がありません。先に relay-setup を実行してください');
+  const device = { device: b64u(randomBytes(16)), noise_pub: noise, operate_pub: operate, name: name.trim(), permissions: [...PERMISSIONS], created: new Date().toISOString() };
+  await addDevice(configDir, device);
+  const { publicKey } = await loadNoiseKey(configDir);
+  const link = JSON.stringify({ v: 1, kind: 'ikesu-link', relay: relay.url, room: relay.room, bridge: b64u(publicKey), device: device.device,
+    tag: appTag(relay, Buffer.from(device.device, 'base64url')), name: pcName || os.hostname() });
+  return { link, device };
+}
