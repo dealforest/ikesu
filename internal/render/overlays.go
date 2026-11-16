@@ -15,7 +15,7 @@ import (
 func MenuSize(m *Menu) (w, h int) {
 	w = 0
 	for _, it := range m.Items {
-		l := len([]rune(it.Label))
+		l := ansi.StringWidth(it.Label)
 		if it.Separator {
 			l = 2
 		}
@@ -25,7 +25,7 @@ func MenuSize(m *Menu) (w, h int) {
 	}
 	w += 4 // padding + border
 	if m.Title != "" {
-		w = max(w, len([]rune(m.Title))+6) // " title " on the top border
+		w = max(w, ansi.StringWidth(m.Title)+6) // " title " on the top border
 	}
 	w = max(w, m.MinWidth)
 	return w, len(m.Items) + 2

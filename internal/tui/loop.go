@@ -365,7 +365,10 @@ func (a *App) exec(cmd model.Command) {
 	if a.postExecHook != nil {
 		prev = a.st.Capture()
 	}
-	for _, e := range a.st.Apply(cmd) {
+	closing := a.closingSpaceFor(cmd)
+	effects := a.st.Apply(cmd)
+	a.recordClosedSpace(closing, effects)
+	for _, e := range effects {
 		if killed, ok := e.(model.EffKillPane); ok && killed.Pane == beforeFocus {
 			beforeFocus = -1
 		}
