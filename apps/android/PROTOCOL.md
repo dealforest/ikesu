@@ -113,7 +113,7 @@ bridge は開いたら `{"type":"screen_opened","screen","cols","rows"}`、閉�
 
 メニューとダイアログ: `[ui] native_menus = true` の ikesu の画面は、開いているメニューかダイアログが変わるたびに `ESC ] 7767 ; ikesu-ui ; <JSON の base64> BEL` を出力に足す（既定は false で、Mac の画面には出ない）。JSON は `{"kind":"menu","title","sel","items":[{"label","detail","status","disabled","separator"}],"filterable"}`、`{"kind":"dialog","title","detail","lines","confirm","cancel","input","continue_only"}`（`input` は文字を受けるダイアログだけ。それ以外は null）、閉じたら `{"kind":"none"}`。アプリはこの合図を端末部品に渡さず、Android の一覧とダイアログで出す。答えはふつうのキーで返す: 一覧は ↑/↓ を1つ送るたびに次の合図で位置を確かめ、目的の行で Enter。入力は Ctrl+U・文字・Enter。取り消しは Esc。
 
-アプリのキー: ⌘ は kitty のキーの形（`ESC [ 文字の番号 ; 1+修飾 u`、⌘ は 8）で送る。タップは SGR のマウスのダブルクリック（押して離すを2回）で送る。貼り付けは bracketed paste で送る。
+アプリのキー: ⌘ は kitty のキーの形（`ESC [ 文字の番号 ; 1+修飾 u`、⌘ は 8）で送る。タップは SGR のマウスのクリック（押して離す）で送る。続けて2回タップしたら、2回目も1回目と同じマスへ送る（ダブルクリック）。上下に指を動かすと、3行ごとに SGR のホイール（上は 64、下は 65）を送る。貼り付けは bracketed paste で送る。
 
 ファイル: アプリ → bridge `{"type":"screen_file","screen","beat","name","data":"<base64>"}`（20 MB まで、`input` の権限と、送り始めの時点で新しい心拍が要る）。bridge は `~/Downloads/ikesu-phone/<日時>-<名前>` に 0600 で保存し（名前からフォルダと制御文字を消し、上書きしない）、そのパスをシェルの1語にクォートし、貼り付けの形（bracketed paste）で画面に打つ（Enter は押さない）。返事は `{"type":"screen_file_saved","screen","path"}`。
 

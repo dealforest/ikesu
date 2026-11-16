@@ -94,6 +94,8 @@ object KeyBytes {
     }
 
     /** One SGR mouse click (press and release) at a 1-based cell. */
+    /** One SGR mouse wheel notch (up shows older lines). ikesu scrolls its own history, or passes it to the app. */
+    fun wheel(col: Int, row: Int, up: Boolean): ByteArray = "\u001b[<${if (up) 64 else 65};$col;${row}M".toByteArray()
     fun click(col: Int, row: Int, button: Int = 0): ByteArray = "\u001b[<$button;$col;${row}M\u001b[<$button;$col;${row}m".toByteArray()
 
     /** Text pasted as one block, so the program can tell it from typing. */
@@ -149,8 +151,8 @@ class ScreenActivity : Activity() {
         val name = DecisionState.sources[source]?.name ?: "PC"
         val dp = resources.displayMetrics.density
         val screenSp = getSharedPreferences("ui", MODE_PRIVATE).getFloat("screenTextSp", 13f)
-        view = TerminalCanvas(this, screenSp, keys = { bytes -> sendKeyBytes(bytes) }, onTap = { col, row -> send(KeyBytes.click(col, row) + KeyBytes.click(col, row)) },
-            onLongPress = { col, row -> longPressMenu(col, row) },
+        view = TerminalCanvas(this, screenSp, keys = { bytes -> sendKeyBytes(bytes) }, onTap = { col, row -> send(KeyBytes.click(col, row)) },
+            onLongPress = { col, row -> longPressMenu(col, row) }, onWheel = { col, row, up, n -> send(ByteArray(0).let { var b = it; repeat(n) { b += KeyBytes.wheel(col, row, up) }; b }) },
             onTextSize = { sp -> getSharedPreferences("ui", MODE_PRIVATE).edit().putFloat("screenTextSp", sp).apply() })
         status = TextView(this).apply { text = "$name の画面を開いています…"; setTextColor(GREEN); textSize = 18f; setPadding((20 * dp).toInt(), (6 * dp).toInt(), (20 * dp).toInt(), (6 * dp).toInt()) }
 
@@ -620,6 +622,7 @@ class TerminalCanvas(
     private val keys: (ByteArray) -> Unit,
     private val onTap: (col: Int, row: Int) -> Unit,
     private val onLongPress: (col: Int, row: Int) -> Unit,
+    private val onWheel: (col: Int, row: Int, up: Boolean, notches: Int) -> Unit,
     private val onTextSize: (Float) -> Unit,
 ) : View(context) {
     private var sp = textSp.coerceIn(MIN_SP, MAX_SP)
@@ -661,12 +664,57 @@ class TerminalCanvas(
         override fun logStackTrace(tag: String?, e: Exception?) {}
     }
 
-    // A tap is hard to land twice on the same cell on a phone, so one tap sends a double-click (the owner's request).
+    // One tap is one click, as with a mouse (a tap on the space already shown opens its menu, so a tap must not
+    // be two clicks). Two quick taps are a double-click: a second tap rarely lands on the same cell on a phone,
+    // so its click goes to the first tap's cell.
+    private var tapped: Pair<Int, Int>? = null
     private val gestures = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(e: MotionEvent) = true
-        override fun onSingleTapUp(e: MotionEvent): Boolean { cell(e)?.let { (c, r) -> onTap(c, r) }; return true }
+        override fun onSingleTapUp(e: MotionEvent): Boolean { tapped = cell(e); tapped?.let { (c, r) -> onTap(c, r) }; return true }
+        override fun onDoubleTapEvent(e: MotionEvent): Boolean {
+            if (e.actionMasked == MotionEvent.ACTION_UP) (tapped ?: cell(e))?.let { (c, r) -> onTap(c, r) }
+            return true
+        }
         override fun onLongPress(e: MotionEvent) { cell(e)?.let { (c, r) -> onLongPress(c, r) } }
+        // Dragging up and down scrolls, as in Termux: the finger moving down shows older lines. ikesu scrolls
+        // MouseScrollLines (3) lines per wheel notch, so one notch per three rows keeps the text under the finger.
+        override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
+            flinger.forceFinished(true)
+            wheelAt = cell(e1 ?: e2)
+            drag(-dy)
+            return true
+        }
+        override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
+            wheelAt = cell(e1 ?: e2)
+            flinger.fling(0, 0, 0, vy.toInt(), 0, 0, -1_000_000, 1_000_000)
+            flungY = 0
+            postOnAnimation(flingStep)
+            return true
+        }
     })
+    private var wheelAt: Pair<Int, Int>? = null
+    private var dragged = 0f
+    private val flinger = android.widget.OverScroller(context)
+    private var flungY = 0
+    private val flingStep = object : Runnable {
+        override fun run() {
+            if (!flinger.computeScrollOffset()) return
+            drag((flinger.currY - flungY).toFloat()); flungY = flinger.currY
+            postOnAnimation(this)
+        }
+    }
+
+    /** [dy] pixels of finger movement (positive = down) turned into whole wheel notches. */
+    private fun drag(dy: Float) {
+        val (c, r) = wheelAt ?: return
+        val notch = renderer.fontLineSpacing * 3f
+        dragged += dy
+        val notches = (dragged / notch).toInt()
+        if (notches == 0) return
+        dragged -= notches * notch
+        // One message per touch event, however many notches it moved.
+        onWheel(c, r, notches > 0, kotlin.math.abs(notches))
+    }
     // Pinch in and out changes the text size, as in Termux; the column and row count follow.
     // While pinching only the drawing is scaled (smooth); the new size and the PC's columns change once, on release.
     private var pinch = 1f
@@ -689,6 +737,7 @@ class TerminalCanvas(
     init { isFocusable = true; isFocusableInTouchMode = true }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) { flinger.forceFinished(true); dragged = 0f }
         scaler.onTouchEvent(event)
         if (!scaler.isInProgress) gestures.onTouchEvent(event)
         return true
