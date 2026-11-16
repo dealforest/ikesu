@@ -119,7 +119,7 @@ func mergeCommandRows(lines []string, columns int) []string {
 	commandColumns := columns
 	flush := func() {
 		if len(command) > 0 {
-			out = append(out, joinWrapped(command, commandColumns))
+			out = append(out, joinBoxRows(command, commandColumns))
 			command = nil
 		}
 	}

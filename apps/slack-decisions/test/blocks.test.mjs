@@ -175,4 +175,11 @@ test("option previews render in code blocks and unavailable is explicit", () => 
   assert.match(text, /:two: B\n> プレビューあり（画面で確認）/);
 });
 
+test("a question with its own line breaks is bolded line by line", () => {
+  const decision = pendingDecision({ title: "公開するもの：\n・記事\n・PR #2\n\n推奨：進める" });
+  const text = sectionTexts(buildDecisionBlocks({ decision, machine: LOCAL })).join("\n");
+  const want = kind === "agent_prompt" ? "公開するもの：\n・記事\n・PR #2\n\n推奨：進める" : "*公開するもの：*\n*・記事*\n*・PR #2*\n\n*推奨：進める*";
+  assert.ok(text.includes(want), text);
+});
+
 }

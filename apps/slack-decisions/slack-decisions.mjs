@@ -56,6 +56,14 @@ const SLACK_GET_METHODS = new Set([
 const DAEMON_PID_FILE = "daemon.json";
 const POSTS_FILE = "posts.json";
 
+export function boldLines(text) {
+  // A line already starting or ending with "*" would break the markup.
+  return text.split("\n").map((line) => {
+    const trimmed = line.trim();
+    return trimmed && !trimmed.startsWith("*") && !trimmed.endsWith("*") ? `*${trimmed}*` : line;
+  }).join("\n");
+}
+
 function log(...args) {
   const at = new Date().toTimeString().slice(0, 8);
   process.stderr.write(`[slack-decisions ${at}] ${args.join(" ")}\n`);
@@ -812,7 +820,12 @@ function buildDecisionBlocks({
   const presentation = decisionText(decision);
   const blocks = [{ type: "context", elements: [{ type: "mrkdwn", text: head }] }];
   if (repeatCount > 1) blocks.push({type: "context", elements: [{type: "mrkdwn", text: `同じ申請 ${repeatCount}回目`}]});
-  if (presentation.title) for (const chunk of splitExactText(presentation.title, SLACK_SECTION_TEXT_LIMIT - 2)) blocks.push({type: "section", text: {type: "mrkdwn", text: `*${chunk}*`}});
+  // Slack bold does not span lines, so a question with its own line breaks
+  // is bolded line by line.
+  if (presentation.title) {
+    const marks = 2 * (presentation.title.split("\n").length);
+    for (const chunk of splitExactText(presentation.title, Math.max(500, SLACK_SECTION_TEXT_LIMIT - marks))) blocks.push({type: "section", text: {type: "mrkdwn", text: boldLines(chunk)}});
+  }
   if (isClaudeCommandPermission(decision) && decision.origin?.explanation) for (const chunk of splitExactText(decision.origin.explanation)) blocks.push({type: "section", text: {type: "plain_text", text: chunk}});
   const units = approvalUnits(decision);
   if (units) {

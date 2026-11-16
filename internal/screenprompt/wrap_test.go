@@ -87,3 +87,50 @@ func TestBorderedLongWordUsesContentWidth(t *testing.T) {
 		}
 	}
 }
+
+// Observed in Claude Code 2.1.325 (86 columns): the question's own line
+// breaks (a list) sit next to rows Claude wrapped itself.
+func TestClaudeQuestionKeepsItsLineBreaks(t *testing.T) {
+	p := Parse("claude", fixture(t, "claude-line-breaks"))
+	if p == nil || p.Params.Body == nil {
+		t.Fatalf("question not parsed: %+v", p)
+	}
+	want := "ブログの公開と PR #2 のマージを、進めていい？\n\n" +
+		"経緯：ブログの push は、マスターのはっきりした OK が無いので Claude Code の自動の許可に止められた。\n\n" +
+		"公開するもの：\n" +
+		"・ISUCON13 の記事（題・「記事の要約」の呼び名・手元だけの断り入り）\n" +
+		"・全記事の AI 表示の2行化と、題の上の Full AI の削除\n" +
+		"・全ページの文字（16px・行間1.8倍・OS の標準書体）\n" +
+		"・PR #2：ベンチのリポジトリも「記事の要約」にそろえ、実物と違う可能性を書いた\n\n" +
+		"推奨：進める。言われた直しは全部入れ、画面で確かめたから。\n\n" +
+		"push のコマンドはクリップボードに入れてある：\n" +
+		"git -C /Users/kazuph/src/github.com/kazuph/kazuph.github.io push"
+	if !strings.HasPrefix(*p.Params.Body, want) {
+		t.Fatalf("body:\n%s\nwant prefix:\n%s", *p.Params.Body, want)
+	}
+	if p.Params.Title != "ブログの公開と PR #2 のマージを、進めていい？" {
+		t.Fatalf("heading %q", p.Params.Title)
+	}
+}
+
+func TestHardRowBreakEdges(t *testing.T) {
+	for _, tc := range []struct {
+		name, previous, next string
+		columns              int
+		want                 bool
+	}{
+		{"short Japanese row before a long Japanese row", "公開するもの：", strings.Repeat("説明", 30), 40, true},
+		{"Japanese run split at the edge before a marker", strings.Repeat("あ", 20), "・続き", 40, false},
+		{"Japanese run split at the edge", strings.Repeat("あ", 20), "いうえお", 40, false},
+		{"English list after a sentence", "Steps.", "- run the tests", 40, true},
+		{"English list after a word", "Steps", "- run the tests", 40, true},
+		{"English word moved down at a space", "the quick brown fox jumps over the", "lazy dog", 37, false},
+		{"Japanese row cut mid-word short of the edge", "承認してもらっ", "たあとも見張りに止められました", 40, false},
+		{"path split mid token", "/Users/kazuph/src/github.com/kazuph/ikes", "u/README.md", 40, false},
+		{"command on its own line", "push のコマンド：", "git -C /Users/kazuph/src push", 40, true},
+	} {
+		if got := hardRowBreak(tc.previous, tc.next, tc.columns); got != tc.want {
+			t.Errorf("%s: got %v want %v", tc.name, got, tc.want)
+		}
+	}
+}
