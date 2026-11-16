@@ -25,25 +25,78 @@ import java.io.File
 import java.io.FileOutputStream
 import android.util.Base64
 
+/** One place decisions come from: the legacy Tailscale bridge ("t") or a PC paired through the relay. */
+class DecisionSource(val id: String, val name: String) {
+    var decisions = JSONArray()
+    var connected = false
+    /** Relay only: the bridge accepted the operate signature (PROTOCOL 3.3). */
+    var operable = false
+    var link: RelayLink? = null
+    var legacy: WebSocket? = null
+    var beat = 0L
+    val relay: Boolean get() = id != LEGACY
+
+    fun send(value: JSONObject): Boolean = if (relay) link?.send(value) == true else legacy?.send(value.toString()) == true
+
+    companion object { const val LEGACY = "t" }
+}
+
+/** Decisions from every source, merged for the screens. Ids are "<source>~<id>". Use on the main thread. */
 object DecisionState : AnswerChannel {
     @Volatile var decisions = JSONArray()
     @Volatile var connected = false
     @Volatile var result: JSONObject? = null
-    @Volatile var socket: WebSocket? = null
+    val sources = linkedMapOf<String, DecisionSource>()
     val videos = mutableMapOf<String, File>()
-    fun send(value: JSONObject): Boolean = socket?.send(value.toString()) == true
-    /** 通知を出した判断待ちの id を bridge に知らせる（届いた記録。同じ id を何度送ってもよい）。 */
-    fun shown(ids: List<String>): Boolean =
-        ids.isNotEmpty() && send(JSONObject().put("type", "shown").put("ids", JSONArray(ids)))
-    override fun answer(decisionId: String, optionIds: List<String>, text: String, images: List<ByteArray>, sequence: String): Boolean =
-        send(JSONObject().put("type", "answer").put("id", decisionId).put("sequence", sequence)
+
+    fun key(source: String, id: String) = "$source~$id"
+    fun split(key: String): Pair<String, String>? = key.indexOf('~').takeIf { it > 0 }?.let { key.substring(0, it) to key.substring(it + 1) }
+
+    fun recompute() {
+        val merged = JSONArray()
+        sources.values.forEach { source -> for (i in 0 until source.decisions.length()) merged.put(source.decisions.get(i)) }
+        decisions = merged
+        connected = sources.values.any { it.connected }
+    }
+
+    /** Sends a message about one decision to the PC it came from. */
+    fun send(value: JSONObject): Boolean {
+        val (source, id) = split(value.optString("id")) ?: return false
+        return sources[source]?.send(JSONObject(value.toString()).put("id", id)) == true
+    }
+
+    /** Tells each PC which of its decisions were shown as notifications. */
+    fun shown(keys: List<String>): Boolean {
+        var ok = true
+        keys.mapNotNull { split(it) }.groupBy({ it.first }, { it.second }).forEach { (source, ids) ->
+            ok = (sources[source]?.send(JSONObject().put("type", "shown").put("ids", JSONArray(ids))) == true) && ok
+        }
+        return ok && keys.isNotEmpty()
+    }
+
+    override fun answer(decisionId: String, optionIds: List<String>, text: String, images: List<ByteArray>, sequence: String): Boolean {
+        val (source, id) = split(decisionId) ?: return false
+        return sources[source]?.send(JSONObject().put("type", "answer").put("id", id).put("sequence", sequence)
             .put("options", JSONArray(optionIds)).put("text", text)
-            .put("images", JSONArray(images.map { Base64.encodeToString(it, Base64.NO_WRAP) })))
+            .put("images", JSONArray(images.map { Base64.encodeToString(it, Base64.NO_WRAP) }))) == true
+    }
+
+    /** Relay connections that still need the operate signature. */
+    fun lockedLinks(): List<DecisionSource> = sources.values.filter { it.relay && it.link?.ready == true && !it.operable }
+
+    /** Sends one biometric-backed signature over every listed handshake (PROTOCOL 3.3). */
+    fun operate(targets: List<DecisionSource>, hashes: List<ByteArray>, signature: ByteArray) {
+        val message = JSONObject().put("type", "operate").put("hashes", JSONArray(hashes.map { B64.encode(it) })).put("sig", B64.encode(signature))
+        targets.forEach { it.link?.send(message) }
+    }
+
+    fun locked(): Boolean = sources.values.any { it.relay && it.connected && !it.operable }
 }
 
 class DecisionService : Service() {
     companion object {
         const val CHANGED = "kazuph.ikesu.CHANGED"
+        const val RECONNECT = "kazuph.ikesu.RECONNECT"
         private const val CONNECTION = "connection"
         private const val QUESTIONS = "questions"
         private const val FOREGROUND_ID = 1
@@ -73,6 +126,7 @@ class DecisionService : Service() {
         return START_STICKY
     }
     private fun changed() {
+        DecisionState.recompute()
         manager.notify(FOREGROUND_ID, connectionNotification())
         sendBroadcast(Intent(CHANGED).setPackage(packageName))
     }
@@ -81,96 +135,142 @@ class DecisionService : Service() {
         .setContentText("${if (DecisionState.connected) "接続中" else "未接続"} · 未回答 ${DecisionState.decisions.length()}件")
         .setColor(0xFF33FF66.toInt())
         .setOngoing(true).setContentIntent(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build()
+
+    /** (Re)opens every source: the legacy bridge when configured and each paired PC. */
     private fun connect() {
         val thisGeneration = ++generation
-        DecisionState.socket?.cancel()
-        DecisionState.socket = null
-        DecisionState.connected = false
+        DecisionState.sources.values.forEach { it.legacy?.cancel(); it.link?.close("つなぎ直します") }
+        DecisionState.sources.clear()
+        receiving.forEach { (key, value) -> value.first.close(); File(cacheDir, "video-$key.partial").delete() }
+        receiving.clear()
         changed()
+        connectLegacy(thisGeneration)
+        val store = MachineStore(this)
+        store.list().forEach { connectRelay(thisGeneration, store, it) }
+    }
+
+    private fun connectLegacy(thisGeneration: Int) {
         val settings = try { ConnectionSettings(this).load() } catch (_: Exception) { null } ?: return
         val request = try { Request.Builder().url(settings.first).build() } catch (_: IllegalArgumentException) { return }
-        client.newWebSocket(request, object : WebSocketListener() {
+        val source = DecisionSource(DecisionSource.LEGACY, "Tailscale")
+        DecisionState.sources[source.id] = source
+        source.legacy = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (thisGeneration != generation) { webSocket.cancel(); return }
-                android.util.Log.i("IkesuDecisions", "bridge 接続確立")
                 webSocket.send(JSONObject().put("type", "auth").put("token", settings.second).toString())
             }
             override fun onMessage(webSocket: WebSocket, text: String) {
-                if (thisGeneration != generation) return
                 val message = try { JSONObject(text) } catch (_: Exception) { return }
-                handler.post {
-                    if (thisGeneration != generation) return@post
-                    when (message.optString("type")) {
-                        "snapshot" -> {
-                            android.util.Log.i("IkesuDecisions", "判断待ち一覧を受信")
-                            DecisionState.socket = webSocket
-                            DecisionState.connected = true
-                            updateDecisions(message.optJSONArray("decisions") ?: JSONArray())
-                        }
-                        "answer_result", "error" -> { DecisionState.result = message; changed() }
-                        "video_chunk" -> receiveVideo(message)
-                        "video_end" -> finishVideo(message)
-                    }
-                }
+                handler.post { if (thisGeneration == generation) handle(source, message) }
             }
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                android.util.Log.w("IkesuDecisions", "bridge 接続失敗: ${t.javaClass.simpleName}: ${t.message}")
-                disconnected(thisGeneration)
-            }
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                android.util.Log.w("IkesuDecisions", "bridge 接続終了: $code")
-                disconnected(thisGeneration)
-            }
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { lost(thisGeneration, source) }
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { lost(thisGeneration, source) }
         })
     }
-    private fun disconnected(previous: Int) {
+
+    private fun connectRelay(thisGeneration: Int, store: MachineStore, machine: Machine) {
+        val source = DecisionSource(machine.id, machine.name)
+        DecisionState.sources[source.id] = source
+        val session = try { NoiseSession(store.noisePrivateKey(), B64.decode(machine.bridge), B64.decode(machine.room)) } catch (_: Exception) { return }
+        val link = RelayLink(RelayLink.appUrl(machine), machine.tag, session, object : RelayLink.Listener {
+            override fun onReady(link: RelayLink) { handler.post { if (thisGeneration == generation) { source.connected = true; changed() } } }
+            override fun onMessage(link: RelayLink, message: JSONObject) { handler.post { if (thisGeneration == generation) handle(source, message) } }
+            override fun onClosed(link: RelayLink, reason: String) {
+                android.util.Log.w("IkesuDecisions", "${machine.name}: $reason")
+                lost(thisGeneration, source)
+            }
+        })
+        source.link = link
+        link.start()
+    }
+
+    private fun lost(previous: Int, source: DecisionSource) {
         handler.post {
-            if (previous != generation) return@post
-            DecisionState.socket = null
-            DecisionState.connected = false
-            receiving.forEach { (key, value) -> value.first.close(); File(cacheDir, "video-$key.partial").delete() }
-            receiving.clear()
+            if (previous != generation || DecisionState.sources[source.id] !== source) return@post
+            source.connected = false
+            source.operable = false
             changed()
-            handler.postDelayed({ if (previous == generation) connect() }, RETRY_MS)
+            handler.postDelayed({
+                if (previous != generation || DecisionState.sources[source.id] !== source) return@postDelayed
+                val store = MachineStore(this)
+                if (source.relay) store.list().firstOrNull { it.id == source.id }?.let { connectRelay(previous, store, it) }
+                else connectLegacy(previous)
+            }, RETRY_MS)
         }
     }
-    private fun updateDecisions(items: JSONArray) {
+
+    private fun handle(source: DecisionSource, message: JSONObject) {
+        when (message.optString("type")) {
+            "snapshot" -> { source.connected = true; updateDecisions(source, message.optJSONArray("decisions") ?: JSONArray(), false) }
+            "notice" -> { source.connected = true; if (!source.operable) updateDecisions(source, message.optJSONArray("decisions") ?: JSONArray(), true) }
+            "operate_ok" -> { source.operable = true; changed() }
+            "operate_expired" -> { source.operable = false; changed() }
+            "beat" -> source.beat = message.optLong("n")
+            "answer_result", "error" -> {
+                DecisionState.result = message
+                if (message.optString("message") == "operate required") source.operable = false
+                changed()
+            }
+            "video_chunk" -> receiveVideo(source, message)
+            "video_end" -> finishVideo(message)
+        }
+    }
+
+    /** Stores a source's decisions under prefixed ids. A notice (no operate yet) carries only the heading. */
+    private fun updateDecisions(source: DecisionSource, raw: JSONArray, notice: Boolean) {
+        val items = JSONArray()
+        for (index in 0 until raw.length()) {
+            val original = raw.optJSONObject(index) ?: continue
+            val id = original.optString("id").takeIf { it.isNotEmpty() } ?: continue
+            val item = if (notice) {
+                val origin = original.optJSONObject("origin")
+                val place = listOfNotNull(origin?.optString("workspace_label")?.takeIf { it.isNotEmpty() }, origin?.optString("pane_id")?.takeIf { it.isNotEmpty() })
+                JSONObject().put("raw_title", original.optString("title")).put("kind", "agent_prompt").put("locked", true).put("notify", true)
+                    .put("location", (listOf(source.name) + place).joinToString("｜")).put("options", JSONArray())
+            } else JSONObject(original.toString()).also { if (source.relay) it.put("location", source.name + "｜" + it.optString("location")) }
+            item.put("id", DecisionState.key(source.id, id)).put("source", source.id)
+            items.put(item)
+        }
         val previous = DecisionState.decisions
         val old = (0 until previous.length()).mapNotNull { previous.optJSONObject(it) }.associate { it.optString("id") to it.optBoolean("notify") }
-        val current = (0 until items.length()).mapNotNull { items.optJSONObject(it)?.optString("id") }.toSet()
-        (old.keys - current).forEach { id -> notificationIds.remove(id)?.let(manager::cancel) }
-        DecisionState.decisions = items
-        val activeVideos = (0 until items.length()).flatMap { index ->
-            val videos = items.optJSONObject(index)?.optJSONArray("videos") ?: JSONArray()
+        val currentKeys = (0 until items.length()).map { items.getJSONObject(it).getString("id") }.toSet()
+        val sourcePrefix = DecisionState.key(source.id, "")
+        (old.keys.filter { it.startsWith(sourcePrefix) } - currentKeys).forEach { key -> notificationIds.remove(key)?.let(manager::cancel) }
+        source.decisions = items
+        DecisionState.recompute()
+        val all = DecisionState.decisions
+        val activeVideos = (0 until all.length()).flatMap { index ->
+            val videos = all.optJSONObject(index)?.optJSONArray("videos") ?: JSONArray()
             (0 until videos.length()).mapNotNull { videos.optJSONObject(it)?.optString("key") }
         }.toSet()
         (DecisionState.videos.keys - activeVideos).forEach { key -> DecisionState.videos.remove(key)?.delete() }
         (receiving.keys - activeVideos).forEach { key -> receiving.remove(key)?.first?.close(); File(cacheDir, "video-$key.partial").delete() }
         for (index in 0 until items.length()) {
             val item = items.optJSONObject(index) ?: continue
-            val id = item.optString("id")
-            if (id.isEmpty()) continue
-            if (!item.optBoolean("notify")) { notificationIds[id]?.let(manager::cancel); continue }
-            if (old[id] == true) continue
-            val number = notificationIds.getOrPut(id) { nextNotification++ }
-            val intent = Intent(this, MainActivity::class.java).putExtra("decision", id).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            val key = item.optString("id")
+            if (!item.optBoolean("notify")) { notificationIds[key]?.let(manager::cancel); continue }
+            if (old[key] == true) continue
+            val number = notificationIds.getOrPut(key) { nextNotification++ }
+            val intent = Intent(this, MainActivity::class.java).putExtra("decision", key).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
             val pending = PendingIntent.getActivity(this, number, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
             manager.notify(number, Notification.Builder(this, QUESTIONS).setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle(decisionHeading(item.optString("raw_title"), item.optString("raw_body"), item.optString("kind")))
                 .setContentText(item.optString("location", "判断を待っています"))
                 .setColor(0xFF33FF66.toInt())
+                .setVisibility(Notification.VISIBILITY_PRIVATE)
                 .setStyle(Notification.BigTextStyle().bigText(item.optString("location", "判断を待っています")))
                 .setContentIntent(pending).setAutoCancel(true).build())
         }
-        // 通知を出している判断待ちを bridge に知らせる。つなぎ直した一覧でも同じ分をもう一度送る。
+        // 通知を出している判断待ちを、出どころの PC に知らせる。つなぎ直した一覧でも同じ分をもう一度送る。
         DecisionState.shown(notifiedIds((0 until items.length()).mapNotNull { items.optJSONObject(it) }
             .map { it.optString("id") to it.optBoolean("notify") }, manager.areNotificationsEnabled()))
         changed()
     }
-    private fun receiveVideo(message: JSONObject) {
+
+    private fun receiveVideo(source: DecisionSource, message: JSONObject) {
         val key = message.optString("key")
-        val id = message.optString("id")
-        val allowed = (0 until DecisionState.decisions.length()).mapNotNull { DecisionState.decisions.optJSONObject(it) }
+        val id = DecisionState.key(source.id, message.optString("id"))
+        val allowed = (0 until source.decisions.length()).mapNotNull { source.decisions.optJSONObject(it) }
             .any { item -> item.optString("id") == id && (item.optJSONArray("videos") ?: JSONArray()).let { videos ->
                 (0 until videos.length()).any { videos.optJSONObject(it)?.optString("key") == key }
             } }
@@ -198,9 +298,9 @@ class DecisionService : Service() {
         handler.removeCallbacksAndMessages(null)
         receiving.forEach { (key, value) -> value.first.close(); File(cacheDir, "video-$key.partial").delete() }
         receiving.clear()
-        DecisionState.socket?.close(1000, "")
-        DecisionState.socket = null
-        DecisionState.connected = false
+        DecisionState.sources.values.forEach { it.legacy?.close(1000, ""); it.link?.close("終了") }
+        DecisionState.sources.clear()
+        DecisionState.recompute()
         super.onDestroy()
     }
     override fun onBind(intent: Intent?): IBinder? = null
