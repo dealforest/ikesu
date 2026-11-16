@@ -36,31 +36,40 @@ object ScreenBus {
 /** The whole ikesu screen of one PC, drawn at the phone's size (PROTOCOL 4). Keys go to the PC; the terminal's own
  *  automatic replies (queries, clipboard) are never sent. */
 class ScreenActivity : Activity() {
-    companion object { const val SOURCE = "source" }
+    companion object {
+        const val SOURCE = "source"
+        private const val GREEN = 0xFF33FF66.toInt()
+        private const val DARK_GREEN = 0xFF1E9948.toInt()
+    }
 
     private lateinit var source: String
     private lateinit var view: TerminalCanvas
     private lateinit var status: TextView
     private var screenId = -1
+    /** A screen_open is on its way; size changes wait for screen_opened instead of opening a second screen. */
+    private var opening = false
+    private var wanted: Pair<Int, Int>? = null
     private var ctrl = false
     private var ctrlButton: Button? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
-        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         source = intent.getStringExtra(SOURCE) ?: run { finish(); return }
         val name = DecisionState.sources[source]?.name ?: "PC"
         view = TerminalCanvas(this) { bytes -> send(bytes) }
-        status = TextView(this).apply { text = "$name の画面を開いています…"; setTextColor(Color.LTGRAY); textSize = 14f; setPadding(16, 8, 16, 8) }
-        val keys = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setBackgroundColor(0xFF171A21.toInt()) }
+        val dp = resources.displayMetrics.density
+        status = TextView(this).apply { text = "$name の画面を開いています…"; setTextColor(GREEN); textSize = 18f; setPadding((20 * dp).toInt(), (6 * dp).toInt(), (20 * dp).toInt(), (6 * dp).toInt()) }
+        val keys = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setBackgroundColor(Color.BLACK); setPadding((4 * dp).toInt(), (4 * dp).toInt(), (4 * dp).toInt(), (4 * dp).toInt()) }
         fun key(label: String, action: () -> Unit) = Button(this).apply {
-            text = label; isAllCaps = false; textSize = 14f; minWidth = 0; minimumWidth = 0; setPadding(8, 0, 8, 0)
+            text = label; isAllCaps = false; textSize = 18f; minWidth = 0; minimumWidth = 0; minHeight = (52 * dp).toInt(); setPadding(0, 0, 0, 0)
+            setTextColor(GREEN)
+            background = android.graphics.drawable.GradientDrawable().apply { setColor(Color.BLACK); setStroke((1.5f * dp).toInt(), DARK_GREEN); cornerRadius = 6 * dp }
             setOnClickListener { action() }
-        }.also { keys.addView(it, LinearLayout.LayoutParams(0, -2, 1f)) }
+        }.also { keys.addView(it, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = (3 * dp).toInt(); marginEnd = (3 * dp).toInt() }) }
         key("Esc") { send(byteArrayOf(27)) }
         key("Tab") { send(byteArrayOf(9)) }
-        ctrlButton = key("Ctrl") { ctrl = !ctrl; ctrlButton?.alpha = if (ctrl) 1f else 0.6f }.also { it.alpha = 0.6f }
+        ctrlButton = key("Ctrl") { ctrl = !ctrl; markCtrl() }
         for ((label, code) in listOf("←" to KeyEvent.KEYCODE_DPAD_LEFT, "↓" to KeyEvent.KEYCODE_DPAD_DOWN, "↑" to KeyEvent.KEYCODE_DPAD_UP, "→" to KeyEvent.KEYCODE_DPAD_RIGHT))
             key(label) { sendCode(code) }
         key("⌨") { view.showKeyboard() }
@@ -69,6 +78,13 @@ class ScreenActivity : Activity() {
             addView(status, LinearLayout.LayoutParams(-1, -2))
             addView(view, LinearLayout.LayoutParams(-1, 0, 1f))
             addView(keys, LinearLayout.LayoutParams(-1, -2))
+        }
+        // targetSdk 35 draws under the status bar, navigation bar and keyboard: keep the screen inside them.
+        root.setOnApplyWindowInsetsListener { v, insets ->
+            val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout())
+            val ime = insets.getInsets(android.view.WindowInsets.Type.ime())
+            v.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
+            insets
         }
         setContentView(root)
         view.onSize = { cols, rows -> sizeChanged(cols, rows) }
@@ -83,7 +99,7 @@ class ScreenActivity : Activity() {
     // Leaving the screen closes it on the PC (PROTOCOL 4). Coming back opens a new one.
     override fun onStop() {
         if (screenId >= 0) DecisionState.sources[source]?.send(JSONObject().put("type", "screen_close").put("screen", screenId))
-        screenId = -1
+        screenId = -1; opening = false; wanted = null
         ScreenBus.listener = null
         super.onStop()
     }
@@ -91,22 +107,38 @@ class ScreenActivity : Activity() {
     private fun open(cols: Int, rows: Int) {
         val target = DecisionState.sources[source]
         if (target == null || !target.operable) { status.text = "顔・指紋で開いてから、画面を開いてください"; return }
-        target.send(JSONObject().put("type", "screen_open").put("cols", cols).put("rows", rows))
+        if (opening) return
+        opening = target.send(JSONObject().put("type", "screen_open").put("cols", cols).put("rows", rows))
     }
 
     private fun sizeChanged(cols: Int, rows: Int) {
         if (screenId >= 0) DecisionState.sources[source]?.send(JSONObject().put("type", "screen_resize").put("screen", screenId).put("cols", cols).put("rows", rows))
+        else if (opening) wanted = cols to rows
         else if (ScreenBus.listener != null) open(cols, rows)
     }
 
     private fun handle(message: JSONObject) {
         when (message.optString("type")) {
-            "screen_opened" -> { screenId = message.optInt("screen"); status.text = "${DecisionState.sources[source]?.name ?: "PC"} の画面"; view.showKeyboard() }
+            "screen_opened" -> {
+                if (!opening) return
+                opening = false; screenId = message.optInt("screen")
+                status.text = "${DecisionState.sources[source]?.name ?: "PC"} の画面"
+                // The size changed while opening (the keyboard, for example): send the latest one.
+                wanted?.let { (c, r) -> if (c != message.optInt("cols") || r != message.optInt("rows")) sizeChanged(c, r) }
+                wanted = null
+            }
             "screen_data" -> if (message.optInt("screen") == screenId) view.feed(Base64.decode(message.optString("data"), Base64.NO_WRAP))
             "screen_closed" -> if (message.optInt("screen") == screenId) { screenId = -1; status.text = "画面が閉じました"; finish() }
             "operate_expired" -> { screenId = -1; Toast.makeText(this, "顔・指紋で開いた時間が切れました", Toast.LENGTH_LONG).show(); finish() }
-            "error" -> status.text = "PC 側: ${message.optString("message")}"
+            "error" -> { opening = false; status.text = "PC 側: ${message.optString("message")}" }
         }
+    }
+
+    /** Ctrl waiting for the next letter is filled green, like a selected button. */
+    private fun markCtrl() {
+        val dp = resources.displayMetrics.density
+        ctrlButton?.setTextColor(if (ctrl) Color.BLACK else GREEN)
+        ctrlButton?.background = android.graphics.drawable.GradientDrawable().apply { setColor(if (ctrl) GREEN else Color.BLACK); setStroke((1.5f * dp).toInt(), DARK_GREEN); cornerRadius = 6 * dp }
     }
 
     private fun sendCode(keyCode: Int) {
@@ -116,7 +148,7 @@ class ScreenActivity : Activity() {
 
     private fun send(bytes: ByteArray) {
         if (screenId < 0) return
-        val data = if (ctrl && bytes.size == 1 && bytes[0] in 0x40..0x7e) { ctrl = false; ctrlButton?.alpha = 0.6f; byteArrayOf((bytes[0].toInt() and 0x1f).toByte()) } else bytes
+        val data = if (ctrl && bytes.size == 1 && bytes[0] in 0x40..0x7e) { ctrl = false; markCtrl(); byteArrayOf((bytes[0].toInt() and 0x1f).toByte()) } else bytes
         val target = DecisionState.sources[source] ?: return
         target.send(JSONObject().put("type", "screen_input").put("screen", screenId).put("beat", target.beat)
             .put("data", Base64.encodeToString(data, Base64.NO_WRAP)))

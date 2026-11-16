@@ -149,7 +149,7 @@ class Session {
   }
   async onScreen(message) {
     const type = message.type;
-    const deny = text => this.send({ type: 'error', message: text });
+    const deny = text => { this.hub.log(`${this.device.name}: 画面の要求（${type}）を断りました: ${text}`); this.send({ type: 'error', message: text }); };
     if (!this.operating) { deny('operate required'); return; }
     if (type === 'screen_open') {
       if (!ONLY(message, ['type', 'cols', 'rows']) || !validSize(message.cols, message.rows)) { this.close(); return; }
@@ -164,6 +164,7 @@ class Session {
           onExit: () => { if (this.screen?.id === id) { this.screen = null; this.send({ type: 'screen_closed', screen: id }); } } });
       } catch (error) { this.hub.log(`画面を開けません: ${error.message}`); deny('画面を開けません'); return; }
       this.touch();
+      this.hub.log(`${this.device.name}: 画面を開きました（${message.cols}×${message.rows}）`);
       this.send({ type: 'screen_opened', screen: id, cols: message.cols, rows: message.rows });
       return;
     }
