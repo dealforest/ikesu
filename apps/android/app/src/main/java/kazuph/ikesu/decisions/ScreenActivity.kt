@@ -125,6 +125,7 @@ class ScreenActivity : Activity() {
     private val voice by lazy { VoiceRecorder(this) }
     private var transcribing = false
     private var micView: TextView? = null
+    private var input: android.widget.EditText? = null
     /** A file read while the screen was (re)opening, sent once screen_opened arrives. */
     private var pendingFile: Pair<String, String>? = null
 
@@ -143,9 +144,9 @@ class ScreenActivity : Activity() {
         // The owner's Termux layout (dotfiles/.termux/termux.properties), plus ⇧, ⌘, the ikesu prefix, voice, files and the keyboard.
         val rows = listOf(
             listOf(ExtraKey("⇧", ScreenKey.Modifier(KeyBytes.SHIFT)), ExtraKey("⌘", ScreenKey.Modifier(KeyBytes.SUPER)),
-                ExtraKey("^T", ScreenKey.Bytes(byteArrayOf(20)), "pfx", ScreenKey.Bytes(byteArrayOf(20))),
+                ExtraKey("^T", ScreenKey.Bytes(byteArrayOf(20))),
                 ExtraKey("🎤", ScreenKey.Action { toggleVoice() }), ExtraKey("📎", ScreenKey.Action { pickFile() }),
-                ExtraKey("貼付", ScreenKey.Action { pasteClipboard() }), ExtraKey("⌨", ScreenKey.Action { view.showKeyboard() })),
+                ExtraKey("貼付", ScreenKey.Action { pasteClipboard() })),
             listOf(ExtraKey("ESC", ScreenKey.Code(KeyEvent.KEYCODE_ESCAPE)), ExtraKey("|", ScreenKey.Text("|"), "PGUP", ScreenKey.Code(KeyEvent.KEYCODE_PAGE_UP)),
                 ExtraKey("$", ScreenKey.Text("$"), "PGDN", ScreenKey.Code(KeyEvent.KEYCODE_PAGE_DOWN)), ExtraKey("/", ScreenKey.Text("/"), "clear", ScreenKey.Text("/clear")),
                 ExtraKey("#", ScreenKey.Text("#")), ExtraKey("↑", ScreenKey.Code(KeyEvent.KEYCODE_DPAD_UP), "new", ScreenKey.Bytes(byteArrayOf(20))),
@@ -157,15 +158,17 @@ class ScreenActivity : Activity() {
                 ExtraKey("⏎", ScreenKey.Code(KeyEvent.KEYCODE_ENTER), "\\⏎", ScreenKey.Bytes("\\\r".toByteArray())), ExtraKey("BKSP", ScreenKey.Code(KeyEvent.KEYCODE_DEL))),
         )
         val keys = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.BLACK); setPadding((2 * dp).toInt(), (2 * dp).toInt(), (2 * dp).toInt(), (2 * dp).toInt()) }
+        // Every row spans the same 9-column grid, so the keys line up (a 6-key row gets 1.5 columns each).
         for (row in rows) {
-            val line = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            for (key in row) line.addView(keyView(key, dp), LinearLayout.LayoutParams(0, (44 * dp).toInt(), 1f).apply { setMargins((1.5f * dp).toInt(), (1.5f * dp).toInt(), (1.5f * dp).toInt(), (1.5f * dp).toInt()) })
+            val line = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; weightSum = 9f }
+            for (key in row) line.addView(keyView(key, dp), LinearLayout.LayoutParams(0, (40 * dp).toInt(), 9f / row.size).apply { setMargins((1.5f * dp).toInt(), (1.5f * dp).toInt(), (1.5f * dp).toInt(), (1.5f * dp).toInt()) })
             keys.addView(line, LinearLayout.LayoutParams(-1, -2))
         }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.BLACK)
             addView(status, LinearLayout.LayoutParams(-1, -2))
             addView(view, LinearLayout.LayoutParams(-1, 0, 1f))
+            addView(inputLine(dp), LinearLayout.LayoutParams(-1, -2).apply { setMargins((4 * dp).toInt(), (2 * dp).toInt(), (4 * dp).toInt(), (2 * dp).toInt()) })
             addView(keys, LinearLayout.LayoutParams(-1, -2))
         }
         // targetSdk 35 draws under the status bar, navigation bar and keyboard: keep the screen inside them.
@@ -179,11 +182,16 @@ class ScreenActivity : Activity() {
         view.onSize = { cols, rows2 -> sizeChanged(cols, rows2) }
     }
 
-    /** A key with its swipe-up / long-press alternative shown small above the main label. */
-    private fun keyView(key: ExtraKey, dp: Float): TextView = TextView(this).apply {
-        text = if (key.popupLabel != null) "${key.popupLabel}\n${key.label}" else key.label
-        gravity = Gravity.CENTER; setTextColor(GREEN); textSize = if (key.popupLabel != null) 13f else 16f
-        setLineSpacing(0f, 0.9f)
+    /** A key: the main label in the middle, and its swipe-up / long-press alternative small in the top-right corner. */
+    private fun keyView(key: ExtraKey, dp: Float): TextView = object : TextView(this) {
+        private val corner = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = DARK_GREEN; textSize = 9f * resources.displayMetrics.scaledDensity; textAlign = android.graphics.Paint.Align.RIGHT }
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            key.popupLabel?.let { canvas.drawText(it, width - 3 * dp, corner.textSize + 1 * dp, corner) }
+        }
+    }.apply {
+        text = key.label; isSingleLine = true
+        gravity = Gravity.CENTER; setTextColor(GREEN); textSize = 15f
         background = keyBackground(false, dp)
         if (key.main is ScreenKey.Modifier) modifierViews[key.main.bit] = this
         var downY = 0f; var popupDone = false
@@ -197,6 +205,28 @@ class ScreenActivity : Activity() {
             }
             true
         }
+    }
+
+    /** One input line, as in Termux: Enter sends what was typed (without Enter); Enter on an empty line sends Enter.
+     *  The phone's own keyboard works here, Japanese conversion included. */
+    private fun inputLine(dp: Float): android.widget.EditText = android.widget.EditText(this).apply {
+        hint = "ここに打って Enter で送る（空で Enter は改行を送る）"; setHintTextColor(DARK_GREEN); setTextColor(GREEN); textSize = 16f
+        isSingleLine = true; imeOptions = EditorInfo.IME_ACTION_SEND or EditorInfo.IME_FLAG_NO_FULLSCREEN
+        inputType = InputType.TYPE_CLASS_TEXT
+        setPadding((10 * dp).toInt(), (8 * dp).toInt(), (10 * dp).toInt(), (8 * dp).toInt())
+        background = android.graphics.drawable.GradientDrawable().apply { setColor(Color.BLACK); setStroke((1.5f * dp).toInt(), DARK_GREEN); cornerRadius = 6 * dp }
+        fun submit() {
+            val typed = text.toString()
+            if (typed.isEmpty()) KeyBytes.code(KeyEvent.KEYCODE_ENTER, takeMods(), false)?.let { send(it) }
+            else { sendKeyBytes(typed.toByteArray(Charsets.UTF_8)); setText("") }
+        }
+        setOnEditorActionListener { _, action, event ->
+            if (action == EditorInfo.IME_ACTION_SEND || action == EditorInfo.IME_ACTION_DONE || event?.keyCode == KeyEvent.KEYCODE_ENTER) {
+                if (event == null || event.action == KeyEvent.ACTION_DOWN) submit()
+                true
+            } else false
+        }
+        input = this
     }
 
     private fun keyBackground(active: Boolean, dp: Float) = android.graphics.drawable.GradientDrawable().apply {
@@ -233,7 +263,7 @@ class ScreenActivity : Activity() {
             "右クリック" to { send(KeyBytes.click(col, row, 2)) },
             "貼り付け" to { pasteClipboard() },
             "画像・ファイルを送る" to { pickFile() },
-            "キーボードを出す" to { view.showKeyboard() },
+            "キーボードを出す" to { input?.let { it.requestFocus(); (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(it, 0) } },
         )
         AlertDialog.Builder(this).setItems(items.map { it.first }.toTypedArray()) { _, which -> items[which].second() }.show()
     }
@@ -430,11 +460,21 @@ class TerminalCanvas(
         override fun onLongPress(e: MotionEvent) { cell(e)?.let { (c, r) -> onLongPress(c, r) } }
     })
     // Pinch in and out changes the text size, as in Termux; the column and row count follow.
+    // While pinching only the drawing is scaled (smooth); the new size and the PC's columns change once, on release.
+    private var pinch = 1f
+    private var pinchX = 0f
+    private var pinchY = 0f
     private val scaler = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScaleBegin(detector: ScaleGestureDetector): Boolean { pinch = 1f; pinchX = detector.focusX; pinchY = detector.focusY; return true }
         override fun onScale(detector: ScaleGestureDetector): Boolean {
-            val next = (sp * detector.scaleFactor).coerceIn(MIN_SP, MAX_SP)
-            if (kotlin.math.abs(next - sp) >= 0.5f) { sp = next; renderer = makeRenderer(); remeasure(); onTextSize(sp) }
+            pinch = (pinch * detector.scaleFactor).coerceIn(MIN_SP / sp, MAX_SP / sp)
+            invalidate()
             return true
+        }
+        override fun onScaleEnd(detector: ScaleGestureDetector) {
+            val next = (sp * pinch).coerceIn(MIN_SP, MAX_SP)
+            pinch = 1f
+            if (kotlin.math.abs(next - sp) >= 0.25f) { sp = next; renderer = makeRenderer(); remeasure(); onTextSize(sp) } else invalidate()
         }
     })
 
@@ -474,7 +514,9 @@ class TerminalCanvas(
 
     override fun onDraw(canvas: Canvas) {
         canvas.drawColor(Color.BLACK)
+        if (pinch != 1f) { canvas.save(); canvas.scale(pinch, pinch, pinchX, pinchY) }
         emulator?.let { renderer.render(it, canvas, 0, -1, -1, -1, -1) }
+        if (pinch != 1f) canvas.restore()
     }
 
     fun showKeyboard() {
