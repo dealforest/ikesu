@@ -54,6 +54,25 @@ function writeClientConfig(env) {
   return { file, dir };
 }
 
+// スマホから送られたファイルを保存する場所と、画面に打つパス（シェルで使える形にクォートする）。
+export const MAX_FILE_BYTES = 50 * 1024 * 1024;
+export function safeFileName(name) {
+  const base = path.basename(String(name || '')).normalize('NFC').replace(/[\u0000-\u001f\u007f/\\:]/g, '_').replace(/^\.+/, '').slice(0, 120);
+  return base || 'file';
+}
+export const shellQuote = text => `'${String(text).replace(/'/g, `'\\''`)}'`;
+export function saveIncomingFile(name, bytes, { home = os.homedir(), now = new Date() } = {}) {
+  const dir = path.join(home, 'Downloads', 'ikesu-phone');
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\..*/, '').replace('T', '-');
+  const safe = safeFileName(name);
+  for (let i = 0; ; i++) {
+    const file = path.join(dir, `${stamp}${i ? `-${i}` : ''}-${safe}`);
+    try { fs.writeFileSync(file, bytes, { mode: 0o600, flag: 'wx' }); return file; }
+    catch (error) { if (error.code !== 'EEXIST' || i > 100) throw error; }
+  }
+}
+
 export class Screen {
   constructor({ id, cols, rows, ikesuBin, env = process.env, onData, onExit, spawn }) {
     Object.assign(this, { id, onData, onExit });

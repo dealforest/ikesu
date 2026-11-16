@@ -533,3 +533,27 @@ test('画面: 大きさが範囲の外なら接続を切る。サーバーが無
   a.sendJson({ type: 'screen_open', cols: 5000, rows: 20 });
   await until(() => a.conn.closed);
 });
+
+test('画面: スマホのファイルを保存し、そのパスを画面に打つ。input の権限と新しい心拍が要る', async t => {
+  const fake = fakeScreens();
+  const saved = [];
+  // 心拍は 100ms ごと。送るまでに古くならない間隔にする。
+  const env = await setup(t, { idleMs: 60000, beatMs: 100, serverAlive: fake.serverAlive, openScreen: fake.openScreen,
+    saveFile: (name, bytes) => { saved.push([name, bytes.toString()]); return `/tmp/x/${name}`; } });
+  const { app, paired } = await pairDevice(env);
+  const a = await connectApp(env, paired, app);
+  await a.handshake();
+  a.sendJson(a.operateMessage());
+  await a.recv(m => m.type === 'operate_ok');
+  a.sendJson({ type: 'screen_open', cols: 40, rows: 20 });
+  const opened = await a.recv(m => m.type === 'screen_opened');
+  const beat = (await a.recv(m => m.type === 'beat' && m.n >= 3)).n;
+  a.sendJson({ type: 'screen_file', screen: opened.screen, beat: 0, name: 'a.png', data: Buffer.from('img').toString('base64') });
+  assert.equal((await a.recv(m => m.type === 'error')).message, 'stale beat');
+  assert.equal(saved.length, 0);
+  a.sendJson({ type: 'screen_file', screen: opened.screen, beat, name: 'a.png', data: Buffer.from('img').toString('base64') });
+  const done = await a.recv(m => m.type === 'screen_file_saved');
+  assert.equal(done.path, '/tmp/x/a.png');
+  assert.deepEqual(saved, [['a.png', 'img']]);
+  assert.equal(fake.screens[0].written.map(b => b.toString()).join(''), "'/tmp/x/a.png' ");
+});

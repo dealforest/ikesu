@@ -6,7 +6,7 @@ import { addDevice, b64u, loadDevices } from './devices.mjs';
 import { constantEqual, Pairing, verifyOperate } from './pairing.mjs';
 import { appTag } from './relay-client.mjs';
 import { validateAnswer, validateShown } from './messages.mjs';
-import { Screen, serverAlive, validSize } from './screen.mjs';
+import { MAX_FILE_BYTES, Screen, saveIncomingFile, serverAlive, shellQuote, validSize } from './screen.mjs';
 
 const MAX_SCREEN_INPUT = 64 * 1024;
 
@@ -182,6 +182,22 @@ class Session {
       if (bytes.length > MAX_SCREEN_INPUT) { this.close(); return; }
       this.touch(); screen.write(bytes); return;
     }
+    if (type === 'screen_file') {
+      // スマホのファイルを PC に保存し、そのパスを画面に打つ（ドラッグ＆ドロップと同じ形。Enter は押さない）。
+      if (!ONLY(message, ['type', 'screen', 'beat', 'name', 'data']) || typeof message.name !== 'string' || typeof message.data !== 'string' ||
+          message.data.length > Math.ceil(MAX_FILE_BYTES / 3) * 4 + 4) { this.close(); return; }
+      if (!this.can('input')) { deny('permission denied'); return; }
+      if (!Number.isInteger(message.beat) || !this.fresh(message)) { deny('stale beat'); return; }
+      if (!screen || screen.id !== message.screen) return;
+      const bytes = Buffer.from(message.data, 'base64');
+      if (bytes.length > MAX_FILE_BYTES) { deny('ファイルが大きすぎます'); return; }
+      let file;
+      try { file = this.hub.saveFile(message.name, bytes); } catch (error) { deny(`保存できませんでした: ${error.message}`); return; }
+      this.hub.log(`${this.device.name}: スマホのファイルを保存しました: ${file}`);
+      this.touch(); screen.write(Buffer.from(shellQuote(file) + ' '));
+      this.send({ type: 'screen_file_saved', screen: screen.id, path: file });
+      return;
+    }
     if (type === 'screen_resize') {
       if (!ONLY(message, ['type', 'screen', 'cols', 'rows']) || !validSize(message.cols, message.rows)) { this.close(); return; }
       if (screen && screen.id === message.screen) { this.touch(); screen.resize(message.cols, message.rows); }
@@ -229,11 +245,12 @@ class Session {
 export class MobileHub {
   constructor({ configDir, noiseKey, relay, transport, snapshot, answer, later, shown = async () => {}, videoPath = () => null, createdOf,
     now = Date.now, log = () => {}, beatMs = 5000, idleMs = 600_000, handshakeMs = 10_000,
-    ikesuBin = 'ikesu', serverAlive: alive, openScreen }) {
+    ikesuBin = 'ikesu', serverAlive: alive, openScreen, saveFile }) {
     Object.assign(this, { configDir, noiseKey, relay, room: relay.room, transport, snapshot, answer, later, shown, videoPath, createdOf, now, log, beatMs, idleMs, handshakeMs });
     this.nextScreenId = 1;
     this.serverAlive = alive ?? (() => serverAlive(ikesuBin));
     this.openScreen = openScreen ?? (options => new Screen({ ...options, ikesuBin }));
+    this.saveFile = saveFile ?? ((name, bytes) => saveIncomingFile(name, bytes));
     this.roomBytes = Buffer.from(relay.room, 'base64url');
     this.sessions = new Map(); this.devices = []; this.pairing = null; this.failures = new Map();
   }
