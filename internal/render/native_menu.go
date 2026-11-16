@@ -53,9 +53,12 @@ func NativeMenuJSON(menu *Menu, dialog *Dialog) string {
 		}
 		p := nativeDialogPayload{Kind: "dialog", Title: dialog.Title, Detail: dialog.Detail, Lines: lines,
 			Confirm: dialog.Confirm, Cancel: dialog.Cancel, ContinueOnly: dialog.ContinueOnly}
-		if dialog.InputEdit {
+		if dialog.InputEdit || dialog.WorktreeCreate {
 			text := dialog.Input
 			p.Input = &text
+		}
+		if dialog.WorktreeCreate && dialog.Checkout != "" {
+			p.Lines = append(append([]string{}, lines...), dialog.Checkout)
 		}
 		v = p
 	case menu != nil:

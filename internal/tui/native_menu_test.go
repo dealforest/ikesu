@@ -170,3 +170,18 @@ func TestNativeMenuSignalDialog(t *testing.T) {
 		t.Fatal("input must be null", got[0])
 	}
 }
+
+// The phone answers an input dialog with Ctrl+U, the text, Enter, so every
+// input field must clear on Ctrl+U, the machine form's fields included.
+func TestNativeMachineInputClearsOnCtrlU(t *testing.T) {
+	teststate.Lock(t)
+	a, _ := nativeApp(t, true)
+	got := ""
+	a.machineInput("Session", "default", func(v string) { got = v })
+	for _, k := range []uv.Key{{Code: 'u', Mod: uv.ModCtrl}, {Code: 'w', Text: "w"}, {Code: uv.KeyEnter}} {
+		a.dialogKey(k)
+	}
+	if got != "w" {
+		t.Fatalf("machine input after Ctrl+U = %q, want %q", got, "w")
+	}
+}

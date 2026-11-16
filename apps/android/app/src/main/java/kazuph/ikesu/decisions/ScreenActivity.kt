@@ -129,10 +129,16 @@ class ScreenActivity : Activity() {
     /** The photo or file picker is in front: keep the PC's screen open, so the same space is still shown on return. */
     private var picking = false
     /** ikesu's menus and dialogs, shown as Android lists and dialogs (its ui.native_menus signal). */
-    private val scanner = NativeUiScanner()
+    private var scanner = NativeUiScanner()
     private var native: AlertDialog? = null
     private var nativeShown: String? = null
-    private var closingNative = false
+    /** A menu row being chosen one step at a time (see MenuKeys.step), found again by its words in each new signal. */
+    private class Choice(val title: String, val label: String, val detail: String)
+    private var choosing: Choice? = null
+    private var lastMenu: JSONObject? = null
+    private val choiceTimeout = Runnable { if (choosing != null) { choosing = null; nativeShown = null; lastMenu?.let { showNative(it) } } }
+    /** An input dialog answered with this text: its signals while ikesu types the text in are not shown again. */
+    private var answeredInput: Pair<String, String>? = null
     /** A file read while the screen was (re)opening, sent once screen_opened arrives. */
     private var pendingFile: Pair<String, String>? = null
 
@@ -321,12 +327,35 @@ class ScreenActivity : Activity() {
         if (mods != 0 && text.codePointCount(0, text.length) == 1 && text[0].code >= 0x20) send(KeyBytes.text(text, takeMods())) else send(bytes)
     }
 
-    private fun closeNative() { closingNative = true; native?.dismiss(); native = null; nativeShown = null; closingNative = false }
+    /** Closing from here is not the person cancelling: drop the dismiss listener first, because Android runs it later. */
+    private fun closeNative() { native?.setOnDismissListener(null); native?.dismiss(); native = null; nativeShown = null }
+
+    /** Moves ikesu's selection one row toward the row being chosen, or chooses it. False when the signal is not for it. */
+    private fun advanceChoice(signal: JSONObject): Boolean {
+        val choice = choosing ?: return false
+        if (signal.optString("kind") != "menu" || signal.optString("title") != choice.title) return false
+        val raw = signal.optJSONArray("items") ?: return false
+        val items = (0 until raw.length()).map { raw.optJSONObject(it) ?: JSONObject() }
+        val target = items.indexOfFirst { !it.optBoolean("separator") && it.optString("label") == choice.label && it.optString("detail") == choice.detail }
+        val keys = MenuKeys.step(items.map { it.optBoolean("separator") to it.optBoolean("disabled") }, signal.optInt("sel", -1), target) ?: return false
+        if (keys.size == 1 && keys[0].toInt() == 13) { choosing = null; view.removeCallbacks(choiceTimeout) }
+        else { view.removeCallbacks(choiceTimeout); view.postDelayed(choiceTimeout, 3000) }
+        send(keys)
+        return true
+    }
 
     /** One open ikesu menu or dialog at a time. Choosing sends the same keys a keyboard would (↑/↓ Enter, Esc). */
     private fun showNative(signal: JSONObject) {
         val text = signal.toString()
         if (text == nativeShown) return
+        val kind = signal.optString("kind")
+        if (kind == "menu") lastMenu = signal
+        if (advanceChoice(signal)) return
+        if (choosing != null) { choosing = null; view.removeCallbacks(choiceTimeout) }
+        answeredInput?.let { (title, typed) ->
+            if (kind == "dialog" && signal.optString("title") == title && signal.optString("input") != typed) return
+            answeredInput = null
+        }
         closeNative()
         val dp = resources.displayMetrics.density
         when (signal.optString("kind")) {
@@ -351,7 +380,9 @@ class ScreenActivity : Activity() {
                         setPadding((16 * dp).toInt(), (8 * dp).toInt(), (16 * dp).toInt(), (8 * dp).toInt())
                         background = keyBackground(index == sel, dp).also { if (index == sel) setTextColor(Color.BLACK) }
                         if (!disabled) setOnClickListener {
-                            MenuKeys.choose(flags, sel, index)?.let { keys -> closeNative(); send(keys) }
+                            choosing = Choice(signal.optString("title"), item.optString("label"), item.optString("detail"))
+                            closeNative()
+                            if (!advanceChoice(signal)) choosing = null
                         }
                     }
                     list.addView(row, LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, (3 * dp).toInt(), 0, (3 * dp).toInt()) })
@@ -375,7 +406,7 @@ class ScreenActivity : Activity() {
                 body.addView(android.widget.ScrollView(this).apply { addView(list) })
                 native = AlertDialog.Builder(this).setTitle(signal.optString("title").ifEmpty { "メニュー" }).setView(body)
                     .setNegativeButton("閉じる", null)
-                    .setOnDismissListener { if (!closingNative) { nativeShown = null; send(byteArrayOf(27)) } }.show()
+                    .setOnDismissListener { nativeShown = null; send(byteArrayOf(27)) }.show()
             }
             "dialog" -> {
                 val lines = signal.optJSONArray("lines")
@@ -388,12 +419,15 @@ class ScreenActivity : Activity() {
                     .setPositiveButton(signal.optString("confirm").ifEmpty { "OK" }) { _, _ ->
                         answered = true
                         // An input dialog: clear ikesu's field (Ctrl+U), type the edited text, then Enter.
-                        if (field != null) send(byteArrayOf(21) + field.text.toString().replace(Regex("[\\r\\n]"), " ").toByteArray(Charsets.UTF_8) + byteArrayOf(13))
-                        else send(byteArrayOf(13))
+                        if (field != null) {
+                            val typed = field.text.toString().replace(Regex("[\\r\\n]"), " ")
+                            answeredInput = signal.optString("title") to typed
+                            send(byteArrayOf(21) + typed.toByteArray(Charsets.UTF_8) + byteArrayOf(13))
+                        } else send(byteArrayOf(13))
                     }
                 if (!signal.optBoolean("continue_only")) builder.setNegativeButton(signal.optString("cancel").ifEmpty { "やめる" }) { _, _ -> answered = true; send(byteArrayOf(27)) }
                 field?.let { builder.setView(it) }
-                native = builder.setOnDismissListener { if (!closingNative) { nativeShown = null; if (!answered) send(byteArrayOf(27)) } }.show()
+                native = builder.setOnDismissListener { nativeShown = null; if (!answered) send(byteArrayOf(27)) }.show()
             }
             else -> return
         }
@@ -525,6 +559,7 @@ class ScreenActivity : Activity() {
         // Choosing a photo or file is part of using this screen: closing it would start a new ikesu client on return,
         // which shows its first space instead of the one being used.
         if (picking) { super.onStop(); return }
+        closeNative(); choosing = null; answeredInput = null; view.removeCallbacks(choiceTimeout)
         if (screenId >= 0) DecisionState.sources[source]?.send(JSONObject().put("type", "screen_close").put("screen", screenId))
         screenId = -1; opening = false; wanted = null
         if (voice.recording) voice.cancel()
@@ -550,6 +585,7 @@ class ScreenActivity : Activity() {
             "screen_opened" -> {
                 if (!opening) return
                 opening = false; screenId = message.optInt("screen")
+                scanner = NativeUiScanner(); lastMenu = null
                 status.text = "${DecisionState.sources[source]?.name ?: "PC"} の画面"
                 // The size changed while opening (the keyboard, for example): send the latest one.
                 wanted?.let { (c, r) -> if (c != message.optInt("cols") || r != message.optInt("rows")) sizeChanged(c, r) }
@@ -558,8 +594,9 @@ class ScreenActivity : Activity() {
             }
             "screen_data" -> if (message.optInt("screen") == screenId) {
                 val bytes = Base64.decode(message.optString("data"), Base64.NO_WRAP)
-                scanner.scan(bytes).forEach { showNative(it) }
-                view.feed(bytes)
+                val result = scanner.scan(bytes)
+                result.signals.forEach { showNative(it) }
+                view.feed(result.screen)
             }
             "screen_closed" -> if (message.optInt("screen") == screenId) { screenId = -1; Toast.makeText(this, "PC 側で画面が閉じました", Toast.LENGTH_LONG).show(); finish() }
             "screen_file_saved" -> { status.text = "${DecisionState.sources[source]?.name ?: "PC"} の画面"; notifySaved(message.optString("path")) }
