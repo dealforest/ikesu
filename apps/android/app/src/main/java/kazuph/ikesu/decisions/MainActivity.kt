@@ -88,6 +88,8 @@ class MainActivity : Activity() {
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // What the PCs show (questions, screens) never appears in screenshots or the app switcher.
+        window.setFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE, android.view.WindowManager.LayoutParams.FLAG_SECURE)
         // Recordings left by a killed process are never sent.
         cacheDir.listFiles { file -> file.name.startsWith("voice") && file.name.endsWith(".m4a") }?.forEach { it.delete() }
         window.isNavigationBarContrastEnforced = false
@@ -296,6 +298,13 @@ class MainActivity : Activity() {
         val id = item.optString("id")
         val draft = drafts.getOrPut(id) { Draft() }
         block(text(item.optString("location"), 18f))
+        if (item.optBoolean("locked")) {
+            // Only the heading arrives until the biometric signature is accepted (PROTOCOL 3.4).
+            block(text(decisionHeading(item.optString("raw_title"), "", item.optString("kind")), 28f))
+            block(text("中身と選択肢は、顔・指紋で開くと見えます。", 18f))
+            block(button("顔・指紋で開く", true) { unlock() })
+            return
+        }
         if (item.optString("question_label").isNotBlank()) block(text(item.optString("question_label"), 18f))
         val (heading, rest) = detailHeadingAndBody(item.optString("title"), item.optString("body"), item.optString("kind"))
         block(text(heading, 28f))
@@ -496,9 +505,42 @@ class MainActivity : Activity() {
         }
         super.onPause()
     }
+    private val pairing by lazy { Pairing(this) { settingsVisible = false; render() } }
+    private fun unlock() = Unlock.run(this) { message -> Toast.makeText(this, message, Toast.LENGTH_LONG).show() }
+    override fun onResume() {
+        super.onResume()
+        // Opening the app asks for a face or fingerprint before showing what the PCs sent (⑤).
+        unlock()
+    }
+    private fun renderMachines() {
+        block(text("PC（中継でつなぐ）", 22f), 4)
+        val machines = MachineStore(this).list()
+        if (machines.isEmpty()) block(text("まだ登録した PC はありません。PC の端末で `node apps/android/bridge/main.mjs pair` を実行し、出た QR を読んでください。", 16f), 4)
+        machines.forEach { machine ->
+            val state = DecisionState.sources[machine.id]
+            val status = when { state == null || !state.connected -> "未接続"; state.operable -> "接続中・操作できる"; else -> "接続中・顔と指紋で開く前" }
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            pair(text("${machine.name}\n$status", 18f), button("外す") {
+                android.app.AlertDialog.Builder(this).setTitle("${machine.name} を外しますか？")
+                    .setMessage("この端末から ${machine.name} の登録を消します。PC 側の登録も外すには、PC で devices と revoke を実行してください。")
+                    .setPositiveButton("外す") { _, _ -> MachineStore(this).remove(machine.id); startService(Intent(this, DecisionService::class.java)); render() }
+                    .setNegativeButton("やめる", null).show()
+            }, row)
+            block(row)
+        }
+        block(button("PC を追加（QR を読む）", true) {
+            if (checkSelfPermission(android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(android.Manifest.permission.CAMERA), 5); return@button
+            }
+            com.google.zxing.integration.android.IntentIntegrator(this).setDesiredBarcodeFormats(com.google.zxing.integration.android.IntentIntegrator.QR_CODE)
+                .setPrompt("PC の端末に出た QR を読んでください").setBeepEnabled(false).setOrientationLocked(false).initiateScan()
+        })
+    }
     private fun renderSettings() {
         val current = try { ConnectionSettings(this).load() } catch (_: Exception) { null }
         block(text("接続設定", 28f))
+        renderMachines()
+        block(text("Tailscale でつなぐ（今までの方式）", 22f), 4)
         block(text("接続先", 18f), 4)
         val url = input("ws://接続先:8776").apply { setText(current?.first ?: "") }
         block(url)
@@ -593,6 +635,9 @@ class MainActivity : Activity() {
     @Deprecated("Android activity result callback")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        com.google.zxing.integration.android.IntentIntegrator.parseActivityResult(requestCode, resultCode, data)?.let { scan ->
+            if (requestCode == com.google.zxing.integration.android.IntentIntegrator.REQUEST_CODE) { scan.contents?.let { pairing.scanned(it) }; return }
+        }
         val uri = if (requestCode == 3) pendingCamera else data?.data
         if (resultCode == RESULT_OK && uri != null) {
             try {

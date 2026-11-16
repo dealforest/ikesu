@@ -1,6 +1,5 @@
 package kazuph.ikesu.decisions
 
-import android.util.Base64
 import com.southernstorm.noise.protocol.CipherState
 import com.southernstorm.noise.protocol.HandshakeState
 import java.io.ByteArrayOutputStream
@@ -11,8 +10,8 @@ import javax.crypto.spec.SecretKeySpec
 
 /** Encoding helpers shared with the bridge (apps/android/PROTOCOL.md). */
 object B64 {
-    fun encode(bytes: ByteArray): String = Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
-    fun decode(text: String): ByteArray = Base64.decode(text, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+    fun encode(bytes: ByteArray): String = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+    fun decode(text: String): ByteArray = java.util.Base64.getUrlDecoder().decode(text)
 }
 
 object RelayMath {
