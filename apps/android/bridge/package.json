@@ -2,6 +2,12 @@
   "name": "ikesu-android-decisions-bridge",
   "private": true,
   "type": "module",
-  "scripts": {"test": "node --test test/*.test.mjs"},
-  "dependencies": {"ws": "8.18.3"}
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "noise-handshake": "4.2.1",
+    "qrcode-terminal": "^0.12.0",
+    "ws": "8.18.3"
+  }
 }

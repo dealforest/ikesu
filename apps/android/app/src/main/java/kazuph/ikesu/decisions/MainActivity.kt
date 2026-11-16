@@ -88,6 +88,8 @@ class MainActivity : Activity() {
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // What the PCs show (questions, screens) never appears in screenshots or the app switcher.
+        window.setFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE, android.view.WindowManager.LayoutParams.FLAG_SECURE)
         // Recordings left by a killed process are never sent.
         cacheDir.listFiles { file -> file.name.startsWith("voice") && file.name.endsWith(".m4a") }?.forEach { it.delete() }
         window.isNavigationBarContrastEnforced = false
@@ -135,8 +137,10 @@ class MainActivity : Activity() {
         // A video removed with its decision closes the player and frees its preview.
         videoPreviews.keys.retainAll(DecisionState.videos.keys)
         videoViewer?.let { if (it.key !in DecisionState.videos) it.dismiss() }
-        if (!DecisionState.connected && drafts.values.any { it.sequence != null && !it.waitingReconnect }) {
-            drafts.values.filter { it.sequence != null }.forEach { it.waitingReconnect = true }
+        // Each draft follows the PC its decision came from: another PC staying connected does not count.
+        val cut = drafts.filter { (id, draft) -> draft.sequence != null && !draft.waitingReconnect && !DecisionState.reachable(id) }
+        if (cut.isNotEmpty()) {
+            cut.values.forEach { it.waitingReconnect = true }
             Toast.makeText(this, "接続が切れました。再接続後に保存状態を確認してください", Toast.LENGTH_LONG).show()
         }
         DecisionState.result?.let { result ->
@@ -160,8 +164,8 @@ class MainActivity : Activity() {
         }
         val ids = (0 until DecisionState.decisions.length()).mapNotNull { DecisionState.decisions.optJSONObject(it)?.optString("id") }.toSet()
         listCursor = if (ids.isEmpty()) 0 else listCursor.coerceAtMost(ids.size - 1)
-        if (DecisionState.connected) for ((id, draft) in drafts) {
-            if (draft.waitingReconnect && draft.sequence != null) {
+        for ((id, draft) in drafts) {
+            if (draft.waitingReconnect && draft.sequence != null && DecisionState.reachable(id)) {
                 if (DecisionState.answer(id, draft.selected.toList(), draft.text, draft.images, draft.sequence!!)) draft.waitingReconnect = false
             }
         }
@@ -296,6 +300,13 @@ class MainActivity : Activity() {
         val id = item.optString("id")
         val draft = drafts.getOrPut(id) { Draft() }
         block(text(item.optString("location"), 18f))
+        if (item.optBoolean("locked")) {
+            // Only the heading arrives until the biometric signature is accepted (PROTOCOL 3.4).
+            block(text(decisionHeading(item.optString("raw_title"), "", item.optString("kind")), 28f))
+            block(text("中身と選択肢は、顔・指紋で開くと見えます。", 18f))
+            block(button("顔・指紋で開く", true) { unlock() })
+            return
+        }
         if (item.optString("question_label").isNotBlank()) block(text(item.optString("question_label"), 18f))
         val (heading, rest) = detailHeadingAndBody(item.optString("title"), item.optString("body"), item.optString("kind"))
         block(text(heading, 28f))
@@ -496,9 +507,69 @@ class MainActivity : Activity() {
         }
         super.onPause()
     }
+    private val pairing by lazy { Pairing(this) { settingsVisible = false; render() } }
+    private fun unlock() = Unlock.run(this) { message -> Toast.makeText(this, message, Toast.LENGTH_LONG).show() }
+    override fun onResume() {
+        super.onResume()
+        // Opening the app asks for a face or fingerprint before showing what the PCs sent (⑤).
+        unlock()
+    }
+    private fun renderMachines() {
+        block(text("PC（中継でつなぐ）", 22f), 4)
+        val machines = MachineStore(this).list()
+        if (machines.isEmpty()) block(text("まだ登録した PC はありません。PC の端末で `node apps/android/bridge/main.mjs pair` を実行し、出た QR を読んでください。", 16f), 4)
+        machines.forEach { machine ->
+            val state = DecisionState.sources[machine.id]
+            val status = when { state == null || !state.connected -> "未接続"; state.operable -> "接続中・操作できる"; else -> "接続中・顔と指紋で開く前" }
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            pair(text("${machine.name}\n$status", 18f), button("外す") {
+                android.app.AlertDialog.Builder(this).setTitle("${machine.name} を外しますか？")
+                    .setMessage("この端末から ${machine.name} の登録を消します。PC 側の登録も外すには、PC で devices と revoke を実行してください。")
+                    .setPositiveButton("外す") { _, _ -> MachineStore(this).remove(machine.id); startService(Intent(this, DecisionService::class.java)); render() }
+                    .setNegativeButton("やめる", null).show()
+            }, row)
+            block(row)
+        }
+        block(text("外出中など QR を読めないときは、下の「鍵を作る」で出た1行を PC の持ち主へ送り、返ってきた接続情報を貼ってください。秘密鍵はこの端末から出ません。", 16f), 4)
+        block(button("鍵を作る（公開鍵を出す）") {
+            try {
+                val store = MachineStore(this)
+                val line = ManualLink.publicKeys(store, android.os.Build.MODEL)
+                // PC は登録した鍵の指紋を出す。同じ指紋なら、途中で差し替えられていない。
+                val view = text("指紋: ${RelayMath.fingerprint(store.noisePublicKey())}\n\n$line", 14f).apply { setTextIsSelectable(true); typeface = Typeface.MONOSPACE }
+                android.app.AlertDialog.Builder(this).setTitle("この端末の公開鍵").setView(view)
+                    .setPositiveButton("コピー") { _, _ ->
+                        (getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("ikesu 公開鍵", line))
+                        Toast.makeText(this, "コピーしました。Slack などで送ってください", Toast.LENGTH_LONG).show()
+                    }.setNegativeButton("閉じる", null).show()
+            } catch (error: Exception) { Toast.makeText(this, "鍵を作れませんでした。端末に指紋か顔を登録してください（${error.javaClass.simpleName}）", Toast.LENGTH_LONG).show() }
+        })
+        val linkField = input("接続情報（{\"v\":1,\"kind\":\"ikesu-link\",…}）を貼る", 3)
+        block(linkField)
+        block(button("接続情報で PC を追加") {
+            try {
+                val machine = ManualLink.parse(linkField.text.toString())
+                MachineStore(this).add(machine)
+                startService(Intent(this, DecisionService::class.java).setAction(DecisionService.RECONNECT))
+                android.app.AlertDialog.Builder(this).setTitle("${machine.name} を追加しました")
+                    .setMessage("PC の鍵の指紋: ${RelayMath.fingerprint(B64.decode(machine.bridge))}\nPC 側に出た指紋と同じか確かめてください。違うときは「外す」で消してください。")
+                    .setPositiveButton("閉じる", null).show()
+                render()
+            } catch (error: Exception) { Toast.makeText(this, error.message ?: "接続情報を読めませんでした", Toast.LENGTH_LONG).show() }
+        })
+        block(button("PC を追加（QR を読む）", true) {
+            if (checkSelfPermission(android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(android.Manifest.permission.CAMERA), 5); return@button
+            }
+            com.google.zxing.integration.android.IntentIntegrator(this).setDesiredBarcodeFormats(com.google.zxing.integration.android.IntentIntegrator.QR_CODE)
+                .setPrompt("PC の端末に出た QR を読んでください").setBeepEnabled(false).setOrientationLocked(false).initiateScan()
+        })
+    }
     private fun renderSettings() {
         val current = try { ConnectionSettings(this).load() } catch (_: Exception) { null }
         block(text("接続設定", 28f))
+        renderMachines()
+        block(text("Tailscale でつなぐ（今までの方式）", 22f), 4)
         block(text("接続先", 18f), 4)
         val url = input("ws://接続先:8776").apply { setText(current?.first ?: "") }
         block(url)
@@ -593,6 +664,9 @@ class MainActivity : Activity() {
     @Deprecated("Android activity result callback")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        com.google.zxing.integration.android.IntentIntegrator.parseActivityResult(requestCode, resultCode, data)?.let { scan ->
+            if (requestCode == com.google.zxing.integration.android.IntentIntegrator.REQUEST_CODE) { scan.contents?.let { pairing.scanned(it) }; return }
+        }
         val uri = if (requestCode == 3) pendingCamera else data?.data
         if (resultCode == RESULT_OK && uri != null) {
             try {
