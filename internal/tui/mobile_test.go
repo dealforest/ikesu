@@ -104,3 +104,33 @@ func TestG2MobileTapCollapseBlankCycleAndWorkspaceSelectionActualPTY(t *testing.
 		t.Fatal("selected workspace PTY missing")
 	}
 }
+
+// On a phone the space list is the switcher: tapping the space already shown
+// opens its menu, as a second click on the active sidebar row does.
+func TestMobileTapOnActiveSpaceOpensItsMenu(t *testing.T) {
+	teststate.Lock(t)
+	a := specRuntimeApp(t)
+	a.SetSidebarConfig(config.Config{}, true)
+	a.exec(model.CmdResize{Cols: 60, Rows: 30})
+	a.exec(model.CmdNewWorkspace{Cwd: a.cwd})
+	a.exec(model.CmdSelectWorkspace{Index: 0})
+	tap := func(ws int) {
+		sw := render.MobileSwitchRect(a.st)
+		sidebarEvent(a, input.KindMouseClick, sw.X+1, 1)
+		for i, r := range render.MobileRows(a.st, a.mainMenuItems()) {
+			if r.Kind == render.RowWorkspace && r.Ws == ws {
+				sidebarEvent(a, input.KindMouseClick, 4, render.MobileViewport(a.st).Y+i)
+				return
+			}
+		}
+		t.Fatal("space row not found", ws)
+	}
+	tap(1)
+	if a.st.Active != 1 || a.menu != nil || a.mobileSwitcher {
+		t.Fatal("tap on another space did not just switch", a.st.Active, a.menu != nil)
+	}
+	tap(1)
+	if a.st.Active != 1 || a.menu == nil || a.menu.kind != menuWorkspace || a.menu.ws != 1 || a.mobileSwitcher {
+		t.Fatal("second tap on the shown space did not open its menu")
+	}
+}

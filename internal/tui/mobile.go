@@ -74,8 +74,14 @@ func (a *App) mobileMouse(ev input.Event) bool {
 				case render.RowSection:
 					a.toggleSection(row.Section)
 				case render.RowWorkspace, render.RowGit:
-					a.exec(model.CmdSelectWorkspace{Index: row.Ws})
+					// As in the sidebar: a tap on the space already shown opens its menu.
+					active := row.Ws == a.st.Active
 					a.mobileSwitcher = false
+					if active {
+						a.openWorkspaceMenu(m.X, m.Y, row.Ws)
+					} else {
+						a.exec(model.CmdSelectWorkspace{Index: row.Ws})
+					}
 				}
 			}
 		}

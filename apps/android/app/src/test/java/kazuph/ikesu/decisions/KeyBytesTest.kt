@@ -29,5 +29,10 @@ class KeyBytesTest {
 
     @Test fun clickIsAnSgrPressAndRelease() = assertEquals("\u001b[<0;5;7M\u001b[<0;5;7m", s(KeyBytes.click(5, 7)))
 
+    @Test fun wheelIsAnSgrPress() {
+        assertEquals("\u001b[<64;5;7M", s(KeyBytes.wheel(5, 7, true)))
+        assertEquals("\u001b[<65;5;7M", s(KeyBytes.wheel(5, 7, false)))
+    }
+
     @Test fun pasteIsBracketedAndDropsEscapes() = assertEquals("\u001b[200~ab\u001b[201~", s(KeyBytes.paste("a\u001bb")))
 }
