@@ -81,7 +81,10 @@ export class Screen {
     delete childEnv.IKESU_PANE_ID;
     if (!spawn) { this.config = writeClientConfig(env); childEnv.IKESU_CONFIG = this.config.file; }
     if (!spawn) { ensureSpawnHelper(); spawn = require('node-pty').spawn; }
-    this.pty = spawn(ikesuBin, [], { name: 'xterm-256color', cols, rows, cwd: env.HOME || process.cwd(), env: childEnv, encoding: null });
+    // つなぐセッションは、bridge が話しているサーバーと同じにする（IKESU_SOCKET_PATH のフォルダ名。引数なしは default）。
+    const session = env.IKESU_SOCKET_PATH ? path.basename(path.dirname(env.IKESU_SOCKET_PATH)) : '';
+    const args = session && session !== 'default' && /^[A-Za-z0-9._-]+$/.test(session) ? ['--session', session] : [];
+    this.pty = spawn(ikesuBin, args, { name: 'xterm-256color', cols, rows, cwd: env.HOME || process.cwd(), env: childEnv, encoding: null });
     // 最初の出力の一部を残しておき、すぐ終わったときの理由を記録に書けるようにする。
     this.head = Buffer.alloc(0);
     this.pty.onData(chunk => { const bytes = Buffer.from(chunk); if (this.head.length < 400) this.head = Buffer.concat([this.head, bytes]).subarray(0, 400); this.buffer(bytes); });
@@ -99,8 +102,9 @@ export class Screen {
     const all = Buffer.concat(this.pending); this.pending = []; this.pendingBytes = 0;
     for (let offset = 0; offset < all.length; offset += MAX_BATCH) this.onData(this.seq++, all.subarray(offset, offset + MAX_BATCH));
   }
-  write(bytes) { if (!this.closed) this.pty.write(bytes); }
-  resize(cols, rows) { if (!this.closed) this.pty.resize(cols, rows); }
+  // 終わりかけの PTY への書き込みは失敗しうる。接続ごと切らずに捨てる。
+  write(bytes) { if (!this.closed) try { this.pty.write(bytes); } catch { /* 終わりかけ */ } }
+  resize(cols, rows) { if (!this.closed) try { this.pty.resize(cols, rows); } catch { /* 終わりかけ */ } }
   removeConfig() { if (this.config) { fs.rmSync(this.config.dir, { recursive: true, force: true }); this.config = null; } }
   close() {
     if (this.closed) return;

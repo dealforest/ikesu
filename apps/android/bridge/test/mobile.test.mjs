@@ -557,3 +557,36 @@ test('画面: スマホのファイルを保存し、そのパスを画面に打
   assert.deepEqual(saved, [['a.png', 'img']]);
   assert.equal(fake.screens[0].written.map(b => b.toString()).join(''), "'/tmp/x/a.png' ");
 });
+
+test('画面: screen_open が続けて届いても、開いたままの PTY は1つだけ。切断ですべて閉じる', async t => {
+  const fake = fakeScreens();
+  const env = await setup(t, { idleMs: 60000, beatMs: 1000, serverAlive: () => new Promise(r => setTimeout(() => r(true), 30)), openScreen: fake.openScreen });
+  const { app, paired } = await pairDevice(env);
+  const a = await connectApp(env, paired, app);
+  await a.handshake();
+  a.sendJson(a.operateMessage());
+  await a.recv(m => m.type === 'operate_ok');
+  a.sendJson({ type: 'screen_open', cols: 40, rows: 20 });
+  a.sendJson({ type: 'screen_open', cols: 41, rows: 20 });
+  await a.recv(m => m.type === 'screen_opened');
+  await sleep(100);
+  assert.equal(fake.screens.filter(screen => !screen.closed).length, 1);
+  a.conn.close?.();
+  env.hub.onReset();
+  assert.equal(fake.screens.filter(screen => !screen.closed).length, 0);
+});
+
+test('心拍: まだ送っていない番号は受けない', async t => {
+  const fake = fakeScreens();
+  const env = await setup(t, { idleMs: 60000, beatMs: 1000, serverAlive: fake.serverAlive, openScreen: fake.openScreen });
+  const { app, paired } = await pairDevice(env);
+  const a = await connectApp(env, paired, app);
+  await a.handshake();
+  a.sendJson(a.operateMessage());
+  await a.recv(m => m.type === 'operate_ok');
+  a.sendJson({ type: 'screen_open', cols: 40, rows: 20 });
+  const opened = await a.recv(m => m.type === 'screen_opened');
+  a.sendJson({ type: 'screen_input', screen: opened.screen, beat: 999999, data: Buffer.from('x').toString('base64') });
+  assert.equal((await a.recv(m => m.type === 'error')).message, 'stale beat');
+  assert.equal(fake.screens[0].written.length, 0);
+});

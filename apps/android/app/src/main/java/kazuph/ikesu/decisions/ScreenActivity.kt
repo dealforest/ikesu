@@ -308,6 +308,8 @@ class ScreenActivity : Activity() {
     override fun onStart() {
         super.onStart()
         ScreenBus.listener = { from, message -> if (from == source) handle(message) }
+        // Coming back after the unlock ended: do not keep showing the old screen.
+        if (DecisionState.sources[source]?.operable != true) { view.clear(); finish(); return }
         if (view.cols > 0) open(view.cols, view.rows)
     }
 
@@ -346,7 +348,7 @@ class ScreenActivity : Activity() {
             "screen_data" -> if (message.optInt("screen") == screenId) view.feed(Base64.decode(message.optString("data"), Base64.NO_WRAP))
             "screen_closed" -> if (message.optInt("screen") == screenId) { screenId = -1; Toast.makeText(this, "PC 側で画面が閉じました", Toast.LENGTH_LONG).show(); finish() }
             "screen_file_saved" -> status.text = "PC に保存しました: ${message.optString("path")}"
-            "operate_expired" -> { screenId = -1; Toast.makeText(this, "顔・指紋で開いた時間が切れました", Toast.LENGTH_LONG).show(); finish() }
+            "operate_expired" -> { if (isFinishing) return; screenId = -1; view.clear(); Toast.makeText(this, "接続が切れたか、顔・指紋で開いた時間が切れました", Toast.LENGTH_LONG).show(); finish() }
             "error" -> { opening = false; status.text = "PC 側: ${message.optString("message")}" }
         }
     }
@@ -452,6 +454,9 @@ class TerminalCanvas(
     }
 
     fun feed(bytes: ByteArray) { emulator?.append(bytes, bytes.size); invalidate() }
+
+    /** Forgets what was drawn (so nothing of the PC stays visible). */
+    fun clear() { emulator = null; cols = 0; rows = 0; invalidate() }
 
     override fun onDraw(canvas: Canvas) {
         canvas.drawColor(Color.BLACK)

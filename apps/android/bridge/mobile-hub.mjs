@@ -139,7 +139,8 @@ class Session {
   }
   fresh(message) {
     if (message.beat === undefined) return true;
-    return Number.isInteger(message.beat) && this.beatN - message.beat < 2;
+    // まだ送っていない番号の心拍は受けない。
+    return Number.isInteger(message.beat) && message.beat <= this.beatN && this.beatN - message.beat < 2;
   }
   // ---- 画面（PROTOCOL.md 4章）。見るには screen、打つには input の権限と新しい心拍が要る ----
   closeScreen(notify) {
@@ -155,8 +156,11 @@ class Session {
       if (!ONLY(message, ['type', 'cols', 'rows']) || !validSize(message.cols, message.rows)) { this.close(); return; }
       if (!this.can('screen')) { deny('permission denied'); return; }
       this.closeScreen(true);
+      const ticket = this.screenTicket = (this.screenTicket ?? 0) + 1;
       if (!await this.hub.serverAlive()) { deny('ikesu のサーバーにつながりません'); return; }
-      if (!this.operating || this.closed) return;
+      // 待っている間に次の screen_open が来たら、こちらは開かない（PTY を2つ作らない）。
+      if (!this.operating || this.closed || ticket !== this.screenTicket) return;
+      this.closeScreen(true);
       const id = this.hub.nextScreenId++;
       try {
         this.screen = this.hub.openScreen({ id, cols: message.cols, rows: message.rows,
