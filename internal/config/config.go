@@ -81,6 +81,7 @@ type Config struct {
 		SidebarCollapsedMode          string        `toml:"sidebar_collapsed_mode"`
 		Accent                        string        `toml:"accent"`
 		MobileWidthThreshold          *int          `toml:"mobile_width_threshold"`
+		NativeMenus                   bool          `toml:"native_menus"`
 		Sidebar                       SidebarPanels `toml:"sidebar"`
 		RightSidebarWidth             *int          `toml:"right_sidebar_width"`
 		SidebarWidth                  *int          `toml:"sidebar_width"`

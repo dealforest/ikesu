@@ -169,6 +169,9 @@ func (m *machineClient) paint() error {
 	if err := writeErr; err != nil {
 		return err
 	}
+	if err := m.writeNativeMenu(in); err != nil {
+		return err
+	}
 	e.guardApproval.painted = ""
 	r := composed.ApprovalRect
 	if in.Approval != nil && r.W > 0 && r.H > 0 && r.X >= 0 && r.Y >= 0 && r.X+r.W <= m.size.Cols && r.Y+r.H <= m.size.Rows {
@@ -210,6 +213,21 @@ func (m *machineClient) paint() error {
 		if err := m.input(event); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// writeNativeMenu tells a host app ([ui] native_menus) what menu or dialog
+// this screen now shows; unchanged frames and disabled screens write nothing.
+func (m *machineClient) writeNativeMenu(in render.Input) error {
+	enabled := m.settings != nil && m.settings.config != nil && m.settings.config.UI.NativeMenus
+	signal := m.nativeMenu.Next(enabled, in.Menu, in.Dialog)
+	if signal == nil {
+		return nil
+	}
+	if _, err := m.out.Write(signal); err != nil {
+		m.nativeMenu.Forget()
+		return err
 	}
 	return nil
 }

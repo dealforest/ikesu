@@ -313,6 +313,11 @@ func (a *App) draw() {
 	if err := writeErr; err != nil {
 		a.enc.Reset()
 		a.dirty = true
+	} else if signal := a.nativeMenu.Next(a.sidebarConfig.UI.NativeMenus, in.Menu, in.Dialog); signal != nil {
+		if _, err := a.out.Write(signal); err != nil {
+			a.nativeMenu.Forget()
+			a.dirty = true
+		}
 	}
 	if !a.serverUI {
 		if err := a.windowTitle.Painted(a.out, in, a.windowTitleSession, nil); err != nil {

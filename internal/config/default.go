@@ -28,6 +28,8 @@ pane_scrollbars = "auto" # auto / always / off; legacy true / false also accepte
 pane_scrollbar_hide_delay_ms = 1500
 window_title = "summary"
 mobile_width_threshold = 64
+# true only for a client inside a host app that draws menus and dialogs itself:
+# native_menus = false
 sidebar_min_width = 18
 sidebar_max_width = 72
 sidebar_width = 26

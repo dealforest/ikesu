@@ -9,8 +9,8 @@ android {
         applicationId = "kazuph.ikesu"
         minSdk = 31
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.8"
+        versionCode = 9
+        versionName = "0.9"
     }
 }
 dependencies {
