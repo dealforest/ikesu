@@ -194,14 +194,46 @@ class ScreenActivity : Activity() {
         gravity = Gravity.CENTER; setTextColor(GREEN); textSize = 15f
         background = keyBackground(false, dp)
         if (key.main is ScreenKey.Modifier) modifierViews[key.main.bit] = this
-        var downY = 0f; var popupDone = false
-        val longPress = Runnable { if (key.popup != null) { popupDone = true; press(key.popup) } }
+        // Long press shows a bubble above the key with what the swipe up would type; sliding up while holding types it.
+        // Letting go without sliding up types nothing. A quick swipe up types it at once, as before.
+        var downY = 0f; var up = false; var bubble: android.widget.PopupWindow? = null
+        fun hideBubble() { bubble?.dismiss(); bubble = null }
+        fun markBubble() {
+            (bubble?.contentView as? TextView)?.apply { setTextColor(if (up) Color.BLACK else GREEN); background = keyBackground(up, dp) }
+        }
+        val longPress = Runnable {
+            if (key.popupLabel == null || bubble != null) return@Runnable
+            val label = TextView(this@ScreenActivity).apply {
+                text = "↑ ${key.popupLabel}"; textSize = 18f; gravity = Gravity.CENTER
+                setPadding((14 * dp).toInt(), (8 * dp).toInt(), (14 * dp).toInt(), (8 * dp).toInt())
+            }
+            bubble = android.widget.PopupWindow(label, -2, -2, false).apply { isClippingEnabled = false }
+            label.measure(0, 0)
+            val at = IntArray(2); this.getLocationInWindow(at)
+            bubble?.showAtLocation(this, Gravity.NO_GRAVITY, at[0] + (width - label.measuredWidth) / 2, at[1] - label.measuredHeight - (6 * dp).toInt())
+            markBubble()
+        }
         setOnTouchListener { v, event ->
             when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { downY = event.y; popupDone = false; v.postDelayed(longPress, 400); v.isPressed = true }
-                MotionEvent.ACTION_MOVE -> if (!popupDone && key.popup != null && downY - event.y > 30 * dp) { v.removeCallbacks(longPress); popupDone = true; press(key.popup) }
-                MotionEvent.ACTION_UP -> { v.removeCallbacks(longPress); v.isPressed = false; if (!popupDone) press(key.main) }
-                MotionEvent.ACTION_CANCEL -> { v.removeCallbacks(longPress); v.isPressed = false }
+                MotionEvent.ACTION_DOWN -> { downY = event.y; up = false; v.postDelayed(longPress, 350); v.isPressed = true }
+                MotionEvent.ACTION_MOVE -> {
+                    val nowUp = key.popup != null && downY - event.y > 24 * dp
+                    if (nowUp != up) { up = nowUp; markBubble() }
+                    // A quick swipe up without waiting for the bubble types the alternative right away.
+                    if (up && bubble == null) { v.removeCallbacks(longPress); v.isPressed = false; press(key.popup!!); downY = Float.MAX_VALUE / 2 }
+                }
+                MotionEvent.ACTION_UP -> {
+                    v.removeCallbacks(longPress); v.isPressed = false
+                    val shown = bubble != null
+                    hideBubble()
+                    when {
+                        downY > Float.MAX_VALUE / 4 -> {}
+                        shown && up -> press(key.popup!!)
+                        shown -> {}
+                        else -> press(key.main)
+                    }
+                }
+                MotionEvent.ACTION_CANCEL -> { v.removeCallbacks(longPress); v.isPressed = false; hideBubble() }
             }
             true
         }
