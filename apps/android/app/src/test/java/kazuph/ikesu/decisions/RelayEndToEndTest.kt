@@ -16,6 +16,8 @@ import java.util.concurrent.TimeUnit
  *  `main.mjs devices add`. Runs only when IKESU_E2E_ADD names a command that registers the
  *  keys and prints the connection line (for example an ssh to the PC running the fixture).
  *  The operate key is a software P-256 key here; on the phone it lives in the Keystore. */
+private val B64Std = java.util.Base64.getEncoder().let { encoder -> object { fun encodeToString(b: ByteArray): String = encoder.encodeToString(b); fun decode(s: String): ByteArray = java.util.Base64.getDecoder().decode(s) } }
+
 class RelayEndToEndTest {
     @Test fun registeredPhoneSeesTheDecisionUnlocksAndAnswers() {
         val add = System.getenv("IKESU_E2E_ADD")
@@ -70,6 +72,24 @@ class RelayEndToEndTest {
         val result = next("answer_result")
         assertEquals("s1", result.optString("sequence"))
         assertEquals(result.toString(), "answered", result.optString("status"))
+
+        // The whole ikesu screen at the phone's size: the PC draws it, and typed keys run in its shell (PROTOCOL 4).
+        link.send(JSONObject().put("type", "screen_open").put("cols", 44).put("rows", 20))
+        val screen = next("screen_opened").getInt("screen")
+        var drawn = ""
+        fun drawnUntil(text: String) {
+            while (!drawn.contains(text)) {
+                val data = next("screen_data")
+                if (data.getInt("screen") == screen) drawn += String(B64Std.decode(data.getString("data")), Charsets.UTF_8).replace(Regex("\u001b\\[[0-9;?]*[A-Za-z]"), "")
+            }
+        }
+        drawnUntil("ikesu")
+        val beat = next("beat").getLong("n")
+        link.send(JSONObject().put("type", "screen_input").put("screen", screen).put("beat", beat)
+            .put("data", B64Std.encodeToString("echo phone-$((6*7))\r".toByteArray())))
+        drawnUntil("phone-42")
+        link.send(JSONObject().put("type", "screen_close").put("screen", screen))
+        assertEquals(screen, next("screen_closed").getInt("screen"))
         link.close("試験の終わり")
     }
 }

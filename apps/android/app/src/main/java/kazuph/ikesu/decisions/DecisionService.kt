@@ -223,7 +223,11 @@ class DecisionService : Service() {
     }
 
     private fun handle(source: DecisionSource, message: JSONObject) {
-        when (message.optString("type")) {
+        val type = message.optString("type")
+        // The open screen of this PC also needs these (PROTOCOL 4).
+        if (type.startsWith("screen_") || type == "operate_expired" || type == "error") ScreenBus.listener?.invoke(source.id, message)
+        if (type.startsWith("screen_")) return
+        when (type) {
             "snapshot" -> { source.connected = true; retries.remove(source.id); updateDecisions(source, message.optJSONArray("decisions") ?: JSONArray(), false) }
             "notice" -> { source.connected = true; if (!source.operable) updateDecisions(source, message.optJSONArray("decisions") ?: JSONArray(), true) }
             "operate_ok" -> { source.operable = true; changed() }

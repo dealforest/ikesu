@@ -446,3 +446,90 @@ test('clientCount はペアリング中と握手前の接続を数えず、握�
   env.hub.onReset();
   assert.equal(env.hub.clientCount(), 0);
 });
+
+// にせの画面: 書かれたキーと大きさを覚え、出力を流せる。
+function fakeScreens() {
+  const screens = [];
+  return { screens, serverAlive: async () => true, openScreen: options => {
+    const screen = { ...options, written: [], sizes: [[options.cols, options.rows]], closed: false,
+      write(bytes) { this.written.push(Buffer.from(bytes)); }, resize(c, r) { this.sizes.push([c, r]); }, close() { this.closed = true; } };
+    screens.push(screen); return screen;
+  } };
+}
+
+test('画面: 顔・指紋の前は開けない。開いたら出力が届き、新しい心拍のキーだけが書かれる。閉じると止まる', async t => {
+  const fake = fakeScreens();
+  const env = await setup(t, { idleMs: 60000, beatMs: 20, serverAlive: fake.serverAlive, openScreen: fake.openScreen });
+  const { app, paired } = await pairDevice(env);
+  const a = await connectApp(env, paired, app);
+  await a.handshake();
+  a.sendJson({ type: 'screen_open', cols: 40, rows: 20 });
+  assert.equal((await a.recv(m => m.type === 'error')).message, 'operate required');
+  assert.equal(fake.screens.length, 0);
+  a.sendJson(a.operateMessage());
+  await a.recv(m => m.type === 'operate_ok');
+  a.sendJson({ type: 'screen_open', cols: 40, rows: 20 });
+  const opened = await a.recv(m => m.type === 'screen_opened');
+  assert.deepEqual([opened.cols, opened.rows], [40, 20]);
+  const screen = fake.screens[0];
+  screen.onData(0, Buffer.from('hello'));
+  const data = await a.recv(m => m.type === 'screen_data');
+  assert.equal(Buffer.from(data.data, 'base64').toString(), 'hello');
+  const beat = (await a.recv(m => m.type === 'beat' && m.n >= 4)).n;
+  a.sendJson({ type: 'screen_input', screen: opened.screen, beat: 0, data: Buffer.from('old').toString('base64') });
+  assert.equal((await a.recv(m => m.type === 'error')).message, 'stale beat');
+  a.sendJson({ type: 'screen_input', screen: opened.screen, data: Buffer.from('nobeat').toString('base64') });
+  await a.recv(m => m.type === 'error' && m.message === 'stale beat');
+  a.sendJson({ type: 'screen_input', screen: opened.screen, beat, data: Buffer.from('ls\r').toString('base64') });
+  await until(() => screen.written.length === 1);
+  assert.equal(screen.written[0].toString(), 'ls\r');
+  a.sendJson({ type: 'screen_resize', screen: opened.screen, cols: 50, rows: 25 });
+  await until(() => screen.sizes.length === 2);
+  assert.deepEqual(screen.sizes[1], [50, 25]);
+  a.sendJson({ type: 'screen_close', screen: opened.screen });
+  await a.recv(m => m.type === 'screen_closed');
+  assert.ok(screen.closed);
+});
+
+test('画面: screen の権限が無い端末は開けず、input の権限が無い端末は打てない。操作の終わりで画面も閉じる', async t => {
+  const fake = fakeScreens();
+  const env = await setup(t, { idleMs: 60000, beatMs: 20, serverAlive: fake.serverAlive, openScreen: fake.openScreen });
+  const viewOnly = await pairDevice(env, { permissions: ['notify', 'answer', 'screen'] });
+  const a = await connectApp(env, viewOnly.paired, viewOnly.app);
+  await a.handshake();
+  a.sendJson(a.operateMessage());
+  await a.recv(m => m.type === 'operate_ok');
+  a.sendJson({ type: 'screen_open', cols: 40, rows: 20 });
+  const opened = await a.recv(m => m.type === 'screen_opened');
+  const beat = (await a.recv(m => m.type === 'beat')).n;
+  a.sendJson({ type: 'screen_input', screen: opened.screen, beat, data: Buffer.from('x').toString('base64') });
+  assert.equal((await a.recv(m => m.type === 'error')).message, 'permission denied');
+  assert.equal(fake.screens[0].written.length, 0);
+  a.sendJson({ type: 'operate_end' });
+  await a.recv(m => m.type === 'screen_closed');
+  assert.ok(fake.screens[0].closed);
+
+  const noScreen = await pairDevice(env, { permissions: ['notify', 'answer'] });
+  const b = await connectApp(env, noScreen.paired, noScreen.app);
+  await b.handshake();
+  b.sendJson(b.operateMessage());
+  await b.recv(m => m.type === 'operate_ok');
+  b.sendJson({ type: 'screen_open', cols: 40, rows: 20 });
+  assert.equal((await b.recv(m => m.type === 'error')).message, 'permission denied');
+  assert.equal(fake.screens.length, 1);
+});
+
+test('画面: 大きさが範囲の外なら接続を切る。サーバーが無ければ開かない', async t => {
+  const fake = fakeScreens();
+  const env = await setup(t, { idleMs: 60000, beatMs: 1000, serverAlive: async () => false, openScreen: fake.openScreen });
+  const { app, paired } = await pairDevice(env);
+  const a = await connectApp(env, paired, app);
+  await a.handshake();
+  a.sendJson(a.operateMessage());
+  await a.recv(m => m.type === 'operate_ok');
+  a.sendJson({ type: 'screen_open', cols: 40, rows: 20 });
+  assert.match((await a.recv(m => m.type === 'error')).message, /サーバー/);
+  assert.equal(fake.screens.length, 0);
+  a.sendJson({ type: 'screen_open', cols: 5000, rows: 20 });
+  await until(() => a.conn.closed);
+});
