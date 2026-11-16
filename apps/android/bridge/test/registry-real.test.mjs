@@ -7,8 +7,7 @@ import net from 'node:net';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { DecisionRegistry } from '../registry.mjs';
-import { listen, MAX_MESSAGE_BYTES } from '../socket.mjs';
-import { WebSocket } from 'ws';
+import { validateAnswer } from '../messages.mjs';
 import { once } from 'node:events';
 import { spawnDecisionWatch } from '../../../mac-dialog-decisions/mac-dialog-decisions.mjs';
 import { ClientViews } from '../../../mac-dialog-decisions/client-views.mjs';
@@ -68,61 +67,11 @@ test('隔離 ikesu の保存済み回答と送信番号の重複を照合する'
   assert.equal(firstSnapshot.raw_body, decision.body || '');
   assert.equal(firstSnapshot.question_label, decision.question_label || '');
   const id = firstSnapshot.id;
-  const token = '01'.repeat(32);
-  const bridge = await listen({ address: '127.0.0.1', port: 0, token,
-    snapshot: () => registry.snapshot(), answer: value => registry.answer(value), later: value => registry.later(value) });
-  t.after(() => bridge.close());
-  const url = `ws://127.0.0.1:${bridge.address.port}/`;
-  const denied = new WebSocket(url);
-  await once(denied, 'open');
-  const closed = once(denied, 'close');
-  denied.send(JSON.stringify({ type: 'auth', token: '00'.repeat(32) }));
-  assert.equal((await closed)[0], 1008);
-  const noAuth = new WebSocket(url);
-  await once(noAuth, 'open');
-  let receivedBeforeAuth = 0;
-  noAuth.on('message', () => { receivedBeforeAuth++; });
-  const noAuthClosed = once(noAuth, 'close');
-  noAuth.send(JSON.stringify({ type: 'answer', id, options: ['yes'], text: '', images: [], sequence: 'unauth' }));
-  assert.equal((await noAuthClosed)[0], 1008);
-  assert.equal(receivedBeforeAuth, 0);
-  const oversized = new WebSocket(url);
-  await once(oversized, 'open');
-  const oversizedClosed = once(oversized, 'close');
-  oversized.send(Buffer.alloc(MAX_MESSAGE_BYTES + 1));
-  assert.equal((await oversizedClosed)[0], 1009);
-  const browser = new WebSocket(url, { origin: 'https://example.test' });
-  browser.on('error', () => {});
-  await new Promise(resolve => browser.once('close', resolve));
-  const phone = new WebSocket(url);
-  await once(phone, 'open');
-  const initial = once(phone, 'message');
-  phone.send(JSON.stringify({ type: 'auth', token }));
-  assert.equal(JSON.parse((await initial)[0]).decisions[0].id, id);
+  // スマホからの回答は、決まった項目だけを受ける。パス・マシン・URL・コマンド・回答者を混ぜたものは断る。
   for (const extra of [{ path: '/tmp/forbidden' }, { machine: 'other-machine' },
                        { url: 'https://example.test/' }, { command: 'true' }, { responder: 'other' }]) {
-    const rejected = once(phone, 'message');
-    phone.send(JSON.stringify({ type: 'answer', id, options: ['yes'], text: '', images: [], sequence: 'forbidden', ...extra }));
-    assert.equal(JSON.parse((await rejected)[0]).type, 'error');
+    assert.throws(() => validateAnswer({ type: 'answer', id, options: ['yes'], text: '', images: [], sequence: 'forbidden', ...extra }), /回答の形式/);
   }
-  const unknown = once(phone, 'message');
-  phone.send(JSON.stringify({ type: 'answer', id: 'unknown-id', options: ['yes'], text: '', images: [], sequence: 'unknown' }));
-  assert.equal(JSON.parse((await unknown)[0]).type, 'error');
-  const rotated = '02'.repeat(32);
-  const phoneClosed = once(phone, 'close');
-  bridge.setToken(rotated);
-  await phoneClosed;
-  const oldToken = new WebSocket(url);
-  await once(oldToken, 'open');
-  const oldClosed = once(oldToken, 'close');
-  oldToken.send(JSON.stringify({ type: 'auth', token }));
-  assert.equal((await oldClosed)[0], 1008);
-  const newPhone = new WebSocket(url);
-  await once(newPhone, 'open');
-  const newInitial = once(newPhone, 'message');
-  newPhone.send(JSON.stringify({ type: 'auth', token: rotated }));
-  assert.equal(JSON.parse((await newInitial)[0]).type, 'snapshot');
-  newPhone.close();
   const message = { type: 'answer', id, options: ['yes'], text: '試験', images: [], sequence: 'one' };
   const [first, second] = await Promise.all([registry.answer(message), registry.answer(message)]);
   assert.deepEqual(first, second);
@@ -143,28 +92,17 @@ test('隔離 ikesu の保存済み回答と送信番号の重複を照合する'
   await rpc('decision.answer', { decision_id: answered.decision_id, option_id: 'yes', responder: 'elsewhere' });
   await rpc('decision.cancel', { decision_id: cancelled.decision_id });
   await until(() => ![...registry.entries.values()].some(entry => [answered.decision_id, cancelled.decision_id, expired.decision_id].includes(entry.decision.decision_id)));
-  const reconnect = new WebSocket(url);
-  await once(reconnect, 'open');
-  const resync = once(reconnect, 'message');
-  reconnect.send(JSON.stringify({ type: 'auth', token: rotated }));
-  const rows = JSON.parse((await resync)[0]).decisions;
+  // つなぎ直した後の一覧には、まだ残っている判断待ちだけが入る。
+  const rows = await registry.snapshot();
   assert.deepEqual(rows.map(row => row.decision_id), [pending.decision_id]);
+  // 返事が届かずに切れた回答を、同じ送信番号で送り直しても、保存は1回だけで answered が返る。
   const dropped = { type: 'answer', id: rows[0].id, options: ['yes'], text: '', images: [], sequence: 'lost-reply' };
   const sendsBefore = sent;
-  await new Promise((resolve, reject) => reconnect.send(JSON.stringify(dropped), error => error ? reject(error) : resolve()));
-  reconnect.terminate();
+  void registry.answer(dropped).catch(() => {});
   await until(() => registry.submissions.has(dropped.sequence));
   await registry.submissions.get(dropped.sequence).result;
-  const afterLoss = new WebSocket(url);
-  await once(afterLoss, 'open');
-  const afterLossSnapshot = once(afterLoss, 'message');
-  afterLoss.send(JSON.stringify({ type: 'auth', token: rotated }));
-  await afterLossSnapshot;
-  const recovered = once(afterLoss, 'message');
-  afterLoss.send(JSON.stringify(dropped));
-  assert.equal(JSON.parse((await recovered)[0]).status, 'answered');
+  assert.equal((await registry.answer(dropped)).status, 'answered');
   assert.equal(sent - sendsBefore, 1);
-  afterLoss.close();
 
   await until(() => views.ready);
   const terminal = net.createConnection(path.join(home, 'state', session, 'ikesu-client.sock'));

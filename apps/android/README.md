@@ -1,10 +1,10 @@
 # ikesu for Android
 
-Android から ikesu の判断待ちを確認し、回答します。Mac 上の bridge は登録済みの判断待ちを読み、Tailscale の IPv4 アドレスで待ち受けます。Android アプリのパッケージ ID は `kazuph.ikesu`、プラグイン ID は `kazuph.android` です。
+Android から ikesu の判断待ちを確認し、回答します。Mac 上の bridge は判断待ちを読み、Cloudflare の中継（`apps/relay`）へ外向きにつなぎます。スマホとは中継越しに、端から端まで暗号のまま話します。仕組みは `PROTOCOL.md` に書いてあります。Android アプリのパッケージ ID は `kazuph.ikesu`、プラグイン ID は `kazuph.android` です。
 
 ## 導入
 
-macOS に Node.js、Xcode と Tailscale が必要です。リポジトリのルートから依存物を導入し、bridge をプラグインとしてリンクします。
+macOS に Node.js と Xcode が必要です。リポジトリのルートから依存物を導入し、bridge をプラグインとしてリンクします。
 
 ```sh
 cd apps/android/bridge
@@ -12,7 +12,7 @@ npm ci
 ikesu plugin link "$PWD"
 ```
 
-判断待ちが作成されると bridge が起動します。手動では `ikesu plugin action invoke start --plugin kazuph.android` を使います。設定フォルダの `config.json` で `enabled`、`port`（既定 8776）、`tailscale_path`、`later_minutes`（既定 10）を指定できます。Tailscale のアドレスを取得できないとき、bridge は待ち受けません。
+判断待ちが作成されると bridge が起動します。手動では `ikesu plugin action invoke start --plugin kazuph.android` を使います。設定フォルダの `config.json` で `enabled` と `later_minutes`（既定 10）を指定できます。中継の設定（`relay.json`）が無いとき、bridge は起動しません。中継の用意は `bridge/README.md` の `relay-setup` を見てください。
 
 Android SDK を用意し、`apps/android` で `./gradlew assembleDebug` を実行します。USB で対象端末を接続し、端末を確認してから次を実行します。
 
@@ -21,9 +21,9 @@ adb devices -l
 adb -s <端末ID> install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-初回の bridge 起動で、プラグインの設定フォルダに `token` が作られます。ファイルは所有者だけが読める権限です。アプリの接続設定に `ws://<MacのTailscale IPv4>:8776/` と合言葉を入力します。端末の通知許可も必要です。ADB の intent は `am start -n kazuph.ikesu/.decisions.MainActivity --es url <接続先> --es token <合言葉>` に対応します。合言葉がシェル履歴や作業ログへ残らない方法で渡してください。端末側では Android Keystore の鍵で暗号化します。
+スマホの登録は2通りです。PC の前にいるときは `node bridge/main.mjs pair --name <PC の名前>` の QR をアプリで読み、アプリに出る6桁を PC に入力します。QR を読めないときは、アプリの「鍵を作る（公開鍵を出す）」で出た1行を PC で `node bridge/main.mjs devices add --name … --noise … --operate …` に渡し、出てきた接続情報をアプリの「接続情報で PC を追加」に貼ります。どちらも、アプリと PC に出る鍵の指紋が同じか確かめます。端末の通知許可も必要です。
 
-端末を紛失したときや合言葉を交換するときは `ikesu plugin action invoke rotate-token --plugin kazuph.android` を実行します。古い接続は切断されます。新しいファイルの合言葉を端末へ設定し直してください。
+端末を紛失したときは `node bridge/main.mjs revoke <端末 ID>` で外します（端末 ID は `devices` で見られます）。動いている bridge は、再起動なしでその端末の接続を切ります。
 
 ## 音声で答える
 

@@ -13,32 +13,22 @@ import android.os.IBinder
 import android.os.Looper
 import android.net.ConnectivityManager
 import android.net.Network
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
-import okhttp3.WebSocket
-import okhttp3.WebSocketListener
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.concurrent.TimeUnit
 import java.io.File
 import java.io.FileOutputStream
 import android.util.Base64
 
-/** One place decisions come from: the legacy Tailscale bridge ("t") or a PC paired through the relay. */
+/** One PC paired through the relay: where its decisions come from. */
 class DecisionSource(val id: String, val name: String) {
     var decisions = JSONArray()
     var connected = false
     /** Relay only: the bridge accepted the operate signature (PROTOCOL 3.3). */
     var operable = false
     var link: RelayLink? = null
-    var legacy: WebSocket? = null
     var beat = 0L
-    val relay: Boolean get() = id != LEGACY
 
-    fun send(value: JSONObject): Boolean = if (relay) link?.send(value) == true else legacy?.send(value.toString()) == true
-
-    companion object { const val LEGACY = "t" }
+    fun send(value: JSONObject): Boolean = link?.send(value) == true
 }
 
 /** Decisions from every source, merged for the screens. Ids are "<source>~<id>". Use on the main thread. */
@@ -82,7 +72,7 @@ object DecisionState : AnswerChannel {
     }
 
     /** Relay connections that still need the operate signature. */
-    fun lockedLinks(): List<DecisionSource> = sources.values.filter { it.relay && it.link?.ready == true && !it.operable }
+    fun lockedLinks(): List<DecisionSource> = sources.values.filter { it.link?.ready == true && !it.operable }
 
     /** Sends one biometric-backed signature over every listed handshake (PROTOCOL 3.3). */
     fun operate(targets: List<DecisionSource>, hashes: List<ByteArray>, signature: ByteArray) {
@@ -90,12 +80,12 @@ object DecisionState : AnswerChannel {
         targets.forEach { it.link?.send(message) }
     }
 
-    fun locked(): Boolean = sources.values.any { it.relay && it.connected && !it.operable }
+    fun locked(): Boolean = sources.values.any { it.connected && !it.operable }
 
     /** Whether an answer for this decision can reach its PC now (a relay PC also needs the operate signature). */
     fun reachable(key: String): Boolean {
         val source = split(key)?.let { sources[it.first] } ?: return false
-        return source.connected && (!source.relay || source.operable)
+        return source.connected && source.operable
     }
 
     /** Keeps only the heading of each decision: what may stay visible without the biometric unlock (PROTOCOL 3.4). */
@@ -122,7 +112,6 @@ class DecisionService : Service() {
         private const val RETRY_MAX_MS = 60_000L
     }
     private val handler = Handler(Looper.getMainLooper())
-    private val client = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).build()
     private val notificationIds = mutableMapOf<String, Int>()
     private var nextNotification = 2
     private var generation = 0
@@ -140,6 +129,9 @@ class DecisionService : Service() {
         manager.createNotificationChannel(NotificationChannel(CONNECTION, "接続状態", NotificationManager.IMPORTANCE_LOW))
         manager.createNotificationChannel(NotificationChannel(QUESTIONS, "判断待ち", NotificationManager.IMPORTANCE_HIGH))
         startForeground(FOREGROUND_ID, connectionNotification())
+        // The passphrase connection is gone: remove what the old version stored (address, encrypted passphrase, its key).
+        getSharedPreferences("connection", MODE_PRIVATE).edit().clear().apply()
+        try { java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry("ikesu-decisions-token") } catch (_: Exception) { }
         connectivity.registerDefaultNetworkCallback(networkCallback)
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -157,40 +149,19 @@ class DecisionService : Service() {
         .setColor(0xFF33FF66.toInt())
         .setOngoing(true).setContentIntent(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build()
 
-    /** (Re)opens every source: the legacy bridge when configured and each paired PC. */
+    /** (Re)opens a connection to each paired PC. */
     private fun connect() {
         val thisGeneration = ++generation
         // The lists stay until each PC sends a fresh one, so a reconnect keeps the open decision and the drafts.
         val previous = DecisionState.sources.toMap()
-        previous.values.forEach { it.legacy?.cancel(); it.link?.close("つなぎ直します") }
+        previous.values.forEach { it.link?.close("つなぎ直します") }
         DecisionState.sources.clear()
         receiving.forEach { (key, value) -> value.first.close(); File(cacheDir, "video-$key.partial").delete() }
         receiving.clear()
         retries.clear()
-        connectLegacy(thisGeneration, previous[DecisionSource.LEGACY])
         val store = MachineStore(this)
         store.list().forEach { connectRelay(thisGeneration, store, it, previous[it.id]) }
         changed()
-    }
-
-    private fun connectLegacy(thisGeneration: Int, previous: DecisionSource?) {
-        val settings = try { ConnectionSettings(this).load() } catch (_: Exception) { null } ?: return
-        val request = try { Request.Builder().url(settings.first).build() } catch (_: IllegalArgumentException) { return }
-        val source = DecisionSource(DecisionSource.LEGACY, "Tailscale")
-        previous?.let { source.decisions = it.decisions }
-        DecisionState.sources[source.id] = source
-        source.legacy = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                if (thisGeneration != generation) { webSocket.cancel(); return }
-                webSocket.send(JSONObject().put("type", "auth").put("token", settings.second).toString())
-            }
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                val message = try { JSONObject(text) } catch (_: Exception) { return }
-                handler.post { if (thisGeneration == generation) handle(source, message) }
-            }
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { lost(thisGeneration, source) }
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { lost(thisGeneration, source) }
-        })
     }
 
     private fun connectRelay(thisGeneration: Int, store: MachineStore, machine: Machine, previous: DecisionSource?) {
@@ -218,15 +189,14 @@ class DecisionService : Service() {
             source.connected = false
             // Find the half-received videos before the list is cut down to headings (which drops the video keys).
             dropPartialVideos(source)
-            if (source.relay) lock(source)
+            lock(source)
             changed()
             val attempt = if (quick) 0 else retries.getOrDefault(source.id, 0)
             retries[source.id] = attempt + 1
             handler.postDelayed({
                 if (previous != generation || DecisionState.sources[source.id] !== source) return@postDelayed
                 val store = MachineStore(this)
-                if (source.relay) store.list().firstOrNull { it.id == source.id }?.let { connectRelay(previous, store, it, source) }
-                else connectLegacy(previous, source)
+                store.list().firstOrNull { it.id == source.id }?.let { connectRelay(previous, store, it, source) }
             }, minOf(RETRY_MAX_MS, RETRY_MS shl minOf(attempt, 5)))
         }
     }
@@ -284,7 +254,7 @@ class DecisionService : Service() {
                 }
                 JSONObject().put("raw_title", original.optString("title")).put("kind", "agent_prompt").put("locked", true).put("notify", original.optBoolean("notify", true))
                     .put("location", (listOf(source.name) + place).joinToString("｜")).put("options", JSONArray())
-            } else JSONObject(original.toString()).also { if (source.relay) it.put("location", source.name + "｜" + it.optString("location")) }
+            } else JSONObject(original.toString()).also { it.put("location", source.name + "｜" + it.optString("location")) }
             item.put("id", DecisionState.key(source.id, id)).put("source", source.id)
             items.put(item)
         }
@@ -355,7 +325,7 @@ class DecisionService : Service() {
         handler.removeCallbacksAndMessages(null)
         receiving.forEach { (key, value) -> value.first.close(); File(cacheDir, "video-$key.partial").delete() }
         receiving.clear()
-        DecisionState.sources.values.forEach { it.legacy?.close(1000, ""); it.link?.close("終了") }
+        DecisionState.sources.values.forEach { it.link?.close("終了") }
         DecisionState.sources.clear()
         DecisionState.recompute()
         super.onDestroy()
