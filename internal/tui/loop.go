@@ -316,7 +316,7 @@ func (a *App) exec(cmd model.Command) {
 		a.lastSpawnError = nil
 		a.exec(model.CmdNewWorkspace{Cwd: home, Name: filepath.Base(home)})
 		if a.lastSpawnError != nil {
-			a.exec(model.CmdCloseWorkspace{Index: 1})
+			a.execWithoutClosedRecord(model.CmdCloseWorkspace{Index: 1})
 			a.ShowToast("workspace close failed", a.lastSpawnError.Error(), "error", a.focusedPane())
 			return
 		}
@@ -365,7 +365,10 @@ func (a *App) exec(cmd model.Command) {
 	if a.postExecHook != nil {
 		prev = a.st.Capture()
 	}
-	for _, e := range a.st.Apply(cmd) {
+	closing := a.closingSpaceFor(cmd)
+	effects := a.st.Apply(cmd)
+	a.recordClosedSpace(closing, effects)
+	for _, e := range effects {
 		if killed, ok := e.(model.EffKillPane); ok && killed.Pane == beforeFocus {
 			beforeFocus = -1
 		}

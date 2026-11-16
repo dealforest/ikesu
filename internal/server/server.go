@@ -132,6 +132,7 @@ type Server struct {
 	reportSources       map[int]string
 	session             string
 	dir                 string
+	closedSpaces        closedSpaceStore
 	version             string
 	executable          string
 	generation          string
@@ -622,6 +623,7 @@ func runEndpointWithClock(session, version string, peer endpoint.Peer, clock gra
 		delete(s.notifyLast, pid)
 	})
 	s.app.SetWarningsHook(s.agentSessionWarnings)
+	s.app.SetClosedSpaceHooks(s.recordClosedSpace, s.listClosedSpaces, s.reopenClosedSpace)
 	s.jobCache.wake = make(chan struct{}, 1)
 	s.app.SetJobSource(s.cachedJobSnapshot)
 	s.app.SetWorkspaceTokenSource(s.workspaceTokens)

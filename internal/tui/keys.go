@@ -318,7 +318,7 @@ func (a *App) replaceLastWorkspace() {
 	a.lastSpawnError = nil
 	a.newWorkspace()
 	if a.lastSpawnError != nil {
-		a.exec(model.CmdCloseWorkspace{Index: a.st.Active})
+		a.execWithoutClosedRecord(model.CmdCloseWorkspace{Index: a.st.Active})
 		return
 	}
 	a.exec(model.CmdCloseWorkspace{Index: old})

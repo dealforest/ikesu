@@ -103,46 +103,8 @@ func (s *Server) captureSessionWithoutObservation() *sessionSnapshot {
 	if len(f.Workspaces) == 0 {
 		return nil
 	}
-	var ledger map[int]dispatch.PaneSession
-	ledgerLoaded := false
-	f.EachPane(func(w *session.Workspace, _ *session.Tab, p *session.Pane) {
-		if rp := s.sup.Get(p.ID); rp != nil {
-			p.IdleActivityAt, p.IdleActivitySeq = rp.IdleActivity()
-			if cwd := rp.Snapshot().Cwd; cwd != "" {
-				p.Cwd = cwd
-			}
-		}
-		if p.Cwd == "" {
-			p.Cwd = w.Cwd
-		}
-		if rec, ok := s.app.SessionRecord(p.ID); ok {
-			p.Agent = rec.Agent
-			p.SessionID = rec.Value
-			p.SessionKind = rec.Kind
-			p.Title = rec.Title
-			p.SessionStartSource = rec.SessionStartSource
-		}
-		// A safe same-agent ledger id keeps the exact session on the
-		// snapshot even when the terminal-side record was lost.
-		if !session.SafeSessionValue(p.SessionKind, p.SessionID) {
-			if !ledgerLoaded {
-				ledger = s.ledgerEntries()
-				ledgerLoaded = true
-			}
-			if led, ok := ledger[p.ID]; ok && led.SessionID != "" &&
-				(p.Agent == "" || led.Agent == p.Agent) {
-				if p.Agent == "" {
-					p.Agent = led.Agent
-				}
-				p.SessionID = led.SessionID
-				p.SessionKind = led.SessionKind
-				p.SessionStartSource = led.SessionStartSource
-				if p.Title == "" {
-					p.Title = led.Title
-				}
-			}
-		}
-	})
+	fill := s.paneRecordFiller()
+	f.EachPane(func(w *session.Workspace, _ *session.Tab, p *session.Pane) { fill(w, p) })
 	s.saveSequence++
 	return &sessionSnapshot{sequence: s.saveSequence, file: f, history: s.capturePaneHistory(f)}
 }
@@ -172,6 +134,7 @@ func (s *Server) writeSession(snapshot *sessionSnapshot) bool {
 }
 
 func (s *Server) closeSessionWrites() {
+	s.flushClosedSpaces()
 	s.saveWriteMu.Lock()
 	defer s.saveWriteMu.Unlock()
 	s.saveClosed = true
@@ -254,4 +217,50 @@ func (s *Server) spawnSuccessor() {
 		return
 	}
 	_ = cmd.Process.Release()
+}
+
+// paneRecordFiller returns a function that fills a snapshot pane with its
+// live cwd, idle activity and agent session record. The ledger is read at
+// most once per filler.
+func (s *Server) paneRecordFiller() func(w *session.Workspace, p *session.Pane) {
+	var ledger map[int]dispatch.PaneSession
+	ledgerLoaded := false
+	return func(w *session.Workspace, p *session.Pane) {
+		if rp := s.sup.Get(p.ID); rp != nil {
+			p.IdleActivityAt, p.IdleActivitySeq = rp.IdleActivity()
+			if cwd := rp.Snapshot().Cwd; cwd != "" {
+				p.Cwd = cwd
+			}
+		}
+		if p.Cwd == "" {
+			p.Cwd = w.Cwd
+		}
+		if rec, ok := s.app.SessionRecord(p.ID); ok {
+			p.Agent = rec.Agent
+			p.SessionID = rec.Value
+			p.SessionKind = rec.Kind
+			p.Title = rec.Title
+			p.SessionStartSource = rec.SessionStartSource
+		}
+		// A safe same-agent ledger id keeps the exact session on the
+		// snapshot even when the terminal-side record was lost.
+		if !session.SafeSessionValue(p.SessionKind, p.SessionID) {
+			if !ledgerLoaded {
+				ledger = s.ledgerEntries()
+				ledgerLoaded = true
+			}
+			if led, ok := ledger[p.ID]; ok && led.SessionID != "" &&
+				(p.Agent == "" || led.Agent == p.Agent) {
+				if p.Agent == "" {
+					p.Agent = led.Agent
+				}
+				p.SessionID = led.SessionID
+				p.SessionKind = led.SessionKind
+				p.SessionStartSource = led.SessionStartSource
+				if p.Title == "" {
+					p.Title = led.Title
+				}
+			}
+		}
+	}
 }

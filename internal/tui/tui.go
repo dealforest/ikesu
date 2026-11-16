@@ -19,6 +19,7 @@ import (
 	"github.com/kazuph/ikesu/internal/plugin"
 	"github.com/kazuph/ikesu/internal/render"
 	"github.com/kazuph/ikesu/internal/runtime"
+	"github.com/kazuph/ikesu/internal/session"
 	"github.com/kazuph/ikesu/internal/status"
 	"golang.org/x/term"
 	"io"
@@ -244,6 +245,10 @@ type App struct {
 	restoreHook         func(dryRun bool) // main menu "Restore agents…"
 	localRestore        bool
 	localObservedStart  map[int]time.Time
+	spaceClosedHook     func(ws session.Workspace, label, reason string) // whole space removed with its panes
+	closedSpacesList    func() []ClosedSpace
+	skipClosedRecord    bool // rollback of a space this app just created
+	closedSpaceReopen   func(id string) (int, error)
 	paneClosedHook      func(pid int)                                  // pane permanently removed; server cleans ledger
 	postExecHook        func(cmd model.Command, prev *model.StateSnap) // after every state-changing command
 	exitedHook          func(pid int)                                  // pane process exited; server emits pane.exited

@@ -23,25 +23,7 @@ func (s *Server) importHerdr(req *api.Request) api.Response {
 	// remain in place, and their live PTYs must not be restarted.
 	prev := s.app.State().Capture()
 	state := s.app.State()
-	reserved := map[int]bool{}
-	store, dbErr := s.db()
-	if dbErr == nil {
-		reserved, dbErr = store.ReservedPaneIDs(s.session)
-	}
-	if reserved == nil {
-		reserved = map[int]bool{}
-	}
-	for _, popup := range state.Popups {
-		if popup != nil {
-			reserved[popup.PaneID] = true
-		}
-	}
-	if state.Popup != nil {
-		reserved[state.Popup.PaneID] = true
-	}
-	if state.Overlay != nil {
-		reserved[state.Overlay.PaneID] = true
-	}
+	reserved, dbErr := s.reservedPaneIDs()
 	target := state.Snapshot()
 	target.NextPaneID = max(target.NextPaneID, state.HandoffCounters().RuntimePane)
 	merged, added := session.Append(target, p.File, reserved, dbErr != nil)
@@ -65,4 +47,30 @@ func (s *Server) importHerdr(req *api.Request) api.Response {
 		HerdrRunning bool   `json:"herdr_running"`
 		Message      string `json:"message"`
 	}{"session_imported", len(added.Workspaces), p.Running, fmt.Sprintf("added %d workspaces", len(added.Workspaces))})
+}
+
+// reservedPaneIDs lists pane ids that appended panes must not reuse: ids
+// the session database still refers to and the open popups/overlay.
+func (s *Server) reservedPaneIDs() (map[int]bool, error) {
+	state := s.app.State()
+	reserved := map[int]bool{}
+	store, dbErr := s.db()
+	if dbErr == nil {
+		reserved, dbErr = store.ReservedPaneIDs(s.session)
+	}
+	if reserved == nil {
+		reserved = map[int]bool{}
+	}
+	for _, popup := range state.Popups {
+		if popup != nil {
+			reserved[popup.PaneID] = true
+		}
+	}
+	if state.Popup != nil {
+		reserved[state.Popup.PaneID] = true
+	}
+	if state.Overlay != nil {
+		reserved[state.Overlay.PaneID] = true
+	}
+	return reserved, dbErr
 }

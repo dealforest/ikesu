@@ -155,7 +155,7 @@ func (a *App) DuplicateWorkspace(index int, focus bool) (int, error) {
 	a.exec(model.CmdDuplicateWorkspace{Index: index, Focus: focus, Cwds: cwds})
 	if a.lastSpawnError != nil {
 		err := a.lastSpawnError
-		a.exec(model.CmdCloseWorkspace{Index: len(a.st.Workspaces) - 1})
+		a.execWithoutClosedRecord(model.CmdCloseWorkspace{Index: len(a.st.Workspaces) - 1})
 		for i, w := range a.st.Workspaces {
 			if w.ID == original {
 				a.exec(model.CmdSelectWorkspace{Index: i})

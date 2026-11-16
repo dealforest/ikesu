@@ -23,37 +23,43 @@ func (s *AppState) Snapshot() *session.File {
 		f.CollapsedSections[string(k)] = v
 	}
 	for _, ws := range s.Workspaces {
-		sw := session.Workspace{
-			Worktree: ws.Worktree, GroupCollapsed: ws.GroupCollapsed, Section: string(ws.Section), CustomName: ws.CustomName, DefaultName: ws.DefaultName,
-			ID:         ws.ID,
-			Generation: ws.Generation,
-			Name:       ws.Name,
-			Cwd:        ws.Cwd,
-			ActiveTab:  ws.ActiveTab,
-		}
-		for _, t := range ws.Tabs {
-			st := session.Tab{
-				ID:      t.ID,
-				Zoomed:  t.Zoomed,
-				Name:    t.Name,
-				Focused: t.Layout.Focused(),
-				Order:   t.Layout.PaneIDs(),
-				Layout:  session.FromLayoutNode(t.Layout.Root()),
-			}
-			for _, pid := range st.Order {
-				st.Panes = append(st.Panes, session.Pane{
-					ID:               pid,
-					Generation:       s.PaneGeneration(pid),
-					LegacyGeneration: s.LegacyPaneGenerations[pid],
-					Cwd:              ws.Cwd, // caller overwrites with the pane's real cwd
-					Label:            s.PaneLabels[pid],
-				})
-			}
-			sw.Tabs = append(sw.Tabs, st)
-		}
-		f.Workspaces = append(f.Workspaces, sw)
+		f.Workspaces = append(f.Workspaces, s.SnapshotWorkspace(ws))
 	}
 	return f
+}
+
+// SnapshotWorkspace renders one workspace as a session record. Pane cwd
+// is the workspace cwd; the caller overwrites it with the real one.
+func (s *AppState) SnapshotWorkspace(ws *Workspace) session.Workspace {
+	sw := session.Workspace{
+		Worktree: ws.Worktree, GroupCollapsed: ws.GroupCollapsed, Section: string(ws.Section), CustomName: ws.CustomName, DefaultName: ws.DefaultName,
+		ID:         ws.ID,
+		Generation: ws.Generation,
+		Name:       ws.Name,
+		Cwd:        ws.Cwd,
+		ActiveTab:  ws.ActiveTab,
+	}
+	for _, t := range ws.Tabs {
+		st := session.Tab{
+			ID:      t.ID,
+			Zoomed:  t.Zoomed,
+			Name:    t.Name,
+			Focused: t.Layout.Focused(),
+			Order:   t.Layout.PaneIDs(),
+			Layout:  session.FromLayoutNode(t.Layout.Root()),
+		}
+		for _, pid := range st.Order {
+			st.Panes = append(st.Panes, session.Pane{
+				ID:               pid,
+				Generation:       s.PaneGeneration(pid),
+				LegacyGeneration: s.LegacyPaneGenerations[pid],
+				Cwd:              ws.Cwd, // caller overwrites with the pane's real cwd
+				Label:            s.PaneLabels[pid],
+			})
+		}
+		sw.Tabs = append(sw.Tabs, st)
+	}
+	return sw
 }
 
 // Restore builds an AppState from a session file that has already passed
