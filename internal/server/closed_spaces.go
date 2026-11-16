@@ -38,7 +38,11 @@ type closedSpaceStore struct {
 
 	writeMu  sync.Mutex
 	writeSeq uint64
-	writes   sync.WaitGroup
+	// pending counts writes not finished yet; a mutex and condition instead
+	// of a WaitGroup because writes start while another goroutine waits.
+	pendingMu sync.Mutex
+	pending   int
+	idle      *sync.Cond
 }
 
 func closedSpacesPath(dir string) string { return filepath.Join(dir, "closed_spaces.json") }
@@ -192,9 +196,18 @@ func (s *Server) persistClosedSpaces() {
 	c.seq++
 	seq := c.seq
 	path := closedSpacesPath(s.dir)
-	c.writes.Add(1)
+	c.pendingMu.Lock()
+	c.pending++
+	c.pendingMu.Unlock()
 	go func() {
-		defer c.writes.Done()
+		defer func() {
+			c.pendingMu.Lock()
+			c.pending--
+			if c.pending == 0 && c.idle != nil {
+				c.idle.Broadcast()
+			}
+			c.pendingMu.Unlock()
+		}()
 		c.writeMu.Lock()
 		defer c.writeMu.Unlock()
 		if seq <= c.writeSeq {
@@ -215,4 +228,14 @@ func (s *Server) persistClosedSpaces() {
 }
 
 // flushClosedSpaces waits for pending list writes (server stop, handoff).
-func (s *Server) flushClosedSpaces() { s.closedSpaces.writes.Wait() }
+func (s *Server) flushClosedSpaces() {
+	c := &s.closedSpaces
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	if c.idle == nil {
+		c.idle = sync.NewCond(&c.pendingMu)
+	}
+	for c.pending > 0 {
+		c.idle.Wait()
+	}
+}

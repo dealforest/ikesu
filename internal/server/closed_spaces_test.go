@@ -225,3 +225,30 @@ func waitClosedSpacesFile(t *testing.T, dir string, want int) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestClosedSpaceFlushWaitsForPendingWrites(t *testing.T) {
+	teststate.Lock(t)
+	s, _ := closedSpaceServer(t)
+	work := filepath.Join(filepath.Dir(s.dir), "flush")
+	if err := os.MkdirAll(work, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 50; i++ {
+			s.flushClosedSpaces()
+		}
+	}()
+	for i := 0; i < 5; i++ {
+		s.app.ExecCmd(model.CmdNewWorkspace{Cwd: work, Name: "flush"})
+		s.app.ExecCmd(model.CmdCloseWorkspace{Index: 1})
+	}
+	<-done
+	s.flushClosedSpaces()
+	var entries []closedSpaceEntry
+	b, err := os.ReadFile(closedSpacesPath(s.dir))
+	if err != nil || json.Unmarshal(b, &entries) != nil || len(entries) != 5 {
+		t.Fatalf("after flush the file has %d entries (%v)", len(entries), err)
+	}
+}
