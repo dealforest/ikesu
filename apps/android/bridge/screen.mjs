@@ -36,11 +36,20 @@ export async function serverAlive(ikesuBin, env = process.env) {
 // 「入れ子の ikesu」として断られる（internal/client/nested.go）。この画面は PTY の中のクライアントで、
 // ペインの中の入れ子ではない。持ち主の設定を写し、[experimental] に allow_nested = true を足したものを、
 // この1つのクライアントにだけ渡す。写しは画面を閉じたら消す。
+// 表（[experimental] など）に key = true を1つだけ置く。前からある同じ名前の行は消す。
+function setTrue(lines, table, key) {
+  const kept = lines.filter(line => !new RegExp(`^\\s*${key}\\s*=`).test(line));
+  const header = kept.findIndex(line => new RegExp(`^\\s*\\[${table}\\]\\s*(#.*)?$`).test(line));
+  if (header >= 0) kept.splice(header + 1, 0, `${key} = true`);
+  else kept.push('', `[${table}]`, `${key} = true`);
+  return kept;
+}
+
+// スマホの画面の ikesu だけ: 入れ子を許し、メニューとダイアログを Android の画面で出す合図（ui.native_menus）を有効にする。
 export function nestedClientConfig(text) {
-  const lines = String(text).split('\n').filter(line => !/^\s*allow_nested\s*=/.test(line));
-  const header = lines.findIndex(line => /^\s*\[experimental\]\s*(#.*)?$/.test(line));
-  if (header >= 0) lines.splice(header + 1, 0, 'allow_nested = true');
-  else lines.push('', '[experimental]', 'allow_nested = true');
+  let lines = String(text).split('\n');
+  lines = setTrue(lines, 'experimental', 'allow_nested');
+  lines = setTrue(lines, 'ui', 'native_menus');
   return lines.join('\n') + '\n';
 }
 

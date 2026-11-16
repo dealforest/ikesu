@@ -3,14 +3,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { nestedClientConfig } from '../screen.mjs';
 
-test('allow_nested を [experimental] に足す。前からある allow_nested は置き換え、ほかの行は残す', () => {
-  assert.equal(nestedClientConfig('prefix = "ctrl+t"\n[experimental]\nallow_nested = false\nfoo = 1\n[other]\nallow = 2\n'),
-    'prefix = "ctrl+t"\n[experimental]\nallow_nested = true\nfoo = 1\n[other]\nallow = 2\n\n');
+test('allow_nested を [experimental] に、native_menus を [ui] に足す。前からある同じ行は置き換え、ほかの行は残す', () => {
+  assert.equal(nestedClientConfig('prefix = "ctrl+t"\n[experimental]\nallow_nested = false\nfoo = 1\n[ui]\nnative_menus = false\n[other]\nallow = 2\n'),
+    'prefix = "ctrl+t"\n[experimental]\nallow_nested = true\nfoo = 1\n[ui]\nnative_menus = true\n[other]\nallow = 2\n\n');
 });
 
-test('[experimental] が無ければ最後に足す。空の設定でも足す', () => {
-  assert.match(nestedClientConfig('prefix = "ctrl+t"\n'), /^prefix = "ctrl\+t"\n[\s\S]*\[experimental\]\nallow_nested = true\n$/);
-  assert.match(nestedClientConfig(''), /\[experimental\]\nallow_nested = true\n$/);
+test('表が無ければ最後に足す。空の設定でも足す', () => {
+  const out = nestedClientConfig('prefix = "ctrl+t"\n');
+  assert.match(out, /^prefix = "ctrl\+t"\n/);
+  assert.match(out, /\[experimental\]\nallow_nested = true\n/);
+  assert.match(out, /\[ui\]\nnative_menus = true\n/);
+  assert.match(nestedClientConfig(''), /\[ui\]\nnative_menus = true\n$/);
 });
 
 import fs from 'node:fs';

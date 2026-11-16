@@ -128,6 +128,11 @@ class ScreenActivity : Activity() {
     private var input: android.widget.EditText? = null
     /** The photo or file picker is in front: keep the PC's screen open, so the same space is still shown on return. */
     private var picking = false
+    /** ikesu's menus and dialogs, shown as Android lists and dialogs (its ui.native_menus signal). */
+    private val scanner = NativeUiScanner()
+    private var native: AlertDialog? = null
+    private var nativeShown: String? = null
+    private var closingNative = false
     /** A file read while the screen was (re)opening, sent once screen_opened arrives. */
     private var pendingFile: Pair<String, String>? = null
 
@@ -316,6 +321,85 @@ class ScreenActivity : Activity() {
         if (mods != 0 && text.codePointCount(0, text.length) == 1 && text[0].code >= 0x20) send(KeyBytes.text(text, takeMods())) else send(bytes)
     }
 
+    private fun closeNative() { closingNative = true; native?.dismiss(); native = null; nativeShown = null; closingNative = false }
+
+    /** One open ikesu menu or dialog at a time. Choosing sends the same keys a keyboard would (↑/↓ Enter, Esc). */
+    private fun showNative(signal: JSONObject) {
+        val text = signal.toString()
+        if (text == nativeShown) return
+        closeNative()
+        val dp = resources.displayMetrics.density
+        when (signal.optString("kind")) {
+            "menu" -> {
+                val raw = signal.optJSONArray("items") ?: org.json.JSONArray()
+                val items = (0 until raw.length()).map { raw.optJSONObject(it) ?: JSONObject() }
+                val flags = items.map { it.optBoolean("separator") to it.optBoolean("disabled") }
+                val sel = signal.optInt("sel", -1)
+                val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                val rows = mutableListOf<Pair<Int, View>>()
+                items.forEachIndexed { index, item ->
+                    if (item.optBoolean("separator")) {
+                        list.addView(View(this).apply { setBackgroundColor(DARK_GREEN) }, LinearLayout.LayoutParams(-1, (1 * dp).toInt()).apply { setMargins(0, (6 * dp).toInt(), 0, (6 * dp).toInt()) })
+                        return@forEachIndexed
+                    }
+                    val disabled = item.optBoolean("disabled")
+                    val row = TextView(this).apply {
+                        val extra = listOf(item.optString("detail"), item.optString("status")).filter { it.isNotEmpty() }.joinToString("  ")
+                        this.text = if (extra.isEmpty()) item.optString("label") else "${item.optString("label")}\n$extra"
+                        textSize = 20f; setTextColor(if (disabled) DARK_GREEN else GREEN)
+                        minHeight = (56 * dp).toInt(); gravity = Gravity.CENTER_VERTICAL
+                        setPadding((16 * dp).toInt(), (8 * dp).toInt(), (16 * dp).toInt(), (8 * dp).toInt())
+                        background = keyBackground(index == sel, dp).also { if (index == sel) setTextColor(Color.BLACK) }
+                        if (!disabled) setOnClickListener {
+                            MenuKeys.choose(flags, sel, index)?.let { keys -> closeNative(); send(keys) }
+                        }
+                    }
+                    list.addView(row, LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, (3 * dp).toInt(), 0, (3 * dp).toInt()) })
+                    rows += index to row
+                }
+                val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding((16 * dp).toInt(), (8 * dp).toInt(), (16 * dp).toInt(), 0) }
+                if (signal.optBoolean("filterable")) {
+                    // Narrow the list here; choosing still moves ikesu's own selection, so its filter stays untouched.
+                    body.addView(android.widget.EditText(this).apply {
+                        hint = "絞り込み"; setTextColor(GREEN); setHintTextColor(DARK_GREEN); textSize = 18f; isSingleLine = true
+                        addTextChangedListener(object : android.text.TextWatcher {
+                            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {
+                                val q = s?.toString()?.lowercase().orEmpty()
+                                rows.forEach { (i, v) -> v.visibility = if (q.isEmpty() || items[i].optString("label").lowercase().contains(q) || items[i].optString("detail").lowercase().contains(q)) View.VISIBLE else View.GONE }
+                            }
+                            override fun afterTextChanged(s: android.text.Editable?) {}
+                        })
+                    })
+                }
+                body.addView(android.widget.ScrollView(this).apply { addView(list) })
+                native = AlertDialog.Builder(this).setTitle(signal.optString("title").ifEmpty { "メニュー" }).setView(body)
+                    .setNegativeButton("閉じる", null)
+                    .setOnDismissListener { if (!closingNative) { nativeShown = null; send(byteArrayOf(27)) } }.show()
+            }
+            "dialog" -> {
+                val lines = signal.optJSONArray("lines")
+                val message = (listOf(signal.optString("detail")) + (0 until (lines?.length() ?: 0)).map { lines!!.optString(it) }).filter { it.isNotEmpty() }.joinToString("\n")
+                val field = if (signal.isNull("input") || !signal.has("input")) null else android.widget.EditText(this).apply {
+                    setText(signal.optString("input")); setSelection(text.length); textSize = 18f; setTextColor(GREEN); isSingleLine = true
+                }
+                var answered = false
+                val builder = AlertDialog.Builder(this).setTitle(signal.optString("title")).setMessage(message.ifEmpty { null })
+                    .setPositiveButton(signal.optString("confirm").ifEmpty { "OK" }) { _, _ ->
+                        answered = true
+                        // An input dialog: clear ikesu's field (Ctrl+U), type the edited text, then Enter.
+                        if (field != null) send(byteArrayOf(21) + field.text.toString().replace(Regex("[\\r\\n]"), " ").toByteArray(Charsets.UTF_8) + byteArrayOf(13))
+                        else send(byteArrayOf(13))
+                    }
+                if (!signal.optBoolean("continue_only")) builder.setNegativeButton(signal.optString("cancel").ifEmpty { "やめる" }) { _, _ -> answered = true; send(byteArrayOf(27)) }
+                field?.let { builder.setView(it) }
+                native = builder.setOnDismissListener { if (!closingNative) { nativeShown = null; if (!answered) send(byteArrayOf(27)) } }.show()
+            }
+            else -> return
+        }
+        nativeShown = text
+    }
+
     private fun longPressMenu(col: Int, row: Int) {
         val items = listOf<Pair<String, () -> Unit>>(
             "ダブルクリック" to { send(KeyBytes.click(col, row) + KeyBytes.click(col, row)) },
@@ -472,7 +556,11 @@ class ScreenActivity : Activity() {
                 wanted = null
                 pendingFile?.let { (name, data) -> pendingFile = null; sendFileNow(name, data) }
             }
-            "screen_data" -> if (message.optInt("screen") == screenId) view.feed(Base64.decode(message.optString("data"), Base64.NO_WRAP))
+            "screen_data" -> if (message.optInt("screen") == screenId) {
+                val bytes = Base64.decode(message.optString("data"), Base64.NO_WRAP)
+                scanner.scan(bytes).forEach { showNative(it) }
+                view.feed(bytes)
+            }
             "screen_closed" -> if (message.optInt("screen") == screenId) { screenId = -1; Toast.makeText(this, "PC 側で画面が閉じました", Toast.LENGTH_LONG).show(); finish() }
             "screen_file_saved" -> { status.text = "${DecisionState.sources[source]?.name ?: "PC"} の画面"; notifySaved(message.optString("path")) }
             "operate_expired" -> { if (isFinishing) return; screenId = -1; view.clear(); Toast.makeText(this, "接続が切れたか、顔・指紋で開いた時間が切れました", Toast.LENGTH_LONG).show(); finish() }
