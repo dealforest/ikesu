@@ -87,3 +87,28 @@ func TestBorderedLongWordUsesContentWidth(t *testing.T) {
 		}
 	}
 }
+
+// Observed in Claude Code 2.1.325 (86 columns): the question's own line
+// breaks (a list) sit next to rows Claude wrapped itself.
+func TestClaudeQuestionKeepsItsLineBreaks(t *testing.T) {
+	p := Parse("claude", fixture(t, "claude-line-breaks"))
+	if p == nil || p.Params.Body == nil {
+		t.Fatalf("question not parsed: %+v", p)
+	}
+	want := "ブログの公開と PR #2 のマージを、進めていい？\n\n" +
+		"経緯：ブログの push は、マスターのはっきりした OK が無いので Claude Code の自動の許可に止められた。\n\n" +
+		"公開するもの：\n" +
+		"・ISUCON13 の記事（題・「記事の要約」の呼び名・手元だけの断り入り）\n" +
+		"・全記事の AI 表示の2行化と、題の上の Full AI の削除\n" +
+		"・全ページの文字（16px・行間1.8倍・OS の標準書体）\n" +
+		"・PR #2：ベンチのリポジトリも「記事の要約」にそろえ、実物と違う可能性を書いた\n\n" +
+		"推奨：進める。言われた直しは全部入れ、画面で確かめたから。\n\n" +
+		"push のコマンドはクリップボードに入れてある：\n" +
+		"git -C /Users/kazuph/src/github.com/kazuph/kazuph.github.io push"
+	if !strings.HasPrefix(*p.Params.Body, want) {
+		t.Fatalf("body:\n%s\nwant prefix:\n%s", *p.Params.Body, want)
+	}
+	if p.Params.Title != "ブログの公開と PR #2 のマージを、進めていい？" {
+		t.Fatalf("heading %q", p.Params.Title)
+	}
+}
