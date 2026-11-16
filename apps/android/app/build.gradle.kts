@@ -12,5 +12,6 @@ android {
 }
 dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.signal.forks:noise-java:0.1.1")
     testImplementation("junit:junit:4.13.2")
 }
