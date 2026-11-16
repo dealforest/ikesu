@@ -28,6 +28,8 @@ class RelayLink(
 
     @Volatile private var socket: WebSocket? = null
     @Volatile var closed = false; private set
+    /** The relay closed us because the bridge was away or restarting (1001, 1012, 1013): retry soon, it may be back. */
+    @Volatile var bridgeAway = false; private set
     val handshakeHash: ByteArray get() = session.handshakeHash
     val ready: Boolean get() = session.ready && !closed
     private val lock = Any()
@@ -56,7 +58,10 @@ class RelayLink(
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 finish(if (response?.code == 401) "中継に入れませんでした（PC との登録を確かめてください）" else "中継につながりません: ${t.message ?: t.javaClass.simpleName}")
             }
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { finish("接続が閉じました（$code）") }
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                bridgeAway = code == 1001 || code == 1012 || code == 1013
+                finish("接続が閉じました（$code）")
+            }
         })
     }
 

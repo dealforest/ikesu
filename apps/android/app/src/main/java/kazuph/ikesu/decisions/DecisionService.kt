@@ -204,21 +204,23 @@ class DecisionService : Service() {
             override fun onMessage(link: RelayLink, message: JSONObject) { handler.post { if (thisGeneration == generation) handle(source, message) } }
             override fun onClosed(link: RelayLink, reason: String) {
                 android.util.Log.w("IkesuDecisions", "${machine.name}: $reason")
-                lost(thisGeneration, source)
+                lost(thisGeneration, source, quick = link.bridgeAway)
             }
         })
         source.link = link
         link.start()
     }
 
-    private fun lost(previous: Int, source: DecisionSource) {
+    /** quick: the PC side was only away (restarting, asleep); try again in 2 seconds without growing the wait. */
+    private fun lost(previous: Int, source: DecisionSource, quick: Boolean = false) {
         handler.post {
             if (previous != generation || DecisionState.sources[source.id] !== source) return@post
             source.connected = false
-            if (source.relay) lock(source)
+            // Find the half-received videos before the list is cut down to headings (which drops the video keys).
             dropPartialVideos(source)
+            if (source.relay) lock(source)
             changed()
-            val attempt = retries.getOrDefault(source.id, 0)
+            val attempt = if (quick) 0 else retries.getOrDefault(source.id, 0)
             retries[source.id] = attempt + 1
             handler.postDelayed({
                 if (previous != generation || DecisionState.sources[source.id] !== source) return@postDelayed

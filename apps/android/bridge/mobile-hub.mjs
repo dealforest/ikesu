@@ -144,6 +144,8 @@ class Session {
           !verifyOperate(this.device.operate_pub, this.noise.hash, message.hashes, message.sig)) {
         this.send({ type: 'error', message: 'operate rejected' }); this.close(); return;
       }
+      // 操作中に届いた operate では期限を延ばさない（延ばすのは本当の操作だけ）。
+      if (this.operating) { this.send({ type: 'operate_ok', until: this.until }); return; }
       this.startOperating(); return;
     }
     if (type === 'shown') {

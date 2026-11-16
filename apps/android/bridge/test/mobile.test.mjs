@@ -420,3 +420,17 @@ test('run 中の bridge へ手元の unix socket 経由で pair を頼める', a
   assert.deepEqual(await remote.confirm('000000'), { device: null, active: true });
   remote.close();
 });
+
+test('操作中に同じ operate を送り直しても、期限は延びない', async t => {
+  const env = await setup(t, { idleMs: 400, beatMs: 1000 });
+  const { app, paired } = await pairDevice(env);
+  const a = await connectApp(env, paired, app);
+  await a.handshake();
+  const message = a.operateMessage();
+  a.sendJson(message);
+  const first = await a.recv(m => m.type === 'operate_ok');
+  await new Promise(r => setTimeout(r, 150));
+  a.sendJson(message);
+  assert.equal((await a.recv(m => m.type === 'operate_ok')).until, first.until);
+  await a.recv(m => m.type === 'operate_expired', 1000);
+});

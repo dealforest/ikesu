@@ -21,9 +21,9 @@
 
 QR を読めないときは、アプリの公開鍵を受け取って手で登録する。
 
-`node apps/android/bridge/main.mjs devices add --name <端末名> --noise <Noise の公開鍵 base64url 32バイト> --operate <操作用の公開鍵 SPKI DER の base64url> [--pc-name <PC の名前>]`
+`node apps/android/bridge/main.mjs devices add --name <端末名> --noise <Noise の公開鍵 base64url 32バイト> --operate <操作用の公開鍵 SPKI DER の base64url> [--pc-name <PC の名前>] [--permissions notify,answer,screen,input]`
 
-形を検査して `devices.json` に入れ（権限は全部）、アプリに貼る接続情報を1行の JSON で出す。秘密は含まない。`run` 中の bridge には再起動なしで効く。
+形を検査して `devices.json` に入れ（権限は `--permissions` で選ぶ。省くと全部）、アプリに貼る接続情報を1行の JSON で出す。登録したスマホの鍵の指紋と、この PC の鍵の指紋も出す。アプリの「鍵を作る」に出る指紋と同じか確かめる。秘密は含まない。`run` 中の bridge には再起動なしで効く。
 
 端末を外すには `node apps/android/bridge/main.mjs revoke <端末 ID>` を実行する。`run` 中の bridge は `devices.json` の変更を見て、再起動なしで接続を切る。
 
