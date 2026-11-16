@@ -303,7 +303,9 @@ class ScreenActivity : Activity() {
     private fun pickPhoto() {
         val picker = Intent(android.provider.MediaStore.ACTION_PICK_IMAGES).setType("*/*")
             .putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/*", "video/*"))
-        startActivityForResult(picker, PICK_FILE)
+        // Android 12 without the photo picker: the regular image chooser.
+        val fallback = Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*")
+        startActivityForResult(if (picker.resolveActivity(packageManager) != null) picker else fallback, PICK_FILE)
     }
 
     private fun pickDocument() {
