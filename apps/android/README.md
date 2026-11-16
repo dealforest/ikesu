@@ -25,6 +25,10 @@ adb -s <端末ID> install -r app/build/outputs/apk/debug/app-debug.apk
 
 端末を紛失したときや合言葉を交換するときは `ikesu plugin action invoke rotate-token --plugin kazuph.android` を実行します。古い接続は切断されます。新しいファイルの合言葉を端末へ設定し直してください。
 
+## 音声で答える
+
+判断待ちのコメント欄の下の「🎤 話して入力」を押すと録音が始まり、もう一度押すと止めて文字にします。文字はコメント欄の後ろに足されます。文字起こしは、接続設定の「音声の文字起こし」に入れた OpenAI 互換の `/v1/audio/transcriptions` の接続先（例: Tailscale 経由の `http://ubuntu-3090:8002`）で行います。音声はこの接続先へだけ送ります。初回はマイクの許可が要ります。
+
 ## 通信と保存
 
 bridge は認証前に判断待ちを送りません。ブラウザの Origin を伴う接続を拒否します。Android が送れるのは質問の識別子、選択肢、コメント、画像、送信番号です。マシン、パス、コマンド、回答者の指定は bridge が決めます。
