@@ -235,6 +235,7 @@ func (s *Server) transferHandoff(ctx context.Context, exe string, p api.ServerLi
 	// reopens normal writing; success retires every captured old generation.
 	s.saveWriteMu.Lock()
 	defer s.saveWriteMu.Unlock()
+	s.flushClosedSpaces()
 	// The importer must not replay a notice already written by the retiring
 	// server whose delivery acknowledgement is still in flight.
 	s.mailDelivery.Lock()

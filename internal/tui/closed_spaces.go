@@ -46,20 +46,38 @@ type closingSpace struct {
 	reason string
 }
 
+// execWithoutClosedRecord runs a close that undoes a space this app just
+// created after a failure; such a space is not offered for reopening.
+func (a *App) execWithoutClosedRecord(cmd model.Command) {
+	was := a.skipClosedRecord
+	a.skipClosedRecord = true
+	defer func() { a.skipClosedRecord = was }()
+	a.exec(cmd)
+}
+
 func (a *App) closingSpaceFor(cmd model.Command) *closingSpace {
-	if a.spaceClosedHook == nil {
+	if a.spaceClosedHook == nil || a.skipClosedRecord {
 		return nil
 	}
 	wi, reason := -1, "closed"
+	lastPane := func(pane model.PaneID) int {
+		i, _ := a.st.FindPane(pane)
+		if i < 0 || len(a.st.Workspaces[i].Tabs) != 1 || a.st.Workspaces[i].Tabs[0].Layout.PaneCount() != 1 {
+			return -1
+		}
+		return i
+	}
 	switch c := cmd.(type) {
 	case model.CmdCloseWorkspace:
 		wi = c.Index
 	case model.CmdCloseTab:
-		wi = c.Workspace
+		if c.Workspace >= 0 && c.Workspace < len(a.st.Workspaces) && len(a.st.Workspaces[c.Workspace].Tabs) == 1 {
+			wi = c.Workspace
+		}
 	case model.CmdClosePane:
-		wi, _ = a.st.FindPane(c.Pane)
+		wi = lastPane(c.Pane)
 	case model.CmdPaneExited:
-		wi, _ = a.st.FindPane(c.Pane)
+		wi = lastPane(c.Pane)
 		reason = "exited"
 	}
 	if wi < 0 || wi >= len(a.st.Workspaces) {
@@ -129,6 +147,9 @@ func closedSpaceLine(sp ClosedSpace, now time.Time) string {
 	parts := []string{sp.Label, fmt.Sprintf("%d pane%s", sp.Panes, map[bool]string{true: "", false: "s"}[sp.Panes == 1])}
 	if len(sp.Agents) > 0 {
 		parts = append(parts, strings.Join(sp.Agents, ","))
+	}
+	if sp.Reason == "exited" {
+		parts = append(parts, "shell exited")
 	}
 	parts = append(parts, closedAge(now.Sub(sp.ClosedAt)))
 	return strings.Join(parts, " · ")

@@ -316,7 +316,7 @@ func (a *App) exec(cmd model.Command) {
 		a.lastSpawnError = nil
 		a.exec(model.CmdNewWorkspace{Cwd: home, Name: filepath.Base(home)})
 		if a.lastSpawnError != nil {
-			a.exec(model.CmdCloseWorkspace{Index: 1})
+			a.execWithoutClosedRecord(model.CmdCloseWorkspace{Index: 1})
 			a.ShowToast("workspace close failed", a.lastSpawnError.Error(), "error", a.focusedPane())
 			return
 		}

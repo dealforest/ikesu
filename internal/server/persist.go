@@ -134,6 +134,7 @@ func (s *Server) writeSession(snapshot *sessionSnapshot) bool {
 }
 
 func (s *Server) closeSessionWrites() {
+	s.flushClosedSpaces()
 	s.saveWriteMu.Lock()
 	defer s.saveWriteMu.Unlock()
 	s.saveClosed = true

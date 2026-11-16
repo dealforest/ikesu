@@ -174,6 +174,42 @@ func TestClosedSpaceSkipsMovedPanesAndRefusesMissingFolder(t *testing.T) {
 	}
 }
 
+func TestClosedSpaceSkipsRollbackAndGoneFolderAndRefusesDamagedRecord(t *testing.T) {
+	teststate.Lock(t)
+	s, _ := closedSpaceServer(t)
+	base := filepath.Dir(s.dir)
+	gone := filepath.Join(base, "worktree")
+	keep := filepath.Join(base, "keep")
+	for _, d := range []string{gone, keep} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A folder deleted before its space closes (a removed worktree).
+	s.app.ExecCmd(model.CmdNewWorkspace{Cwd: gone, Name: "worktree"})
+	if err := os.RemoveAll(gone); err != nil {
+		t.Fatal(err)
+	}
+	s.app.ExecCmd(model.CmdCloseWorkspace{Index: 1})
+	if got := s.listClosedSpaces(); len(got) != 0 {
+		t.Fatalf("space with a deleted folder recorded: %+v", got)
+	}
+	// A damaged record is refused without touching the state.
+	s.app.ExecCmd(model.CmdNewWorkspace{Cwd: keep, Name: "keep"})
+	s.app.ExecCmd(model.CmdCloseWorkspace{Index: 1})
+	entries := s.closedSpaceEntries()
+	if len(entries) != 1 {
+		t.Fatalf("entries %+v", entries)
+	}
+	entries[0].Workspace.Tabs[0].Layout = nil
+	if _, err := s.reopenClosedSpace(entries[0].ID); err == nil {
+		t.Fatal("damaged record reopened")
+	}
+	if n := len(s.app.State().Workspaces); n != 1 {
+		t.Fatalf("damaged reopen changed workspaces: %d", n)
+	}
+}
+
 func waitClosedSpacesFile(t *testing.T, dir string, want int) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

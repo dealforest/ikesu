@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,6 +38,7 @@ type closedSpaceStore struct {
 
 	writeMu  sync.Mutex
 	writeSeq uint64
+	writes   sync.WaitGroup
 }
 
 func closedSpacesPath(dir string) string { return filepath.Join(dir, "closed_spaces.json") }
@@ -57,14 +59,15 @@ func (s *Server) closedSpaceEntries() []closedSpaceEntry {
 
 // recordClosedSpace runs on the app loop before the space's panes die.
 func (s *Server) recordClosedSpace(ws session.Workspace, label, reason string) {
+	// Session ids come from the records and ledger the periodic observation
+	// keeps current; observing here would scan processes on the app loop.
 	pane := 0
 	for ti := range ws.Tabs {
-		for pi := range ws.Tabs[ti].Panes {
-			s.observePaneSession(ws.Tabs[ti].Panes[pi].ID)
-			pane++
-		}
+		pane += len(ws.Tabs[ti].Panes)
 	}
-	if pane == 0 {
+	// A space whose folder is already gone (a deleted worktree) could not
+	// be reopened, so it is not listed.
+	if pane == 0 || !dirIsPresent(ws.Cwd) {
 		return
 	}
 	fill := s.paneRecordFiller()
@@ -128,6 +131,13 @@ func (s *Server) reopenClosedSpace(id string) (int, error) {
 	if !dirIsPresent(ws.Cwd) {
 		return 0, fmt.Errorf("the space's folder no longer exists: %s", ws.Cwd)
 	}
+	// The list file may be edited or damaged: reopen only a record that
+	// validates unchanged, never a repaired guess.
+	check := &session.File{Version: session.CurrentVersion, Workspaces: []session.Workspace{ws}}
+	if warnings := check.Validate(); len(warnings) > 0 || len(check.Workspaces) != 1 {
+		return 0, fmt.Errorf("the saved space is damaged: %s", strings.Join(warnings, "; "))
+	}
+	ws = check.Workspaces[0]
 	for ti := range ws.Tabs {
 		for pi := range ws.Tabs[ti].Panes {
 			if p := &ws.Tabs[ti].Panes[pi]; !dirIsPresent(p.Cwd) {
@@ -182,12 +192,17 @@ func (s *Server) persistClosedSpaces() {
 	c.seq++
 	seq := c.seq
 	path := closedSpacesPath(s.dir)
+	c.writes.Add(1)
 	go func() {
+		defer c.writes.Done()
 		c.writeMu.Lock()
 		defer c.writeMu.Unlock()
 		if seq <= c.writeSeq {
 			return
 		}
+		// Claim the sequence before writing: an older list never replaces
+		// a newer one, even when the newer write failed.
+		c.writeSeq = seq
 		tmp := path + ".tmp"
 		if err := os.WriteFile(tmp, data, 0o600); err != nil {
 			fmt.Fprintf(os.Stderr, "ikesu: closed spaces: %v\n", err)
@@ -195,8 +210,9 @@ func (s *Server) persistClosedSpaces() {
 		}
 		if err := os.Rename(tmp, path); err != nil {
 			fmt.Fprintf(os.Stderr, "ikesu: closed spaces: %v\n", err)
-			return
 		}
-		c.writeSeq = seq
 	}()
 }
+
+// flushClosedSpaces waits for pending list writes (server stop, handoff).
+func (s *Server) flushClosedSpaces() { s.closedSpaces.writes.Wait() }

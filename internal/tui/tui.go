@@ -247,6 +247,7 @@ type App struct {
 	localObservedStart  map[int]time.Time
 	spaceClosedHook     func(ws session.Workspace, label, reason string) // whole space removed with its panes
 	closedSpacesList    func() []ClosedSpace
+	skipClosedRecord    bool // rollback of a space this app just created
 	closedSpaceReopen   func(id string) (int, error)
 	paneClosedHook      func(pid int)                                  // pane permanently removed; server cleans ledger
 	postExecHook        func(cmd model.Command, prev *model.StateSnap) // after every state-changing command
