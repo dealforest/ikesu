@@ -45,7 +45,11 @@ class Session {
       const plain = this.noise.decrypt(buffer);
       // 分割したメッセージは、顔・指紋で開いた後の回答（画像つき）だけが使う。開く前は溜めさせない。
       if (plain[0] === 0x01 && !(this.role === 'app' && this.operating)) { this.close(); return; }
+      // 分割の最初の1通が届いたときの心拍を覚える。大きなファイルは届き終えるまでに心拍が進むので、送り始めの時点で比べる。
+      const wasIdle = this.assembler.parts.size === 0;
       message = this.assembler.push(plain);
+      if (message === undefined && wasIdle) this.chunkBeat = this.beatN;
+      this.messageBeat = plain[0] === 0x01 ? (this.chunkBeat ?? this.beatN) : this.beatN;
     } catch { this.close(); return; }
     if (message === undefined) return;
     try { await (this.role === 'pair' ? this.onPair(message) : this.onApp(message)); }
@@ -140,7 +144,8 @@ class Session {
   fresh(message) {
     if (message.beat === undefined) return true;
     // まだ送っていない番号の心拍は受けない。
-    return Number.isInteger(message.beat) && message.beat <= this.beatN && this.beatN - message.beat < 2;
+    const at = this.messageBeat ?? this.beatN;
+    return Number.isInteger(message.beat) && message.beat <= this.beatN && at - message.beat < 2;
   }
   // ---- 画面（PROTOCOL.md 4章）。見るには screen、打つには input の権限と新しい心拍が要る ----
   closeScreen(notify) {
@@ -198,7 +203,8 @@ class Session {
       let file;
       try { file = this.hub.saveFile(message.name, bytes); } catch (error) { deny(`保存できませんでした: ${error.message}`); return; }
       this.hub.log(`${this.device.name}: スマホのファイルを保存しました: ${file}`);
-      this.touch(); screen.write(Buffer.from(shellQuote(file) + ' '));
+      // 貼り付けの形で打つ。ikesu が prefix やメニューの待ちでも、パスの文字が操作として読まれない。
+      this.touch(); screen.write(Buffer.from(`\x1b[200~${shellQuote(file)} \x1b[201~`));
       this.send({ type: 'screen_file_saved', screen: screen.id, path: file });
       return;
     }

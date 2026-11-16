@@ -55,7 +55,7 @@ function writeClientConfig(env) {
 }
 
 // スマホから送られたファイルを保存する場所と、画面に打つパス（シェルで使える形にクォートする）。
-export const MAX_FILE_BYTES = 50 * 1024 * 1024;
+export const MAX_FILE_BYTES = 20 * 1024 * 1024;
 export function safeFileName(name) {
   const base = path.basename(String(name || '')).normalize('NFC').replace(/[\u0000-\u001f\u007f/\\:]/g, '_').replace(/^\.+/, '').slice(0, 120);
   return base || 'file';
@@ -83,7 +83,9 @@ export class Screen {
     if (!spawn) { ensureSpawnHelper(); spawn = require('node-pty').spawn; }
     // つなぐセッションは、bridge が話しているサーバーと同じにする（IKESU_SOCKET_PATH のフォルダ名。引数なしは default）。
     const session = env.IKESU_SOCKET_PATH ? path.basename(path.dirname(env.IKESU_SOCKET_PATH)) : '';
-    const args = session && session !== 'default' && /^[A-Za-z0-9._-]+$/.test(session) ? ['--session', session] : [];
+    // 引数に渡せない名前のセッションは開かない（default につないで新しいサーバーを作らないため）。
+    if (session && session !== 'default' && !/^[A-Za-z0-9._-]+$/.test(session)) { this.removeConfig(); throw Error(`このセッション名には画面を開けません: ${session}`); }
+    const args = session && session !== 'default' ? ['--session', session] : [];
     this.pty = spawn(ikesuBin, args, { name: 'xterm-256color', cols, rows, cwd: env.HOME || process.cwd(), env: childEnv, encoding: null });
     // 最初の出力の一部を残しておき、すぐ終わったときの理由を記録に書けるようにする。
     this.head = Buffer.alloc(0);
@@ -110,5 +112,6 @@ export class Screen {
     if (this.closed) return;
     this.closed = true; clearTimeout(this.timer);
     try { this.pty.kill(); } catch { /* もう終わっている */ }
+    this.removeConfig();
   }
 }

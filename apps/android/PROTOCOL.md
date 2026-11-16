@@ -113,7 +113,7 @@ bridge は開いたら `{"type":"screen_opened","screen","cols","rows"}`、閉�
 
 アプリのキー: ⌘ は kitty のキーの形（`ESC [ 文字の番号 ; 1+修飾 u`、⌘ は 8）で送る。タップは SGR のマウスのダブルクリック（押して離すを2回）で送る。貼り付けは bracketed paste で送る。
 
-ファイル: アプリ → bridge `{"type":"screen_file","screen","beat","name","data":"<base64>"}`（50 MB まで、`input` の権限と新しい心拍が要る）。bridge は `~/Downloads/ikesu-phone/<日時>-<名前>` に 0600 で保存し（名前からフォルダと制御文字を消し、上書きしない）、そのパスをシェルの1語にクォートして画面に打つ（Enter は押さない）。返事は `{"type":"screen_file_saved","screen","path"}`。
+ファイル: アプリ → bridge `{"type":"screen_file","screen","beat","name","data":"<base64>"}`（20 MB まで、`input` の権限と、送り始めの時点で新しい心拍が要る）。bridge は `~/Downloads/ikesu-phone/<日時>-<名前>` に 0600 で保存し（名前からフォルダと制御文字を消し、上書きしない）、そのパスをシェルの1語にクォートし、貼り付けの形（bracketed paste）で画面に打つ（Enter は押さない）。返事は `{"type":"screen_file_saved","screen","path"}`。
 
 ## 5. 取り消しと入れ替え
 

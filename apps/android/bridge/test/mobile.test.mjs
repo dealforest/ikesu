@@ -8,6 +8,7 @@ import { addDeviceByHand, saveRelay, loadDevices, loadRelay, revokeDevice, b64u,
 import { pairTag, appTag } from '../relay-client.mjs';
 import { sasCode, pairProof, proofMatches, verifyOperate, PAIR_TTL_SECONDS } from '../pairing.mjs';
 import { FakeApp, FakeRelay, sleep, tmpDir, until } from './mobile-harness.mjs';
+import { encodeMessage } from '../noise-channel.mjs';
 
 async function setup(t, overrides = {}) {
   const configDir = await tmpDir(), stateDir = await tmpDir();
@@ -555,7 +556,7 @@ test('画面: スマホのファイルを保存し、そのパスを画面に打
   const done = await a.recv(m => m.type === 'screen_file_saved');
   assert.equal(done.path, '/tmp/x/a.png');
   assert.deepEqual(saved, [['a.png', 'img']]);
-  assert.equal(fake.screens[0].written.map(b => b.toString()).join(''), "'/tmp/x/a.png' ");
+  assert.equal(fake.screens[0].written.map(b => b.toString()).join(''), "\x1b[200~'/tmp/x/a.png' \x1b[201~");
 });
 
 test('画面: screen_open が続けて届いても、開いたままの PTY は1つだけ。切断ですべて閉じる', async t => {
@@ -589,4 +590,27 @@ test('心拍: まだ送っていない番号は受けない', async t => {
   a.sendJson({ type: 'screen_input', screen: opened.screen, beat: 999999, data: Buffer.from('x').toString('base64') });
   assert.equal((await a.recv(m => m.type === 'error')).message, 'stale beat');
   assert.equal(fake.screens[0].written.length, 0);
+});
+
+test('画面: 届き終えるまでに心拍が進む大きなファイルも、送り始めの心拍で受ける', async t => {
+  const fake = fakeScreens();
+  const saved = [];
+  const env = await setup(t, { idleMs: 60000, beatMs: 50, serverAlive: fake.serverAlive, openScreen: fake.openScreen,
+    saveFile: (name, bytes) => { saved.push(bytes.length); return `/tmp/x/${name}`; } });
+  const { app, paired } = await pairDevice(env);
+  const a = await connectApp(env, paired, app);
+  await a.handshake();
+  a.sendJson(a.operateMessage());
+  await a.recv(m => m.type === 'operate_ok');
+  a.sendJson({ type: 'screen_open', cols: 40, rows: 20 });
+  const opened = await a.recv(m => m.type === 'screen_opened');
+  const beat = (await a.recv(m => m.type === 'beat')).n;
+  const parts = encodeMessage({ type: 'screen_file', screen: opened.screen, beat, name: 'big.bin', data: Buffer.alloc(200 * 1024, 7).toString('base64') }, () => 9);
+  assert.ok(parts.length > 2);
+  a.conn.send(Buffer.from(a.tx.encrypt(parts[0])));
+  await a.recv(m => m.type === 'beat' && m.n >= beat + 3);
+  for (const part of parts.slice(1)) a.conn.send(Buffer.from(a.tx.encrypt(part)));
+  assert.equal((await a.recv(m => m.type === 'screen_file_saved' || m.type === 'error')).type, 'screen_file_saved');
+  assert.deepEqual(saved, [200 * 1024]);
+  assert.equal(fake.screens[0].written.map(b => b.toString()).join(''), "\x1b[200~'/tmp/x/big.bin' \x1b[201~");
 });

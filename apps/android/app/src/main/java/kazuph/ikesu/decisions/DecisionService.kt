@@ -154,6 +154,8 @@ class DecisionService : Service() {
         val thisGeneration = ++generation
         // The lists stay until each PC sends a fresh one, so a reconnect keeps the open decision and the drafts.
         val previous = DecisionState.sources.toMap()
+        // Reconnecting ends every screen: it must not stay frozen on the old contents.
+        previous.keys.forEach { id -> ScreenBus.listener?.invoke(id, JSONObject().put("type", "operate_expired")) }
         previous.values.forEach { it.link?.close("つなぎ直します") }
         DecisionState.sources.clear()
         receiving.forEach { (key, value) -> value.first.close(); File(cacheDir, "video-$key.partial").delete() }

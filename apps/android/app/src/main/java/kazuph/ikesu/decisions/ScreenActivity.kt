@@ -108,7 +108,9 @@ class ScreenActivity : Activity() {
         private const val GREEN = 0xFF33FF66.toInt()
         private const val DARK_GREEN = 0xFF1E9948.toInt()
         private const val PICK_FILE = 41
-        private const val MAX_FILE_BYTES = 50 * 1024 * 1024
+        private const val MAX_FILE_BYTES = 20 * 1024 * 1024
+        /** The PC refuses one screen_input over 64 KB; paste in pieces below that. */
+        private const val INPUT_PIECE = 48 * 1024
     }
 
     private lateinit var source: String
@@ -123,6 +125,8 @@ class ScreenActivity : Activity() {
     private val voice by lazy { VoiceRecorder(this) }
     private var transcribing = false
     private var micView: TextView? = null
+    /** A file read while the screen was (re)opening, sent once screen_opened arrives. */
+    private var pendingFile: Pair<String, String>? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -237,7 +241,9 @@ class ScreenActivity : Activity() {
     private fun pasteClipboard() {
         val text = (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString()
         if (text.isNullOrEmpty()) { Toast.makeText(this, "クリップボードが空です", Toast.LENGTH_SHORT).show(); return }
-        send(KeyBytes.paste(text))
+        val bytes = KeyBytes.paste(text)
+        var start = 0
+        while (start < bytes.size) { val end = minOf(bytes.size, start + INPUT_PIECE); send(bytes.copyOfRange(start, end)); start = end }
     }
 
     // ---- 画像・ファイル: PC に保存され、そのパスが画面に打たれる（PROTOCOL 4） ----
@@ -260,19 +266,25 @@ class ScreenActivity : Activity() {
             val result = runCatching {
                 contentResolver.openInputStream(uri)!!.use { input ->
                     val bytes = input.readNBytes(MAX_FILE_BYTES + 1)
-                    require(bytes.size <= MAX_FILE_BYTES) { "50 MB までのファイルを選んでください" }
-                    bytes
+                    require(bytes.size <= MAX_FILE_BYTES) { "20 MB までのファイルを選んでください" }
+                    // Encode here, off the screen's thread.
+                    Base64.encodeToString(bytes, Base64.NO_WRAP)
                 }
             }
             runOnUiThread {
-                result.onSuccess { bytes ->
-                    val target = DecisionState.sources[source]
-                    if (screenId < 0 || target == null) { status.text = "画面が開いていません"; return@onSuccess }
-                    target.send(JSONObject().put("type", "screen_file").put("screen", screenId).put("beat", target.beat)
-                        .put("name", name).put("data", Base64.encodeToString(bytes, Base64.NO_WRAP)))
+                result.onSuccess { data ->
+                    // Choosing the file sent the app to the background, which closed the screen; it is reopening now.
+                    if (screenId < 0) { pendingFile = name to data; status.text = "画面を開き直してから「$name」を送ります…" }
+                    else sendFileNow(name, data)
                 }.onFailure { error -> status.text = error.message ?: "ファイルを読めませんでした" }
             }
         }.start()
+    }
+
+    private fun sendFileNow(name: String, data: String) {
+        val target = DecisionState.sources[source] ?: return
+        target.send(JSONObject().put("type", "screen_file").put("screen", screenId).put("beat", target.beat).put("name", name).put("data", data))
+        status.text = "「$name」を送りました。PC に保存しています…"
     }
 
     // ---- 音声: 話した内容を文字にして、画面に打つ（Enter は押さない） ----
@@ -289,7 +301,8 @@ class ScreenActivity : Activity() {
                     transcribing = false; markMic()
                     result.onSuccess { text ->
                         if (text.isEmpty()) status.text = "声を聞き取れませんでした"
-                        else { send(text.toByteArray(Charsets.UTF_8)); status.text = "${DecisionState.sources[source]?.name ?: "PC"} の画面" }
+                        // Line breaks would press Enter and control characters would act as keys: type plain text only.
+                        else { send(text.replace(Regex("[\\r\\n\\t]+"), " ").replace(Regex("\\p{Cntrl}"), "").toByteArray(Charsets.UTF_8)); status.text = "${DecisionState.sources[source]?.name ?: "PC"} の画面" }
                     }.onFailure { error -> status.text = error.message ?: "文字起こしに失敗しました" }
                 }
             }.start()
@@ -344,6 +357,7 @@ class ScreenActivity : Activity() {
                 // The size changed while opening (the keyboard, for example): send the latest one.
                 wanted?.let { (c, r) -> if (c != message.optInt("cols") || r != message.optInt("rows")) sizeChanged(c, r) }
                 wanted = null
+                pendingFile?.let { (name, data) -> pendingFile = null; sendFileNow(name, data) }
             }
             "screen_data" -> if (message.optInt("screen") == screenId) view.feed(Base64.decode(message.optString("data"), Base64.NO_WRAP))
             "screen_closed" -> if (message.optInt("screen") == screenId) { screenId = -1; Toast.makeText(this, "PC 側で画面が閉じました", Toast.LENGTH_LONG).show(); finish() }
