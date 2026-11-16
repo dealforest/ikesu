@@ -1,5 +1,8 @@
 plugins { id("com.android.application") }
 android {
+    // Termux の libtermux.so は端末の中で手元のプログラムを動かす部品（JNI クラスだけが読む）。このアプリは画面を描くだけで使わない。
+    // 16 KB ページの端末（Pixel 10 など）で揃っていない警告が出るので、入れない。
+    packaging { jniLibs { excludes += "**/libtermux.so" } }
     namespace = "kazuph.ikesu"
     compileSdk = 36
     defaultConfig {

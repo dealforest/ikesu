@@ -161,7 +161,10 @@ class Session {
       try {
         this.screen = this.hub.openScreen({ id, cols: message.cols, rows: message.rows,
           onData: (seq, bytes) => this.send({ type: 'screen_data', screen: id, seq, data: bytes.toString('base64') }),
-          onExit: () => { if (this.screen?.id === id) { this.screen = null; this.send({ type: 'screen_closed', screen: id }); } } });
+          onExit: info => {
+            if (!info?.closedByUs) this.hub.log(`${this.device.name}: 画面の ikesu が終わりました（終了コード ${info?.exitCode}、シグナル ${info?.signal}）: ${JSON.stringify(info?.head?.toString('utf8').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').slice(0, 200))}`);
+            if (this.screen?.id === id) { this.screen = null; this.send({ type: 'screen_closed', screen: id }); }
+          } });
       } catch (error) { this.hub.log(`画面を開けません: ${error.message}`); deny('画面を開けません'); return; }
       this.touch();
       this.hub.log(`${this.device.name}: 画面を開きました（${message.cols}×${message.rows}）`);
