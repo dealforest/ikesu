@@ -127,6 +127,7 @@ class MainActivity : Activity() {
     private fun receiveIntent(intent: Intent) {
         TextScale.fromIntent((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0, intent.hasExtra("text_scale"), intent.getFloatExtra("text_scale", 1f))?.let { textScale = it; appliedScale = textScale; getSharedPreferences("ui", MODE_PRIVATE).edit().putFloat("textScale", textScale).apply() }
         intent.getStringExtra("decision")?.let { selectedId = it; showList = false; settingsVisible = false }
+        if (intent.getBooleanExtra("list", false)) { showList = true; settingsVisible = false }
     }
     private fun handleUpdate() {
         screenAfterUnlock?.let { id ->
@@ -278,6 +279,13 @@ class MainActivity : Activity() {
                 if (settingsVisible) settingsVisible = false else if (!showList) showList = true else settingsVisible = true
                 render()
             }
+        }
+        DecisionState.sources.values.firstOrNull { it.connected && it.operable }?.let { source ->
+            header.addView(text("🖥️", 22f).apply {
+                setTextIsSelectable(false); movementMethod = null; contentDescription = "${source.name} の画面"
+                setPadding(dp(14), dp(10), dp(6), dp(10))
+                setOnClickListener { startActivity(Intent(this@MainActivity, ScreenActivity::class.java).putExtra(ScreenActivity.SOURCE, source.id)) }
+            })
         }
         header.addView(headerAction)
         if (settingsVisible) { renderSettings(); return }
