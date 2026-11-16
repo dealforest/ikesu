@@ -301,6 +301,16 @@ class ScreenActivity : Activity() {
     }
 
     /** Bytes typed on the soft keyboard: one printable character takes the waiting modifiers. */
+    /** "Saved on the PC" as a phone notification, so the status line does not keep saying it. */
+    private fun notifySaved(path: String) {
+        val manager = getSystemService(android.app.NotificationManager::class.java)
+        manager.createNotificationChannel(android.app.NotificationChannel("files", "PC に送ったファイル", android.app.NotificationManager.IMPORTANCE_DEFAULT))
+        manager.notify(path.hashCode(), android.app.Notification.Builder(this, "files").setSmallIcon(kazuph.ikesu.R.drawable.ic_notification)
+            .setContentTitle("${DecisionState.sources[source]?.name ?: "PC"} に保存しました").setContentText(path)
+            .setStyle(android.app.Notification.BigTextStyle().bigText(path)).setColor(GREEN)
+            .setVisibility(android.app.Notification.VISIBILITY_PRIVATE).setAutoCancel(true).build())
+    }
+
     private fun sendKeyBytes(bytes: ByteArray) {
         val text = String(bytes, Charsets.UTF_8)
         if (mods != 0 && text.codePointCount(0, text.length) == 1 && text[0].code >= 0x20) send(KeyBytes.text(text, takeMods())) else send(bytes)
@@ -382,7 +392,7 @@ class ScreenActivity : Activity() {
     private fun sendFileNow(name: String, data: String) {
         val target = DecisionState.sources[source] ?: return
         target.send(JSONObject().put("type", "screen_file").put("screen", screenId).put("beat", target.beat).put("name", name).put("data", data))
-        status.text = "「$name」を送りました。PC に保存しています…"
+        status.text = "「$name」を送っています…"
     }
 
     // ---- 音声: 話した内容を文字にして、画面に打つ（Enter は押さない） ----
@@ -464,7 +474,7 @@ class ScreenActivity : Activity() {
             }
             "screen_data" -> if (message.optInt("screen") == screenId) view.feed(Base64.decode(message.optString("data"), Base64.NO_WRAP))
             "screen_closed" -> if (message.optInt("screen") == screenId) { screenId = -1; Toast.makeText(this, "PC 側で画面が閉じました", Toast.LENGTH_LONG).show(); finish() }
-            "screen_file_saved" -> status.text = "PC に保存しました: ${message.optString("path")}"
+            "screen_file_saved" -> { status.text = "${DecisionState.sources[source]?.name ?: "PC"} の画面"; notifySaved(message.optString("path")) }
             "operate_expired" -> { if (isFinishing) return; screenId = -1; view.clear(); Toast.makeText(this, "接続が切れたか、顔・指紋で開いた時間が切れました", Toast.LENGTH_LONG).show(); finish() }
             "error" -> { opening = false; status.text = "PC 側: ${message.optString("message")}" }
         }
