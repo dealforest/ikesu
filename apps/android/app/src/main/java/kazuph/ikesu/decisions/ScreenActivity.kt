@@ -278,7 +278,8 @@ class ScreenActivity : Activity() {
             "クリック（1回）" to { send(KeyBytes.click(col, row)) },
             "右クリック" to { send(KeyBytes.click(col, row, 2)) },
             "貼り付け" to { pasteClipboard() },
-            "画像・ファイルを送る" to { pickFile() },
+            "写真を送る（カメラロール）" to { pickPhoto() },
+            "ファイルを送る（ファイラー）" to { pickDocument() },
             "キーボードを出す" to { input?.let { it.requestFocus(); (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(it, 0) } },
         )
         AlertDialog.Builder(this).setItems(items.map { it.first }.toTypedArray()) { _, which -> items[which].second() }.show()
@@ -293,7 +294,19 @@ class ScreenActivity : Activity() {
     }
 
     // ---- 画像・ファイル: PC に保存され、そのパスが画面に打たれる（PROTOCOL 4） ----
+    /** 📎: choose between the camera roll and the file picker each time. */
     private fun pickFile() {
+        AlertDialog.Builder(this).setItems(arrayOf("写真（カメラロール）", "ファイル（ファイラー）")) { _, which -> if (which == 0) pickPhoto() else pickDocument() }.show()
+    }
+
+    /** Straight to the photos: the system photo picker (no storage permission needed). */
+    private fun pickPhoto() {
+        val picker = Intent(android.provider.MediaStore.ACTION_PICK_IMAGES).setType("*/*")
+            .putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/*", "video/*"))
+        startActivityForResult(picker, PICK_FILE)
+    }
+
+    private fun pickDocument() {
         startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), PICK_FILE)
     }
 
