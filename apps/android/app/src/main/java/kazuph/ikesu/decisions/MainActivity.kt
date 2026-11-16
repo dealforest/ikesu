@@ -88,6 +88,8 @@ class MainActivity : Activity() {
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Recordings left by a killed process are never sent.
+        cacheDir.listFiles { file -> file.name.startsWith("voice") && file.name.endsWith(".m4a") }?.forEach { it.delete() }
         window.isNavigationBarContrastEnforced = false
         window.isStatusBarContrastEnforced = false
         textScale = TextScale.clamp(getSharedPreferences("ui", MODE_PRIVATE).getFloat("textScale", 1f)); appliedScale = textScale
@@ -259,6 +261,11 @@ class MainActivity : Activity() {
         }
     }
     private fun render(scrollToCursor: Boolean = false) {
+        // A recording belongs to the decision on screen; leaving it stops the microphone.
+        if (voice.recording && (settingsVisible || showList || current()?.optString("id") != voiceDecision)) {
+            voice.cancel(); voiceDecision = null
+            Toast.makeText(this, "画面を移ったので、録音を止めました", Toast.LENGTH_SHORT).show()
+        }
         header.removeAllViews(); layout.removeAllViews(); footer.removeAllViews()
         header.addView(text("ikesu · ${if (DecisionState.connected) "接続中" else "未接続"}", 18f), LinearLayout.LayoutParams(0, -2, 1f))
         val headerAction = text(if (settingsVisible || !showList) "一覧へ" else "設定", 18f).apply {
@@ -463,7 +470,8 @@ class MainActivity : Activity() {
                     transcribing = false
                     voiceDecision = null
                     result.onSuccess { text ->
-                        if (text.isEmpty()) Toast.makeText(this, "声を聞き取れませんでした", Toast.LENGTH_LONG).show()
+                        if (draft.sequence != null) Toast.makeText(this, "送った後に文字起こしが終わったので、コメントには入れませんでした", Toast.LENGTH_LONG).show()
+                        else if (text.isEmpty()) Toast.makeText(this, "声を聞き取れませんでした", Toast.LENGTH_LONG).show()
                         else draft.text = Transcriber.append(draft.text, text)
                     }.onFailure { error -> Toast.makeText(this, error.message ?: "文字起こしに失敗しました", Toast.LENGTH_LONG).show() }
                     render()
@@ -481,7 +489,11 @@ class MainActivity : Activity() {
         render()
     }
     override fun onPause() {
-        if (voice.recording) { voice.cancel(); voiceDecision = null }
+        if (voice.recording) {
+            voice.cancel(); voiceDecision = null
+            Toast.makeText(this, "アプリから離れたので、録音を止めました", Toast.LENGTH_SHORT).show()
+            render()
+        }
         super.onPause()
     }
     private fun renderSettings() {
@@ -550,6 +562,7 @@ class MainActivity : Activity() {
     }
     private fun send(item: JSONObject, draft: Draft) {
         if (draft.sequence != null && !draft.uncertain) return
+        if (voice.recording || transcribing) { Toast.makeText(this, "話した内容を文字にし終わってから送ってください", Toast.LENGTH_LONG).show(); return }
         val sequence = draft.sequence ?: UUID.randomUUID().toString()
         if (!DecisionState.answer(item.optString("id"), draft.selected.toList(), draft.text, draft.images, sequence)) { Toast.makeText(this, "接続されていません", Toast.LENGTH_LONG).show(); return }
         draft.sequence = sequence

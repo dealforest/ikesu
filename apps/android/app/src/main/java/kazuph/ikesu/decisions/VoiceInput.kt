@@ -81,7 +81,8 @@ class VoiceRecorder(private val context: Context) {
 }
 
 object Transcriber {
-    private val client = OkHttpClient.Builder().callTimeout(90, TimeUnit.SECONDS).build()
+    // A redirect would carry the audio to another address; it is refused.
+    private val client = OkHttpClient.Builder().callTimeout(90, TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()
 
     /** Sends the recording and returns the recognized text. Runs on a worker thread. */
     fun transcribe(settings: SpeechSettings, audio: File): String {
@@ -94,6 +95,7 @@ object Transcriber {
             .build()
         client.newCall(Request.Builder().url(endpoint).post(body).build()).execute().use { response ->
             val text = response.body?.string().orEmpty()
+            if (response.isRedirect) throw IllegalStateException("文字起こしの接続先が別の場所へ転送しようとしたので、送りませんでした")
             if (!response.isSuccessful) throw IllegalStateException("文字起こしに失敗しました（HTTP ${response.code}）")
             return parse(text)
         }

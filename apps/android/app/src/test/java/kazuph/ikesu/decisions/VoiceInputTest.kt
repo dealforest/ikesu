@@ -15,6 +15,9 @@ class VoiceInputTest {
         assertTrue(SpeechSettings.endpoint("ws://ubuntu-3090:8002").isFailure)
         assertTrue(SpeechSettings.endpoint("http://user:pass@ubuntu-3090:8002").isFailure)
         assertTrue(SpeechSettings.endpoint("http://ubuntu-3090:8002/?key=1").isFailure)
+        assertTrue(SpeechSettings.endpoint("http://a@ubuntu-3090:8002").isFailure)
+        assertTrue(SpeechSettings.endpoint("http://ubuntu-3090:8002#x").isFailure)
+        assertTrue(SpeechSettings.endpoint("http://host_name:8002").isFailure)
     }
 
     @Test fun appendKeepsTypedTextOnItsOwnLine() {
