@@ -213,13 +213,12 @@ func (a *App) sidebarGestureMouseAt(ev input.Event, now time.Time) {
 			return
 		}
 		r, ok := a.sidebarRowAt(m.X, m.Y)
-		if !ok || m.Y != g.y || r.Ws != g.ws || (r.Kind != render.RowWorkspace && r.Kind != render.RowGit) {
+		// Any line of the card that a right-click opens the menu on also opens it
+		// with a left click once the space is shown, slim or not, local or served.
+		if !ok || m.Y != g.y || r.Ws != g.ws || (r.Kind != render.RowWorkspace && r.Kind != render.RowGit && r.Kind != render.RowCardBlank) {
 			return
 		}
 		if g.active {
-			if a.serverUI && a.st.WorkspaceDensity == "slim" && r.Kind == render.RowGit {
-				return
-			}
 			a.openWorkspaceMenu(m.X, m.Y, g.ws)
 			a.menu.justOpened = false
 		} else {

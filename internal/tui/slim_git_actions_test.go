@@ -37,8 +37,8 @@ func TestSlimGitRowClickRightClickAndDragPreserveWorkspaceIdentity(t *testing.T)
 				t.Fatal("inactive Git click must select without opening a menu")
 			}
 			click(y0 + 1)
-			if endpoint && a.menu != nil || !endpoint && (a.menu == nil || a.menu.ws != 0) {
-				t.Fatal("active Git click does not match local/endpoint behavior", a.menu)
+			if a.menu == nil || a.menu.ws != 0 {
+				t.Fatal("a click on the shown space's Git line must open its menu, as a right click does", a.menu)
 			}
 			a.menu = nil
 			for ws, y := range []int{y0, y1} {
