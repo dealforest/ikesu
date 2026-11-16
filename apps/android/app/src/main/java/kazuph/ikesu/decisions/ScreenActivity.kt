@@ -118,6 +118,17 @@ class ScreenActivity : Activity() {
     private lateinit var source: String
     private lateinit var view: TerminalCanvas
     private lateinit var status: TextView
+    /** Top right: 🔔 and how many decisions wait. A tap goes to the decisions; the 🖥️ there comes back. */
+    private lateinit var bell: TextView
+    private val changes = object : android.content.BroadcastReceiver() { override fun onReceive(c: Context?, i: Intent?) = markBell() }
+
+    private fun markBell() {
+        if (!::bell.isInitialized) return
+        val waiting = DecisionState.decisions.length()
+        bell.text = if (waiting > 0) "🔔 $waiting" else "🔔"
+        bell.setTextColor(if (waiting > 0) Color.BLACK else GREEN)
+        bell.background = keyBackground(waiting > 0, resources.displayMetrics.density)
+    }
     private var screenId = -1
     /** A screen_open is on its way; size changes wait for screen_opened instead of opening a second screen. */
     private var opening = false
@@ -154,6 +165,12 @@ class ScreenActivity : Activity() {
         view = TerminalCanvas(this, screenSp, keys = { bytes -> sendKeyBytes(bytes) }, onTap = { col, row -> send(KeyBytes.click(col, row)) },
             onLongPress = { col, row -> longPressMenu(col, row) }, onWheel = { col, row, up, n -> send(ByteArray(0).let { var b = it; repeat(n) { b += KeyBytes.wheel(col, row, up) }; b }) },
             onTextSize = { sp -> getSharedPreferences("ui", MODE_PRIVATE).edit().putFloat("screenTextSp", sp).apply() })
+        bell = TextView(this).apply {
+            textSize = 18f; gravity = Gravity.CENTER; setPadding((12 * dp).toInt(), 0, (12 * dp).toInt(), 0)
+            contentDescription = "判断待ち"
+            setOnClickListener { startActivity(Intent(this@ScreenActivity, MainActivity::class.java).putExtra("list", true).addFlags(DecisionService.FRONT)) }
+        }
+        markBell()
         status = TextView(this).apply { text = "$name の画面を開いています…"; setTextColor(GREEN); textSize = 18f; setPadding((20 * dp).toInt(), (6 * dp).toInt(), (20 * dp).toInt(), (6 * dp).toInt()) }
 
         // The owner's Termux layout (dotfiles/.termux/termux.properties), plus ⇧, ⌘, the ikesu prefix, voice, files and the keyboard.
@@ -181,7 +198,11 @@ class ScreenActivity : Activity() {
         }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.BLACK)
-            addView(status, LinearLayout.LayoutParams(-1, -2))
+            addView(LinearLayout(this@ScreenActivity).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                addView(status, LinearLayout.LayoutParams(0, -2, 1f))
+                addView(bell, LinearLayout.LayoutParams(-2, (40 * dp).toInt()).apply { setMargins(0, (2 * dp).toInt(), (8 * dp).toInt(), (2 * dp).toInt()) })
+            }, LinearLayout.LayoutParams(-1, -2))
             addView(view, LinearLayout.LayoutParams(-1, 0, 1f))
             addView(inputLine(dp), LinearLayout.LayoutParams(-1, -2).apply { setMargins((4 * dp).toInt(), (2 * dp).toInt(), (4 * dp).toInt(), (2 * dp).toInt()) })
             addView(keys, LinearLayout.LayoutParams(-1, -2))
@@ -408,7 +429,7 @@ class ScreenActivity : Activity() {
                 body.addView(android.widget.ScrollView(this).apply { addView(list) })
                 native = AlertDialog.Builder(this).setTitle(signal.optString("title").ifEmpty { "メニュー" }).setView(body)
                     .setNegativeButton("閉じる", null)
-                    .setOnDismissListener { nativeShown = null; send(byteArrayOf(27)) }.show()
+                    .setOnDismissListener { nativeShown = null; send(byteArrayOf(27)) }.show().apply { setCanceledOnTouchOutside(true) }
             }
             "dialog" -> {
                 val lines = signal.optJSONArray("lines")
@@ -429,7 +450,7 @@ class ScreenActivity : Activity() {
                     }
                 if (!signal.optBoolean("continue_only")) builder.setNegativeButton(signal.optString("cancel").ifEmpty { "やめる" }) { _, _ -> answered = true; send(byteArrayOf(27)) }
                 field?.let { builder.setView(it) }
-                native = builder.setOnDismissListener { nativeShown = null; if (!answered) send(byteArrayOf(27)) }.show()
+                native = builder.setOnDismissListener { nativeShown = null; if (!answered) send(byteArrayOf(27)) }.show().apply { setCanceledOnTouchOutside(!signal.optBoolean("continue_only")) }
             }
             else -> return
         }
@@ -548,6 +569,8 @@ class ScreenActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
+        registerReceiver(changes, android.content.IntentFilter(DecisionService.CHANGED), RECEIVER_NOT_EXPORTED)
+        markBell()
         ScreenBus.listener = { from, message -> if (from == source) handle(message) }
         // Coming back after the unlock ended: do not keep showing the old screen.
         if (DecisionState.sources[source]?.operable != true) { view.clear(); finish(); return }
@@ -560,6 +583,7 @@ class ScreenActivity : Activity() {
     override fun onStop() {
         // Choosing a photo or file is part of using this screen: closing it would start a new ikesu client on return,
         // which shows its first space instead of the one being used.
+        runCatching { unregisterReceiver(changes) }
         if (picking) { super.onStop(); return }
         closeNative(); choosing = null; answeredInput = null; view.removeCallbacks(choiceTimeout)
         if (screenId >= 0) DecisionState.sources[source]?.send(JSONObject().put("type", "screen_close").put("screen", screenId))
