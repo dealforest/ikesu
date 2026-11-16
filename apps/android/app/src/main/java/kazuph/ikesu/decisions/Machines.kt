@@ -50,6 +50,25 @@ data class PairingCode(val relay: String, val room: String, val bridge: String, 
     }
 }
 
+/** Connection details printed by `main.mjs devices add` on the PC, pasted into the app. */
+object ManualLink {
+    fun parse(text: String): Machine {
+        val json = JSONObject(text.trim())
+        require(json.optInt("v") == 1 && json.optString("kind") == "ikesu-link") { "ikesu の接続情報ではありません" }
+        val relay = java.net.URI(json.getString("relay"))
+        require(relay.scheme == "wss" && !relay.host.isNullOrEmpty() && relay.userInfo == null && relay.query == null) { "中継の URL は wss:// で始まる必要があります" }
+        val machine = Machine(java.util.UUID.randomUUID().toString(), json.getString("name"), json.getString("relay"), json.getString("room"),
+            json.getString("bridge"), json.getString("device"), json.getString("tag"), listOf("notify", "answer", "screen", "input"))
+        require(B64.decode(machine.room).size == 32 && B64.decode(machine.bridge).size == 32 && B64.decode(machine.device).size == 16) { "接続情報の中身の長さが合いません" }
+        require(machine.tag.matches(Regex("[0-9a-f]{64}"))) { "接続情報のタグが不正です" }
+        return machine
+    }
+
+    /** The public keys to register on a PC, as one line to send to the PC's owner. */
+    fun publicKeys(store: MachineStore, name: String): String = JSONObject().put("v", 1).put("kind", "ikesu-device").put("name", name)
+        .put("noise", B64.encode(store.noisePublicKey())).put("operate", B64.encode(MachineStore.operatePublicKey())).toString()
+}
+
 class MachineStore(context: Context) {
     private val preferences = context.getSharedPreferences("machines", Context.MODE_PRIVATE)
 

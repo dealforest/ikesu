@@ -528,6 +528,28 @@ class MainActivity : Activity() {
             }, row)
             block(row)
         }
+        block(text("外出中など QR を読めないときは、下の「鍵を作る」で出た1行を PC の持ち主へ送り、返ってきた接続情報を貼ってください。秘密鍵はこの端末から出ません。", 16f), 4)
+        block(button("鍵を作る（公開鍵を出す）") {
+            try {
+                val line = ManualLink.publicKeys(MachineStore(this), android.os.Build.MODEL)
+                val view = text(line, 14f).apply { setTextIsSelectable(true); typeface = Typeface.MONOSPACE }
+                android.app.AlertDialog.Builder(this).setTitle("この端末の公開鍵").setView(view)
+                    .setPositiveButton("コピー") { _, _ ->
+                        (getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("ikesu 公開鍵", line))
+                        Toast.makeText(this, "コピーしました。Slack などで送ってください", Toast.LENGTH_LONG).show()
+                    }.setNegativeButton("閉じる", null).show()
+            } catch (error: Exception) { Toast.makeText(this, "鍵を作れませんでした。端末に指紋か顔を登録してください（${error.javaClass.simpleName}）", Toast.LENGTH_LONG).show() }
+        })
+        val linkField = input("接続情報（{\"v\":1,\"kind\":\"ikesu-link\",…}）を貼る", 3)
+        block(linkField)
+        block(button("接続情報で PC を追加") {
+            try {
+                val machine = ManualLink.parse(linkField.text.toString())
+                MachineStore(this).add(machine)
+                startService(Intent(this, DecisionService::class.java).setAction(DecisionService.RECONNECT))
+                Toast.makeText(this, "${machine.name} を追加しました", Toast.LENGTH_LONG).show(); render()
+            } catch (error: Exception) { Toast.makeText(this, error.message ?: "接続情報を読めませんでした", Toast.LENGTH_LONG).show() }
+        })
         block(button("PC を追加（QR を読む）", true) {
             if (checkSelfPermission(android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(arrayOf(android.Manifest.permission.CAMERA), 5); return@button
