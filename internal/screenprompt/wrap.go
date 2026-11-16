@@ -130,7 +130,7 @@ func hardRowBreak(previous, next string, columns int) bool {
 	// screen edge. A row that stops short of the edge before a list marker
 	// or between two Japanese characters therefore ended at a line break.
 	first, _ := utf8.DecodeRuneInString(right)
-	if width+1+cellwidth.String(string(first)) > columns {
+	if width+cellwidth.String(string(first)) > columns {
 		return false
 	}
 	if listMarker.MatchString(right) {

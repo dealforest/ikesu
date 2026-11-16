@@ -57,7 +57,11 @@ const DAEMON_PID_FILE = "daemon.json";
 const POSTS_FILE = "posts.json";
 
 export function boldLines(text) {
-  return text.split("\n").map((line) => line.trim() ? `*${line.trim()}*` : line).join("\n");
+  // A line already starting or ending with "*" would break the markup.
+  return text.split("\n").map((line) => {
+    const trimmed = line.trim();
+    return trimmed && !trimmed.startsWith("*") && !trimmed.endsWith("*") ? `*${trimmed}*` : line;
+  }).join("\n");
 }
 
 function log(...args) {
