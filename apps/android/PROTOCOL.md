@@ -60,6 +60,8 @@ bridge の WebSocket は、複数のアプリの接続を1本で運ぶ。中身�
 | `0x01` | 分割の一部。続けて、メッセージ ID（4バイト）・最後なら1／途中なら0（1バイト）・中身 |
 
 分割を受けた側は、同じメッセージ ID の中身を順につなぎ、最後の一部で JSON として読む。1つのメッセージは 128 MB まで。
+送る側は、最後でない一部を必ず満杯（中身 59,994 バイト）で送る。満杯でない途中の一部を受けたら、受けた側は接続を切る。
+アプリから bridge への分割は、顔・指紋で開いた後（操作できる状態）だけ送ってよい。それより前の分割を受けたら、bridge は接続を切る。
 
 ### 3.2 ペアリング
 
@@ -79,13 +81,13 @@ bridge の WebSocket は、複数のアプリの接続を1本で運ぶ。中身�
   `{"type":"operate","hashes":["<h の base64url>",…],"sig":"<署名する文の ECDSA P-256／SHA-256 の署名（DER）の base64url>"}`
   署名する文は `"ikesu-operate/1"` の15バイト ‖ hashes の数（1バイト、1〜8）‖ hashes の各64バイトを並べたもの。アプリは顔・指紋を1回通すだけで、つながっている全部の PC の h を1つの署名に入れる（操作用の鍵は1回の認証で1回だけ署名できるため）。bridge は、自分の接続の h が hashes に入っていることと、署名を確かめる。
   bridge は、登録した操作用の公開鍵で確かめる。通ったら、その接続を操作できる状態にし、`{"type":"operate_ok","until":<Unix ミリ秒>}` を返す。
-操作できる状態は、接続が切れる・10分間操作が無い・アプリが `{"type":"operate_end"}` を送る、のどれかで終わる。終わったら bridge は `{"type":"operate_expired"}` を送る。
+操作できる状態は、接続が切れる・10分間操作が無い・アプリが `{"type":"operate_end"}` を送る、のどれかで終わる。終わったら bridge は `{"type":"operate_expired"}` を送り、その接続を閉じる。アプリはつなぎ直し、新しい握手ハッシュに署名し直す。同じ署名を送り直して開き直すことはできない。
 
 ### 3.4 送ってよいもの
 
 | 状態 | bridge → アプリ | アプリ → bridge |
 |---|---|---|
-| 握手の後（通知だけ） | `{"type":"notice","decisions":[{"id","title","origin","created_unix_ms"}…]}` | `shown`・`operate` |
+| 握手の後（通知だけ） | `{"type":"notice","decisions":[{"id","title","origin","created_unix_ms","notify"}…]}`（`notify` が false のものは鳴らさない。PC で見ている・「あとで」にしたもの） | `shown`・`operate` |
 | 操作できる状態 | 今の bridge と同じ `snapshot`・`video_chunk`・`video_end`・`answer_result`・`error`、画面（4章） | 今の bridge と同じ `answer`・`later`、画面（4章） |
 
 操作できない状態で操作のメッセージが来たら、`{"type":"error","message":"operate required"}` を返して実行しない。

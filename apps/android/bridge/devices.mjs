@@ -1,6 +1,6 @@
 // 許可リスト devices.json・Noise の鍵 noise-key.json・中継の設定 relay.json の読み書き。
 // 壊れたファイルは失敗として扱い、推測で直さない。書くときは 0600 で一時ファイルから置き換える。
-import { createPublicKey, randomBytes } from 'node:crypto';
+import { createHash, createPublicKey, randomBytes } from 'node:crypto';
 import os from 'node:os';
 import { constants } from 'node:fs';
 import fs from 'node:fs/promises';
@@ -9,6 +9,8 @@ import dh from 'noise-handshake/dh.js';
 import { appTag } from './relay-client.mjs';
 
 export const b64u = bytes => Buffer.from(bytes).toString('base64url');
+// 鍵の指紋: SHA-256 の先頭8バイト（アプリの RelayMath.fingerprint と同じ形）。
+export const fingerprint = bytes => [...createHash('sha256').update(bytes).digest().subarray(0, 8)].map(byte => byte.toString(16).padStart(2, '0')).join(':');
 export const fromB64u = (text, length) => {
   if (typeof text !== 'string' || !/^[A-Za-z0-9_-]*$/.test(text)) throw Error('base64url ではありません');
   const bytes = Buffer.from(text, 'base64url');
@@ -108,16 +110,17 @@ export async function revokeDevice(configDir, id) {
 }
 
 // 公開鍵を手で登録する（アプリを QR で読めないとき）。接続情報（1行の JSON）を返す。秘密は含めない。
-export async function addDeviceByHand(configDir, { name, noise, operate, pcName }) {
+export async function addDeviceByHand(configDir, { name, noise, operate, pcName, permissions = PERMISSIONS }) {
   if (typeof name !== 'string' || !name.trim() || name.length > 64) throw Error('端末名が不正です');
-  fromB64u(noise, 32);
+  if (!permissions.length || !permissions.every(item => PERMISSIONS.includes(item))) throw Error(`権限は ${PERMISSIONS.join(',')} から選んでください`);
+  const noiseBytes = fromB64u(noise, 32);
   if (!validOperatePublicKey(operate)) throw Error('操作用の公開鍵が P-256 の SPKI DER ではありません');
   const relay = await loadRelay(configDir);
   if (!relay) throw Error('relay.json がありません。先に relay-setup を実行してください');
-  const device = { device: b64u(randomBytes(16)), noise_pub: noise, operate_pub: operate, name: name.trim(), permissions: [...PERMISSIONS], created: new Date().toISOString() };
+  const device = { device: b64u(randomBytes(16)), noise_pub: noise, operate_pub: operate, name: name.trim(), permissions: [...new Set(permissions)], created: new Date().toISOString() };
   await addDevice(configDir, device);
   const { publicKey } = await loadNoiseKey(configDir);
   const link = JSON.stringify({ v: 1, kind: 'ikesu-link', relay: relay.url, room: relay.room, bridge: b64u(publicKey), device: device.device,
     tag: appTag(relay, Buffer.from(device.device, 'base64url')), name: pcName || os.hostname() });
-  return { link, device };
+  return { link, device, fingerprints: { device: fingerprint(noiseBytes), bridge: fingerprint(publicKey) } };
 }

@@ -67,16 +67,20 @@ export class Assembler {
     const id = plain.readUInt32BE(1);
     const last = plain[5];
     if (last > 1) throw Error('分割の印が不正です');
+    // 最後でない分割は、送り手が必ず満杯で送る。空や半端な分割を溜めさせない。
+    if (!last && plain.length - 6 !== CHUNK) throw Error('分割の大きさが不正です');
     let entry = this.parts.get(id);
     if (!entry) {
       if (this.parts.size >= 4) throw Error('分割中のメッセージが多すぎます');
       entry = { chunks: [], size: 0 }; this.parts.set(id, entry);
     }
     entry.size += plain.length - 6;
-    if (entry.size > MAX_MESSAGE) throw Error('メッセージが 128 MB を超えています');
+    this.total = (this.total ?? 0) + plain.length - 6;
+    if (entry.size > MAX_MESSAGE || this.total > MAX_MESSAGE) throw Error('メッセージが 128 MB を超えています');
     entry.chunks.push(plain.subarray(6));
     if (!last) return undefined;
     this.parts.delete(id);
+    this.total -= entry.size;
     return JSON.parse(Buffer.concat(entry.chunks).toString('utf8'));
   }
 }

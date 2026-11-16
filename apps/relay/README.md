@@ -31,7 +31,7 @@ workerd をローカルで動かして、15 件の試験を流します（`@clou
    npx wrangler secret put RELAY_KEY
    ```
 
-   同じ値を bridge とアプリの設定（`PROTOCOL.md` の relay key）にも入れます。
+   同じ値を bridge の relay.json にも入れます（`main.mjs relay-setup`）。アプリには入れません。アプリは端末ごとの入場タグだけを持ちます。
 4. `npx wrangler deploy`
 5. 出た `https://ikesu-relay.<サブドメイン>.workers.dev` を、`wss://` にして QR の `relay` に使います。
 

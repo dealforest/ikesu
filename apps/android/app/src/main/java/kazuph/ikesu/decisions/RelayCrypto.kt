@@ -109,10 +109,16 @@ class NoiseSession(private val localPrivate: ByteArray, private val bridgePublic
             1 -> {
                 require(n >= 6) { "分割の形が不正です" }
                 val buffer = ByteBuffer.wrap(plain, 1, 5)
-                val id = buffer.int; val last = buffer.get().toInt() == 1
+                val flag = buffer.int.let { id -> id to buffer.get().toInt() }
+                val id = flag.first
+                require(flag.second == 0 || flag.second == 1) { "分割の印が不正です" }
+                val last = flag.second == 1
+                // A middle part is always full (PROTOCOL 3.1); empty or short parts are not collected.
+                require(last || n - 6 == MAX_PLAIN - 6) { "分割の大きさが不正です" }
+                require(id in partial || partial.size < 4) { "分割中のメッセージが多すぎます" }
                 val stream = partial.getOrPut(id) { ByteArrayOutputStream() }
                 stream.write(plain, 6, n - 6)
-                require(stream.size() <= MAX_MESSAGE) { "メッセージが大きすぎます" }
+                require(partial.values.sumOf { it.size().toLong() } <= MAX_MESSAGE) { "メッセージが大きすぎます" }
                 if (!last) null else String(partial.remove(id)!!.toByteArray(), Charsets.UTF_8)
             }
             else -> throw IllegalArgumentException("平文の形が不正です")

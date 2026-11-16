@@ -12,7 +12,7 @@ import { ownerAlive, ownerProven, readOwner } from '../../mac-dialog-decisions/l
 import { DecisionRegistry } from './registry.mjs';
 import { loadToken, rotateToken, tailscaleAddress } from './security.mjs';
 import { listen } from './socket.mjs';
-import { loadDevices, loadRelay, PERMISSIONS, revokeDevice, saveRelay, addDeviceByHand, fromB64u } from './devices.mjs';
+import { loadDevices, loadNoiseKey, loadRelay, PERMISSIONS, revokeDevice, saveRelay, addDeviceByHand, fingerprint, fromB64u } from './devices.mjs';
 import { localPairing, remotePairing, startMobile } from './mobile-runtime.mjs';
 import readline from 'node:readline/promises';
 import qrcode from 'qrcode-terminal';
@@ -73,9 +73,11 @@ async function run() {
   const socket = await listen({ address, port: config.port, token,
     snapshot: () => daemon.snapshot(), answer: value => daemon.answer(value), later: id => daemon.later(id), shown: ids => daemon.shown(ids),
     videoPath: (id, key) => daemon.videoPath(id, key) });
+  // 中継の設定が壊れていても、Tailscale の経路は止めない。
   const mobile = await startMobile({ configDir, stateDir, log, decisions: {
     snapshot: () => daemon.snapshot(), answer: value => daemon.answer(value), later: id => daemon.later(id), shown: ids => daemon.shown(ids),
-    videoPath: (id, key) => daemon.videoPath(id, key), createdOf: id => daemon.find(id)?.decision?.created_unix_ms } });
+    videoPath: (id, key) => daemon.videoPath(id, key), createdOf: id => daemon.find(id)?.decision?.created_unix_ms } })
+    .catch(error => { log(`中継の経路を使えません（Tailscale の経路は続けます）: ${error.message}`); return null; });
   daemon.onSnapshot = value => { socket.publish(value); mobile?.hub.publish(); };
   daemon.hasClients = () => socket.clientCount() + (mobile?.hub.clientCount() ?? 0) > 0;
   await daemon.start();
@@ -117,6 +119,7 @@ async function pair() {
   }
   const qr = await session.start({ name, permissions });
   qrcode.generate(qr, { small: true });
+  process.stdout.write(`この PC の鍵の指紋: ${fingerprint((await loadNoiseKey(configDir)).publicKey)}（アプリに出る指紋と同じか確かめてください）\n`);
   process.stdout.write('アプリのカメラで上の QR を読んでください（5分間有効）。アプリに出る6桁をここに入力します。\n');
   session.onCandidate(candidate => process.stdout.write(`\n候補が接続しました（${candidate.name}）\n`));
   const prompt = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -133,7 +136,9 @@ async function pair() {
 
 async function devices() {
   if (process.argv[3] === 'add') {
-    const { link } = await addDeviceByHand(configDir, { name: option('name'), noise: option('noise'), operate: option('operate'), pcName: option('pc-name') });
+    const permissions = option('permissions')?.split(',').filter(Boolean);
+    const { link, fingerprints } = await addDeviceByHand(configDir, { name: option('name'), noise: option('noise'), operate: option('operate'), pcName: option('pc-name'), ...(permissions ? { permissions } : {}) });
+    process.stderr.write(`登録したスマホの鍵の指紋: ${fingerprints.device}（アプリの「鍵を作る」に出る指紋と同じか確かめてください）\nこの PC の鍵の指紋: ${fingerprints.bridge}\n`);
     process.stdout.write(`${link}\n`);
     return;
   }

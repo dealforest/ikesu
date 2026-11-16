@@ -91,6 +91,24 @@ object DecisionState : AnswerChannel {
     }
 
     fun locked(): Boolean = sources.values.any { it.relay && it.connected && !it.operable }
+
+    /** Whether an answer for this decision can reach its PC now (a relay PC also needs the operate signature). */
+    fun reachable(key: String): Boolean {
+        val source = split(key)?.let { sources[it.first] } ?: return false
+        return source.connected && (!source.relay || source.operable)
+    }
+
+    /** Keeps only the heading of each decision: what may stay visible without the biometric unlock (PROTOCOL 3.4). */
+    fun headingsOnly(items: JSONArray): JSONArray {
+        val out = JSONArray()
+        for (index in 0 until items.length()) {
+            val item = items.optJSONObject(index) ?: continue
+            out.put(JSONObject().put("id", item.optString("id")).put("source", item.optString("source"))
+                .put("raw_title", item.optString("raw_title")).put("kind", "agent_prompt").put("locked", true)
+                .put("notify", item.optBoolean("notify")).put("location", item.optString("location")).put("options", JSONArray()))
+        }
+        return out
+    }
 }
 
 class DecisionService : Service() {
@@ -101,6 +119,7 @@ class DecisionService : Service() {
         private const val QUESTIONS = "questions"
         private const val FOREGROUND_ID = 1
         private const val RETRY_MS = 2000L
+        private const val RETRY_MAX_MS = 60_000L
     }
     private val handler = Handler(Looper.getMainLooper())
     private val client = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).build()
@@ -108,6 +127,8 @@ class DecisionService : Service() {
     private var nextNotification = 2
     private var generation = 0
     private val receiving = mutableMapOf<String, Pair<FileOutputStream, Int>>()
+    /** Failed attempts in a row per source, for a growing wait before the next try. */
+    private val retries = mutableMapOf<String, Int>()
     private val manager by lazy { getSystemService(NotificationManager::class.java) }
     private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -139,20 +160,24 @@ class DecisionService : Service() {
     /** (Re)opens every source: the legacy bridge when configured and each paired PC. */
     private fun connect() {
         val thisGeneration = ++generation
-        DecisionState.sources.values.forEach { it.legacy?.cancel(); it.link?.close("つなぎ直します") }
+        // The lists stay until each PC sends a fresh one, so a reconnect keeps the open decision and the drafts.
+        val previous = DecisionState.sources.toMap()
+        previous.values.forEach { it.legacy?.cancel(); it.link?.close("つなぎ直します") }
         DecisionState.sources.clear()
         receiving.forEach { (key, value) -> value.first.close(); File(cacheDir, "video-$key.partial").delete() }
         receiving.clear()
-        changed()
-        connectLegacy(thisGeneration)
+        retries.clear()
+        connectLegacy(thisGeneration, previous[DecisionSource.LEGACY])
         val store = MachineStore(this)
-        store.list().forEach { connectRelay(thisGeneration, store, it) }
+        store.list().forEach { connectRelay(thisGeneration, store, it, previous[it.id]) }
+        changed()
     }
 
-    private fun connectLegacy(thisGeneration: Int) {
+    private fun connectLegacy(thisGeneration: Int, previous: DecisionSource?) {
         val settings = try { ConnectionSettings(this).load() } catch (_: Exception) { null } ?: return
         val request = try { Request.Builder().url(settings.first).build() } catch (_: IllegalArgumentException) { return }
         val source = DecisionSource(DecisionSource.LEGACY, "Tailscale")
+        previous?.let { source.decisions = it.decisions }
         DecisionState.sources[source.id] = source
         source.legacy = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -168,12 +193,14 @@ class DecisionService : Service() {
         })
     }
 
-    private fun connectRelay(thisGeneration: Int, store: MachineStore, machine: Machine) {
+    private fun connectRelay(thisGeneration: Int, store: MachineStore, machine: Machine, previous: DecisionSource?) {
         val source = DecisionSource(machine.id, machine.name)
+        // Until the new connection is unlocked, only the headings stay visible.
+        previous?.let { source.decisions = DecisionState.headingsOnly(it.decisions) }
         DecisionState.sources[source.id] = source
         val session = try { NoiseSession(store.noisePrivateKey(), B64.decode(machine.bridge), B64.decode(machine.room)) } catch (_: Exception) { return }
         val link = RelayLink(RelayLink.appUrl(machine), machine.tag, session, object : RelayLink.Listener {
-            override fun onReady(link: RelayLink) { handler.post { if (thisGeneration == generation) { source.connected = true; changed() } } }
+            override fun onReady(link: RelayLink) { handler.post { if (thisGeneration == generation) { source.connected = true; retries.remove(source.id); changed() } } }
             override fun onMessage(link: RelayLink, message: JSONObject) { handler.post { if (thisGeneration == generation) handle(source, message) } }
             override fun onClosed(link: RelayLink, reason: String) {
                 android.util.Log.w("IkesuDecisions", "${machine.name}: $reason")
@@ -188,27 +215,51 @@ class DecisionService : Service() {
         handler.post {
             if (previous != generation || DecisionState.sources[source.id] !== source) return@post
             source.connected = false
-            source.operable = false
+            if (source.relay) lock(source)
+            dropPartialVideos(source)
             changed()
+            val attempt = retries.getOrDefault(source.id, 0)
+            retries[source.id] = attempt + 1
             handler.postDelayed({
                 if (previous != generation || DecisionState.sources[source.id] !== source) return@postDelayed
                 val store = MachineStore(this)
-                if (source.relay) store.list().firstOrNull { it.id == source.id }?.let { connectRelay(previous, store, it) }
-                else connectLegacy(previous)
-            }, RETRY_MS)
+                if (source.relay) store.list().firstOrNull { it.id == source.id }?.let { connectRelay(previous, store, it, source) }
+                else connectLegacy(previous, source)
+            }, minOf(RETRY_MAX_MS, RETRY_MS shl minOf(attempt, 5)))
         }
+    }
+
+    /** Leaves only the headings of a relay PC's decisions and deletes their received videos. */
+    private fun lock(source: DecisionSource) {
+        source.operable = false
+        val keys = (0 until source.decisions.length()).flatMap { index ->
+            val videos = source.decisions.optJSONObject(index)?.optJSONArray("videos") ?: JSONArray()
+            (0 until videos.length()).mapNotNull { videos.optJSONObject(it)?.optString("key") }
+        }
+        keys.forEach { key -> DecisionState.videos.remove(key)?.delete() }
+        source.decisions = DecisionState.headingsOnly(source.decisions)
+        DecisionState.recompute()
+    }
+
+    /** A video half received when the connection ended can never finish: the next one starts again from 0. */
+    private fun dropPartialVideos(source: DecisionSource) {
+        val keys = (0 until source.decisions.length()).flatMap { index ->
+            val videos = source.decisions.optJSONObject(index)?.optJSONArray("videos") ?: JSONArray()
+            (0 until videos.length()).mapNotNull { videos.optJSONObject(it)?.optString("key") }
+        }.toSet()
+        (receiving.keys intersect keys).forEach { key -> receiving.remove(key)?.first?.close(); File(cacheDir, "video-$key.partial").delete() }
     }
 
     private fun handle(source: DecisionSource, message: JSONObject) {
         when (message.optString("type")) {
-            "snapshot" -> { source.connected = true; updateDecisions(source, message.optJSONArray("decisions") ?: JSONArray(), false) }
+            "snapshot" -> { source.connected = true; retries.remove(source.id); updateDecisions(source, message.optJSONArray("decisions") ?: JSONArray(), false) }
             "notice" -> { source.connected = true; if (!source.operable) updateDecisions(source, message.optJSONArray("decisions") ?: JSONArray(), true) }
             "operate_ok" -> { source.operable = true; changed() }
-            "operate_expired" -> { source.operable = false; changed() }
+            "operate_expired" -> { lock(source); changed() }
             "beat" -> source.beat = message.optLong("n")
             "answer_result", "error" -> {
                 DecisionState.result = message
-                if (message.optString("message") == "operate required") source.operable = false
+                if (message.optString("message") == "operate required") lock(source)
                 changed()
             }
             "video_chunk" -> receiveVideo(source, message)
@@ -223,9 +274,13 @@ class DecisionService : Service() {
             val original = raw.optJSONObject(index) ?: continue
             val id = original.optString("id").takeIf { it.isNotEmpty() } ?: continue
             val item = if (notice) {
-                val origin = original.optJSONObject("origin")
-                val place = listOfNotNull(origin?.optString("workspace_label")?.takeIf { it.isNotEmpty() }, origin?.optString("pane_id")?.takeIf { it.isNotEmpty() })
-                JSONObject().put("raw_title", original.optString("title")).put("kind", "agent_prompt").put("locked", true).put("notify", true)
+                val origin = original.opt("origin")
+                val place = when (origin) {
+                    is JSONObject -> listOfNotNull(origin.optString("workspace_label").takeIf { it.isNotEmpty() }, origin.optString("pane_id").takeIf { it.isNotEmpty() })
+                    is String -> listOfNotNull(origin.takeIf { it.isNotEmpty() })
+                    else -> emptyList()
+                }
+                JSONObject().put("raw_title", original.optString("title")).put("kind", "agent_prompt").put("locked", true).put("notify", original.optBoolean("notify", true))
                     .put("location", (listOf(source.name) + place).joinToString("｜")).put("options", JSONArray())
             } else JSONObject(original.toString()).also { if (source.relay) it.put("location", source.name + "｜" + it.optString("location")) }
             item.put("id", DecisionState.key(source.id, id)).put("source", source.id)

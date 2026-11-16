@@ -137,8 +137,10 @@ class MainActivity : Activity() {
         // A video removed with its decision closes the player and frees its preview.
         videoPreviews.keys.retainAll(DecisionState.videos.keys)
         videoViewer?.let { if (it.key !in DecisionState.videos) it.dismiss() }
-        if (!DecisionState.connected && drafts.values.any { it.sequence != null && !it.waitingReconnect }) {
-            drafts.values.filter { it.sequence != null }.forEach { it.waitingReconnect = true }
+        // Each draft follows the PC its decision came from: another PC staying connected does not count.
+        val cut = drafts.filter { (id, draft) -> draft.sequence != null && !draft.waitingReconnect && !DecisionState.reachable(id) }
+        if (cut.isNotEmpty()) {
+            cut.values.forEach { it.waitingReconnect = true }
             Toast.makeText(this, "接続が切れました。再接続後に保存状態を確認してください", Toast.LENGTH_LONG).show()
         }
         DecisionState.result?.let { result ->
@@ -162,8 +164,8 @@ class MainActivity : Activity() {
         }
         val ids = (0 until DecisionState.decisions.length()).mapNotNull { DecisionState.decisions.optJSONObject(it)?.optString("id") }.toSet()
         listCursor = if (ids.isEmpty()) 0 else listCursor.coerceAtMost(ids.size - 1)
-        if (DecisionState.connected) for ((id, draft) in drafts) {
-            if (draft.waitingReconnect && draft.sequence != null) {
+        for ((id, draft) in drafts) {
+            if (draft.waitingReconnect && draft.sequence != null && DecisionState.reachable(id)) {
                 if (DecisionState.answer(id, draft.selected.toList(), draft.text, draft.images, draft.sequence!!)) draft.waitingReconnect = false
             }
         }
@@ -531,8 +533,10 @@ class MainActivity : Activity() {
         block(text("外出中など QR を読めないときは、下の「鍵を作る」で出た1行を PC の持ち主へ送り、返ってきた接続情報を貼ってください。秘密鍵はこの端末から出ません。", 16f), 4)
         block(button("鍵を作る（公開鍵を出す）") {
             try {
-                val line = ManualLink.publicKeys(MachineStore(this), android.os.Build.MODEL)
-                val view = text(line, 14f).apply { setTextIsSelectable(true); typeface = Typeface.MONOSPACE }
+                val store = MachineStore(this)
+                val line = ManualLink.publicKeys(store, android.os.Build.MODEL)
+                // PC は登録した鍵の指紋を出す。同じ指紋なら、途中で差し替えられていない。
+                val view = text("指紋: ${RelayMath.fingerprint(store.noisePublicKey())}\n\n$line", 14f).apply { setTextIsSelectable(true); typeface = Typeface.MONOSPACE }
                 android.app.AlertDialog.Builder(this).setTitle("この端末の公開鍵").setView(view)
                     .setPositiveButton("コピー") { _, _ ->
                         (getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("ikesu 公開鍵", line))
@@ -547,7 +551,10 @@ class MainActivity : Activity() {
                 val machine = ManualLink.parse(linkField.text.toString())
                 MachineStore(this).add(machine)
                 startService(Intent(this, DecisionService::class.java).setAction(DecisionService.RECONNECT))
-                Toast.makeText(this, "${machine.name} を追加しました", Toast.LENGTH_LONG).show(); render()
+                android.app.AlertDialog.Builder(this).setTitle("${machine.name} を追加しました")
+                    .setMessage("PC の鍵の指紋: ${RelayMath.fingerprint(B64.decode(machine.bridge))}\nPC 側に出た指紋と同じか確かめてください。違うときは「外す」で消してください。")
+                    .setPositiveButton("閉じる", null).show()
+                render()
             } catch (error: Exception) { Toast.makeText(this, error.message ?: "接続情報を読めませんでした", Toast.LENGTH_LONG).show() }
         })
         block(button("PC を追加（QR を読む）", true) {

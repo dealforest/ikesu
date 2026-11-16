@@ -10,6 +10,7 @@ import { validateAnswer, validateShown } from './socket.mjs';
 const ONLY = (object, keys) => object && typeof object === 'object' && !Array.isArray(object) && Object.keys(object).every(key => keys.includes(key));
 const HANDSHAKE_WINDOW_MS = 60_000;
 const HANDSHAKE_FAILURES_PER_WINDOW = 10;
+const FAILURE_IDS_KEPT = 256;
 
 class Session {
   constructor(hub, key, role, id) {
@@ -20,7 +21,7 @@ class Session {
   close(failedHandshake = false, notifyRelay = true) {
     if (this.closed) return;
     this.closed = true;
-    if (failedHandshake) this.hub.noteHandshakeFailure();
+    if (failedHandshake) this.hub.noteHandshakeFailure(this.id);
     clearTimeout(this.handshakeTimer); this.stopOperating(false);
     if (this.slot) this.hub.pairing?.release(this.slot);
     if (this.candidate) this.hub.pairing?.dropCandidate(this.candidate);
@@ -37,7 +38,12 @@ class Session {
     if (this.closed) return;
     if (!this.ready) { this.handshake(buffer); return; }
     let message;
-    try { message = this.assembler.push(this.noise.decrypt(buffer)); } catch { this.close(); return; }
+    try {
+      const plain = this.noise.decrypt(buffer);
+      // 分割したメッセージは、顔・指紋で開いた後の回答（画像つき）だけが使う。開く前は溜めさせない。
+      if (plain[0] === 0x01 && !(this.role === 'app' && this.operating)) { this.close(); return; }
+      message = this.assembler.push(plain);
+    } catch { this.close(); return; }
     if (message === undefined) return;
     try { await (this.role === 'pair' ? this.onPair(message) : this.onApp(message)); }
     catch (error) { this.hub.log(`処理に失敗: ${error.message}`); this.close(); }
@@ -78,7 +84,7 @@ class Session {
     if (!this.ready || this.closed || !this.can('notify')) return;
     try {
       const decisions = (await this.hub.snapshot()).map(item => ({ id: item.id, title: item.raw_title ?? item.title ?? '', origin: item.location ?? '',
-        created_unix_ms: this.hub.createdOf?.(item.id) ?? item.created_unix_ms ?? 0 }));
+        created_unix_ms: this.hub.createdOf?.(item.id) ?? item.created_unix_ms ?? 0, notify: item.notify !== false }));
       this.send({ type: 'notice', decisions });
     } catch (error) { this.hub.log(`通知の作成に失敗: ${error.message}`); }
   }
@@ -100,6 +106,7 @@ class Session {
         for await (const bytes of createReadStream(file, { highWaterMark: 32 * 1024 })) {
           if (!this.operating) return;
           this.send({ type: 'video_chunk', id: decision.id, key: video.key, index: index++, data: bytes.toString('base64') });
+          await this.hub.transport.drain?.();
         }
         if (this.operating) this.send({ type: 'video_end', id: decision.id, key: video.key });
       } catch { this.sentVideos.delete(video.key); }
@@ -122,7 +129,9 @@ class Session {
     clearTimeout(this.idleTimer); clearInterval(this.beatTimer);
     const was = this.operating;
     this.operating = false; this.sentVideos.clear();
-    if (was && notify) this.send({ type: 'operate_expired' });
+    // 終わった接続は閉じる。同じ握手ハッシュへの古い署名を送り直して開き直すことをさせない。
+    // アプリはつなぎ直し、新しい握手ハッシュに顔・指紋で署名し直す。
+    if (was && notify) { this.send({ type: 'operate_expired' }); this.close(); }
   }
   fresh(message) {
     if (message.beat === undefined) return true;
@@ -162,7 +171,7 @@ export class MobileHub {
     now = Date.now, log = () => {}, beatMs = 5000, idleMs = 600_000, handshakeMs = 10_000 }) {
     Object.assign(this, { configDir, noiseKey, relay, room: relay.room, transport, snapshot, answer, later, shown, videoPath, createdOf, now, log, beatMs, idleMs, handshakeMs });
     this.roomBytes = Buffer.from(relay.room, 'base64url');
-    this.sessions = new Map(); this.devices = []; this.pairing = null; this.failures = [];
+    this.sessions = new Map(); this.devices = []; this.pairing = null; this.failures = new Map();
   }
   async reloadDevices() {
     this.devices = await loadDevices(this.configDir);
@@ -173,14 +182,23 @@ export class MobileHub {
       else session.device = current;
     }
   }
-  noteHandshakeFailure() { this.failures.push(this.now()); }
-  tooManyFailures() {
+  // 握手の失敗は端末（またはペアリング）の ID ごとに数える。外した端末が繰り返しつないでも、ほかの端末は入れる。
+  noteHandshakeFailure(id) {
+    const key = b64u(id ?? Buffer.alloc(0));
+    const list = this.failures.get(key) ?? [];
+    list.push(this.now());
+    this.failures.delete(key); this.failures.set(key, list);
+    while (this.failures.size > FAILURE_IDS_KEPT) this.failures.delete(this.failures.keys().next().value);
+  }
+  tooManyFailures(id) {
+    const key = b64u(id ?? Buffer.alloc(0));
     const limit = this.now() - HANDSHAKE_WINDOW_MS;
-    this.failures = this.failures.filter(time => time > limit);
-    return this.failures.length > HANDSHAKE_FAILURES_PER_WINDOW;
+    const list = (this.failures.get(key) ?? []).filter(time => time > limit);
+    if (list.length) this.failures.set(key, list); else this.failures.delete(key);
+    return list.length > HANDSHAKE_FAILURES_PER_WINDOW;
   }
   onOpen(key, role, id) {
-    if (this.tooManyFailures()) { this.transport.closeConn(key); return; }
+    if (this.tooManyFailures(id)) { this.transport.closeConn(key); return; }
     this.sessions.set(key, new Session(this, key, role, id));
   }
   onData(key, buffer) { void this.sessions.get(key)?.onData(buffer); }

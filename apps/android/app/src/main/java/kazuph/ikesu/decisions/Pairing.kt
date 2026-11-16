@@ -93,7 +93,12 @@ object Unlock {
         val status = activity.getSystemService(BiometricManager::class.java).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
         if (status != BiometricManager.BIOMETRIC_SUCCESS) { onFailure("この端末では強い生体認証（指紋など）が使えません"); return }
         val signature = MachineStore.operateSignature()
-        if (signature == null) { onFailure("指紋や顔の登録が変わったため、操作の鍵が使えなくなりました。各 PC とペアリングし直してください"); return }
+        if (signature == null) {
+            // The invalidated key must go, or the next pairing would register the same dead public key again.
+            try { MachineStore.forgetOperateKey() } catch (_: Exception) { }
+            onFailure("指紋や顔の登録が変わったため、操作の鍵が使えなくなりました。「鍵を作る」で新しい鍵を作り、各 PC に登録し直してください")
+            return
+        }
         val hashes = targets.mapNotNull { it.link?.handshakeHash?.copyOf() }.take(8)
         val executor = activity.mainExecutor
         prompting = true

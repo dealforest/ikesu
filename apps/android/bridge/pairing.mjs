@@ -25,8 +25,8 @@ export function proofMatches(secret, h, proof) {
 }
 
 // 操作の署名: "ikesu-operate/1" ‖ h への ECDSA P-256/SHA-256（DER）。公開鍵は SPKI DER。
-// h の長さは Noise の握手ハッシュの長さ（BLAKE2b なので 64 バイト。PROTOCOL.md は 32 と書いている）。
-// 署名する文: "ikesu-operate/1" ‖ hashes の数（1バイト、1〜8）‖ 各 h の32バイト。自分の h が hashes に入っていることも確かめる。
+// h の長さは Noise の握手ハッシュの長さ（BLAKE2b なので 64 バイト）。
+// 署名する文: "ikesu-operate/1" ‖ hashes の数（1バイト、1〜8）‖ 各 h の64バイト。自分の h が hashes に入っていることも確かめる。
 export function verifyOperate(operatePubB64u, h, hashes, sigB64u) {
   try {
     if (!Array.isArray(hashes) || hashes.length < 1 || hashes.length > 8) return false;

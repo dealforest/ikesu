@@ -128,13 +128,17 @@ test('ペアリング: 候補は4本まで', async t => {
   assert.equal(await new FakeApp(env.relay, 'pair', pairing.id, env.bridgePublic).handshake(), false);
 });
 
-test('登録済みの端末は握手でき、notice（id・title・origin・created_unix_ms だけ）が届く', async t => {
+test('登録済みの端末は握手でき、notice（id・title・origin・created_unix_ms・notify だけ）が届く', async t => {
   const env = await setup(t);
   const { app, paired } = await pairDevice(env);
   const again = await connectApp(env, paired, app);
   assert.ok(await again.handshake());
   const notice = await again.recv(m => m.type === 'notice');
-  assert.deepEqual(notice, { type: 'notice', decisions: [{ id: 'd1', title: '本番へ出す？', origin: 'mini / ikesu', created_unix_ms: 1234 }] });
+  assert.deepEqual(notice, { type: 'notice', decisions: [{ id: 'd1', title: '本番へ出す？', origin: 'mini / ikesu', created_unix_ms: 1234, notify: true }] });
+  // PC で見ている・「あとで」にした判断待ちは、鳴らさない印のまま届く。
+  env.setDecisions([{ id: 'd2', raw_title: '見ている', location: '', created_unix_ms: 1, notify: false, videos: [] }]);
+  env.hub.publish();
+  assert.equal((await again.recv(m => m.type === 'notice' && m.decisions[0]?.id === 'd2')).decisions[0].notify, false);
   env.setDecisions([]);
   env.hub.publish();
   assert.deepEqual((await again.recv(m => m.type === 'notice' && m.decisions.length === 0)).decisions, []);
@@ -243,12 +247,35 @@ test('operate は無操作で終わり operate_expired が届く。beat が5秒�
   const second = await a.recv(m => m.type === 'beat' && m.n > first.n);
   assert.equal(second.n, first.n + 1);
   await a.recv(m => m.type === 'operate_expired');
-  a.sendJson({ type: 'later', id: 'd1' });
-  assert.equal((await a.recv(m => m.type === 'error')).message, 'operate required');
-  a.sendJson(a.operateMessage());
-  await a.recv(m => m.type === 'operate_ok');
-  a.sendJson({ type: 'operate_end' });
-  await a.recv(m => m.type === 'operate_expired');
+  // 終わった接続は閉じる。同じ署名を送り直して開き直すことはできない。
+  await until(() => a.conn.closed);
+  const b = await connectApp(env, paired, app);
+  assert.ok(await b.handshake());
+  b.sendJson({ type: 'later', id: 'd1' });
+  assert.equal((await b.recv(m => m.type === 'error')).message, 'operate required');
+  b.sendJson(b.operateMessage());
+  await b.recv(m => m.type === 'operate_ok');
+  b.sendJson({ type: 'operate_end' });
+  await b.recv(m => m.type === 'operate_expired');
+  await until(() => b.conn.closed);
+});
+
+test('外した端末が何度つないでも、ほかの登録済みの端末は入れる', async t => {
+  const env = await setup(t);
+  const { app, paired } = await pairDevice(env);
+  const removed = randomBytes(16);
+  for (let i = 0; i < 12; i++) assert.equal(await new FakeApp(env.relay, 'app', removed, env.bridgePublic, { noiseKey: app.noiseKey }).handshake(), false);
+  const again = await connectApp(env, paired, app);
+  assert.ok(await again.handshake());
+});
+
+test('顔・指紋で開く前の分割メッセージは、溜めずに接続を切る', async t => {
+  const env = await setup(t);
+  const { app, paired } = await pairDevice(env);
+  const a = await connectApp(env, paired, app);
+  await a.handshake();
+  a.conn.send(Buffer.from(a.tx.encrypt(Buffer.concat([Buffer.from([1, 0, 0, 0, 7, 0]), Buffer.alloc(59994)]))));
+  await until(() => a.conn.closed);
 });
 
 test('beat を付けた answer: 2つ以上古いものは実行せず stale beat を返す。新しいものと beat なしは通る', async t => {
