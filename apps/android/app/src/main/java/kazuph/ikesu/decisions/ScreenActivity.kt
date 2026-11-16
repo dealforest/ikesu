@@ -226,6 +226,22 @@ class ScreenActivity : Activity() {
                 true
             } else false
         }
+        // With ⌘ / CTRL / ALT / ⇧ waiting, the next letter is a shortcut (⌘J, ^C…): send it at once with the
+        // modifier and keep it out of the line.
+        addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                if (mods == 0 || s == null || count <= 0 || before != 0) return
+                val added = s.subSequence(start, start + count).toString()
+                if (added.codePointCount(0, added.length) != 1 || added[0].code < 0x20) return
+                post {
+                    val e = editableText
+                    if (start + count <= e.length && e.subSequence(start, start + count).toString() == added) e.delete(start, start + count)
+                }
+                send(KeyBytes.text(added, takeMods()))
+            }
+            override fun afterTextChanged(s: android.text.Editable?) {}
+        })
         input = this
     }
 
