@@ -113,20 +113,34 @@ func hardRowBreak(previous, next string, columns int) bool {
 	if left == "" || right == "" {
 		return false
 	}
-	// A token split across rows (a long path or name) is a wrap, not a break.
-	a, _ := utf8.DecodeLastRuneInString(left)
-	b, _ := utf8.DecodeRuneInString(right)
-	if a <= unicode.MaxASCII && b <= unicode.MaxASCII && wrappedSeparator(previous, next, columns) == "" {
-		return false
-	}
-	// Claude wraps only at spaces, so a row starting with a list marker that
-	// has no space before it in the text began on its own line.
-	if listMarker.MatchString(right) {
-		return true
-	}
+	width := cellwidth.String(left)
 	word := right
 	if i := strings.IndexByte(word, ' '); i >= 0 {
 		word = word[:i]
 	}
-	return cellwidth.String(left)+1+cellwidth.String(word) <= columns
+	// Claude moves a whole word down only when it does not fit; a row that
+	// ends while the next word still fits ended at a line break.
+	if width+1+cellwidth.String(word) <= columns {
+		a, _ := utf8.DecodeLastRuneInString(left)
+		b, _ := utf8.DecodeRuneInString(right)
+		// A token split across rows (a long path or name) is a wrap.
+		return !(a <= unicode.MaxASCII && b <= unicode.MaxASCII && wrappedSeparator(previous, next, columns) == "" && !listMarker.MatchString(right))
+	}
+	// Claude wraps only at spaces and splits a space-less run only at the
+	// screen edge. A row that stops short of the edge before a list marker
+	// or between two Japanese characters therefore ended at a line break.
+	first, _ := utf8.DecodeRuneInString(right)
+	if width+1+cellwidth.String(string(first)) > columns {
+		return false
+	}
+	if listMarker.MatchString(right) {
+		return true
+	}
+	// Between Japanese characters, a row that ends a sentence or a label
+	// short of the edge ended at a line break. A row cut mid-word is left
+	// joined: a resize can leave such rows behind.
+	a, _ := utf8.DecodeLastRuneInString(left)
+	b, _ := utf8.DecodeRuneInString(right)
+	wide := func(r rune) bool { return cjk(r) || r > unicode.MaxASCII && unicode.IsPunct(r) }
+	return strings.ContainsRune("。：！？", a) && wide(b)
 }

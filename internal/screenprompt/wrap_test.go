@@ -112,3 +112,25 @@ func TestClaudeQuestionKeepsItsLineBreaks(t *testing.T) {
 		t.Fatalf("heading %q", p.Params.Title)
 	}
 }
+
+func TestHardRowBreakEdges(t *testing.T) {
+	for _, tc := range []struct {
+		name, previous, next string
+		columns              int
+		want                 bool
+	}{
+		{"short Japanese row before a long Japanese row", "公開するもの：", strings.Repeat("説明", 30), 40, true},
+		{"Japanese run split at the edge before a marker", strings.Repeat("あ", 20), "・続き", 40, false},
+		{"Japanese run split at the edge", strings.Repeat("あ", 20), "いうえお", 40, false},
+		{"English list after a sentence", "Steps.", "- run the tests", 40, true},
+		{"English list after a word", "Steps", "- run the tests", 40, true},
+		{"English word moved down at a space", "the quick brown fox jumps over the", "lazy dog", 37, false},
+		{"Japanese row cut mid-word short of the edge", "承認してもらっ", "たあとも見張りに止められました", 40, false},
+		{"path split mid token", "/Users/kazuph/src/github.com/kazuph/ikes", "u/README.md", 40, false},
+		{"command on its own line", "push のコマンド：", "git -C /Users/kazuph/src push", 40, true},
+	} {
+		if got := hardRowBreak(tc.previous, tc.next, tc.columns); got != tc.want {
+			t.Errorf("%s: got %v want %v", tc.name, got, tc.want)
+		}
+	}
+}
