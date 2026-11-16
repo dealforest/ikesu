@@ -1,6 +1,6 @@
 # bridge の中継接続（relay）
 
-約束は `apps/android/PROTOCOL.md`。`run` は中継へ外向きにつなぐ。`relay.json` が無いと起動しない。今までの合言葉の待ち受け（Tailscale）は 0.4.155 で消した。
+約束は `apps/android/PROTOCOL.md`。`run` は中継へ外向きにつなぐ。`relay.json` が無いと起動しない。今までの合言葉の待ち受け（Tailscale）は 0.4.155 で消した。設定フォルダに残った `token`・`config.json` の `port`・`tailscale_path` はもう使わないので、消してよい。
 
 ## 準備
 

@@ -46,6 +46,9 @@ func closedSpaceServer(t *testing.T) (*Server, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(s.sup.KillAll)
+	// The record of a closed space is written in the background, as on a real server, which waits on stop.
+	// Wait the same way before the test's folder is removed.
+	t.Cleanup(s.flushClosedSpaces)
 	return s, capture
 }
 

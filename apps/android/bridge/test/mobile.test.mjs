@@ -434,3 +434,15 @@ test('操作中に同じ operate を送り直しても、期限は延びない',
   assert.equal((await a.recv(m => m.type === 'operate_ok')).until, first.until);
   await a.recv(m => m.type === 'operate_expired', 1000);
 });
+
+test('clientCount はペアリング中と握手前の接続を数えず、握手の済んだアプリだけを数える', async t => {
+  const env = await setup(t);
+  const { app, paired } = await pairDevice(env);
+  assert.equal(env.hub.clientCount(), 0);
+  const a = await connectApp(env, paired, app);
+  assert.ok(await a.handshake());
+  await until(() => env.hub.clientCount() === 1);
+  a.conn.close?.();
+  env.hub.onReset();
+  assert.equal(env.hub.clientCount(), 0);
+});

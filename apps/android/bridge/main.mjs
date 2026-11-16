@@ -29,7 +29,18 @@ const config = { pluginId, configDir, stateDir, enabled: file.enabled !== false,
 if (!Number.isFinite(config.laterMs) || config.laterMs < 0) throw Error('設定値が不正です');
 const log = message => process.stderr.write(`[android-decisions] ${message}\n`);
 
+// 中継の設定（relay.json）を読めるか。読めなければ1行の案内を出して false。
+async function relayReady() {
+  try {
+    if (await loadRelay(configDir)) return true;
+    log('relay.json がありません。main.mjs relay-setup --url <wss://…> で中継を設定してください');
+  } catch (error) { log(`relay.json を読めません: ${error.message}`); }
+  return false;
+}
+
 async function ensure() {
+  // 中継の設定が無いと run はすぐ終わるので、判断待ちのたびにジョブを起こさない。
+  if (!await relayReady()) return;
   fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const lock = path.join(stateDir, 'ensure.lock');
   try { fs.mkdirSync(lock, { mode: 0o700 }); }
@@ -54,6 +65,8 @@ async function ensure() {
 }
 
 async function run() {
+  // パネルの準備・ロック・daemon.json の前に確かめる（終わったプロセスの daemon.json を残さない）。
+  if (!await relayReady()) { process.exitCode = 1; return; }
   fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const nativeDialog = ensureNativeDialog(config, log);
   if (!nativeDialog) throw Error('画像の検査に使う Mac ダイアログを準備できません');

@@ -88,7 +88,16 @@ bridge の WebSocket は、複数のアプリの接続を1本で運ぶ。中身�
 | 状態 | bridge → アプリ | アプリ → bridge |
 |---|---|---|
 | 握手の後（通知だけ） | `{"type":"notice","decisions":[{"id","title","origin","created_unix_ms","notify"}…]}`（`notify` が false のものは鳴らさない。PC で見ている・「あとで」にしたもの） | `shown`・`operate` |
-| 操作できる状態 | 今の bridge と同じ `snapshot`・`video_chunk`・`video_end`・`answer_result`・`error`、画面（4章） | 今の bridge と同じ `answer`・`later`、画面（4章） |
+| 操作できる状態 | `snapshot`・`video_chunk`・`video_end`・`answer_result`・`error`・`beat`・`operate_expired`、画面（4章） | `answer`・`later`・`shown`・`operate_end`、画面（4章） |
+
+メッセージの形（bridge は、ここに無い項目を混ぜた `answer`・`shown` を断る。検査は `bridge/messages.mjs`）:
+
+- `answer`: `{"type":"answer","id","options":[選んだ選択肢の id…],"text","images":[base64…],"sequence"}`。`beat` を足してよい。画像は4枚まで、1枚20MBまで。`sequence` は送信番号で、同じ番号の送り直しは1回だけ保存する。マシン・パス・コマンド・回答者はアプリから指定できない。
+- `later`: `{"type":"later","id"}`。`shown`: `{"type":"shown","ids":[…]}`（200件まで）。`operate_end`: `{"type":"operate_end"}`。
+- `snapshot`: `{"type":"snapshot","decisions":[…]}`。各判断待ちは、題名・本文・選択肢・画像・カード・動画の key・`notify` など、PC の判断待ちパネルと同じ中身を持つ。
+- `answer_result`: `{"type":"answer_result","sequence","status"}`。`status` は `answered`・`answered_elsewhere`・`cancelled`・`expired`・`failed`・`unknown`。`failed`・`unknown` には `message` が付く。
+- `error`: `{"type":"error","message"}`。回答への返事なら `sequence` が付く。
+- `video_chunk`: `{"type":"video_chunk","id","key","index","data"}`（`data` は 32KB ずつの base64、`index` は0から順）。`video_end`: `{"type":"video_end","id","key"}`。
 
 操作できない状態で操作のメッセージが来たら、`{"type":"error","message":"operate required"}` を返して実行しない。
 
