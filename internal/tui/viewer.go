@@ -92,6 +92,7 @@ func (a *App) NewViewer(out io.Writer, cols, rows int, detach func(string)) *Vie
 	ui.sidebarGesture, ui.tabGesture = nil, nil
 	ui.dividerClicks = [2]*sidebarDividerClick{}
 	ui.menu, ui.settings, ui.help = nil, nil, nil
+	ui.nativeMenu = render.NativeMenuSignal{}
 	ui.hostPixelMouse, ui.hostPixelSupported = false, false
 	s := a.selection()
 	v := &Viewer{app: &ui, workspace: s.workspace, tabs: s.tabs, cols: cols, rows: rows, display: s.display, toastSequence: a.toastSequence}

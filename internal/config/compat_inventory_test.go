@@ -100,6 +100,7 @@ func TestPublishedConfigKeyInventory(t *testing.T) {
 		{"ui.sidebar_start_collapsed", "[ui]\nsidebar_start_collapsed=false\n"},
 		{"ui.sidebar_collapsed_mode", "[ui]\nsidebar_collapsed_mode=\"compact\"\n"},
 		{"ui.mobile_width_threshold", "[ui]\nmobile_width_threshold=64\n"},
+		{"ui.native_menus", "[ui]\nnative_menus=false\n"},
 		{"ui.mouse_capture", "[ui]\nmouse_capture=true\n"},
 		{"ui.copy_on_select", "[ui]\ncopy_on_select=true\n"},
 		{"ui.host_cursor", "[ui]\nhost_cursor=\"auto\"\n"},

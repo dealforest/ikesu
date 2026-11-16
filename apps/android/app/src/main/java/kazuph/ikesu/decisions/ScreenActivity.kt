@@ -125,6 +125,20 @@ class ScreenActivity : Activity() {
     private val voice by lazy { VoiceRecorder(this) }
     private var transcribing = false
     private var micView: TextView? = null
+    private var input: android.widget.EditText? = null
+    /** The photo or file picker is in front: keep the PC's screen open, so the same space is still shown on return. */
+    private var picking = false
+    /** ikesu's menus and dialogs, shown as Android lists and dialogs (its ui.native_menus signal). */
+    private var scanner = NativeUiScanner()
+    private var native: AlertDialog? = null
+    private var nativeShown: String? = null
+    /** A menu row being chosen one step at a time (see MenuKeys.step), found again by its words in each new signal. */
+    private class Choice(val title: String, val label: String, val detail: String)
+    private var choosing: Choice? = null
+    private var lastMenu: JSONObject? = null
+    private val choiceTimeout = Runnable { if (choosing != null) { choosing = null; nativeShown = null; lastMenu?.let { showNative(it) } } }
+    /** An input dialog answered with this text: its signals while ikesu types the text in are not shown again. */
+    private var answeredInput: Pair<String, String>? = null
     /** A file read while the screen was (re)opening, sent once screen_opened arrives. */
     private var pendingFile: Pair<String, String>? = null
 
@@ -143,9 +157,9 @@ class ScreenActivity : Activity() {
         // The owner's Termux layout (dotfiles/.termux/termux.properties), plus ⇧, ⌘, the ikesu prefix, voice, files and the keyboard.
         val rows = listOf(
             listOf(ExtraKey("⇧", ScreenKey.Modifier(KeyBytes.SHIFT)), ExtraKey("⌘", ScreenKey.Modifier(KeyBytes.SUPER)),
-                ExtraKey("^T", ScreenKey.Bytes(byteArrayOf(20)), "pfx", ScreenKey.Bytes(byteArrayOf(20))),
+                ExtraKey("^T", ScreenKey.Bytes(byteArrayOf(20))),
                 ExtraKey("🎤", ScreenKey.Action { toggleVoice() }), ExtraKey("📎", ScreenKey.Action { pickFile() }),
-                ExtraKey("貼付", ScreenKey.Action { pasteClipboard() }), ExtraKey("⌨", ScreenKey.Action { view.showKeyboard() })),
+                ExtraKey("貼付", ScreenKey.Action { pasteClipboard() })),
             listOf(ExtraKey("ESC", ScreenKey.Code(KeyEvent.KEYCODE_ESCAPE)), ExtraKey("|", ScreenKey.Text("|"), "PGUP", ScreenKey.Code(KeyEvent.KEYCODE_PAGE_UP)),
                 ExtraKey("$", ScreenKey.Text("$"), "PGDN", ScreenKey.Code(KeyEvent.KEYCODE_PAGE_DOWN)), ExtraKey("/", ScreenKey.Text("/"), "clear", ScreenKey.Text("/clear")),
                 ExtraKey("#", ScreenKey.Text("#")), ExtraKey("↑", ScreenKey.Code(KeyEvent.KEYCODE_DPAD_UP), "new", ScreenKey.Bytes(byteArrayOf(20))),
@@ -157,15 +171,17 @@ class ScreenActivity : Activity() {
                 ExtraKey("⏎", ScreenKey.Code(KeyEvent.KEYCODE_ENTER), "\\⏎", ScreenKey.Bytes("\\\r".toByteArray())), ExtraKey("BKSP", ScreenKey.Code(KeyEvent.KEYCODE_DEL))),
         )
         val keys = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.BLACK); setPadding((2 * dp).toInt(), (2 * dp).toInt(), (2 * dp).toInt(), (2 * dp).toInt()) }
+        // Every row spans the same 9-column grid, so the keys line up (a 6-key row gets 1.5 columns each).
         for (row in rows) {
-            val line = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            for (key in row) line.addView(keyView(key, dp), LinearLayout.LayoutParams(0, (44 * dp).toInt(), 1f).apply { setMargins((1.5f * dp).toInt(), (1.5f * dp).toInt(), (1.5f * dp).toInt(), (1.5f * dp).toInt()) })
+            val line = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; weightSum = 9f }
+            for (key in row) line.addView(keyView(key, dp), LinearLayout.LayoutParams(0, (40 * dp).toInt(), 9f / row.size).apply { setMargins((1.5f * dp).toInt(), (1.5f * dp).toInt(), (1.5f * dp).toInt(), (1.5f * dp).toInt()) })
             keys.addView(line, LinearLayout.LayoutParams(-1, -2))
         }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.BLACK)
             addView(status, LinearLayout.LayoutParams(-1, -2))
             addView(view, LinearLayout.LayoutParams(-1, 0, 1f))
+            addView(inputLine(dp), LinearLayout.LayoutParams(-1, -2).apply { setMargins((4 * dp).toInt(), (2 * dp).toInt(), (4 * dp).toInt(), (2 * dp).toInt()) })
             addView(keys, LinearLayout.LayoutParams(-1, -2))
         }
         // targetSdk 35 draws under the status bar, navigation bar and keyboard: keep the screen inside them.
@@ -179,24 +195,99 @@ class ScreenActivity : Activity() {
         view.onSize = { cols, rows2 -> sizeChanged(cols, rows2) }
     }
 
-    /** A key with its swipe-up / long-press alternative shown small above the main label. */
-    private fun keyView(key: ExtraKey, dp: Float): TextView = TextView(this).apply {
-        text = if (key.popupLabel != null) "${key.popupLabel}\n${key.label}" else key.label
-        gravity = Gravity.CENTER; setTextColor(GREEN); textSize = if (key.popupLabel != null) 13f else 16f
-        setLineSpacing(0f, 0.9f)
+    /** A key: the main label in the middle, and its swipe-up / long-press alternative small in the top-right corner. */
+    private fun keyView(key: ExtraKey, dp: Float): TextView = object : TextView(this) {
+        private val corner = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = DARK_GREEN; textSize = 9f * resources.displayMetrics.scaledDensity; textAlign = android.graphics.Paint.Align.RIGHT }
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            key.popupLabel?.let { canvas.drawText(it, width - 3 * dp, corner.textSize + 1 * dp, corner) }
+        }
+    }.apply {
+        text = key.label; isSingleLine = true
+        gravity = Gravity.CENTER; setTextColor(GREEN); textSize = 15f
         background = keyBackground(false, dp)
         if (key.main is ScreenKey.Modifier) modifierViews[key.main.bit] = this
-        var downY = 0f; var popupDone = false
-        val longPress = Runnable { if (key.popup != null) { popupDone = true; press(key.popup) } }
+        // Long press shows a bubble above the key with what the swipe up would type; sliding up while holding types it.
+        // Letting go without sliding up types nothing. A quick swipe up types it at once, as before.
+        var downY = 0f; var up = false; var bubble: android.widget.PopupWindow? = null
+        fun hideBubble() { bubble?.dismiss(); bubble = null }
+        fun markBubble() {
+            (bubble?.contentView as? TextView)?.apply { setTextColor(if (up) Color.BLACK else GREEN); background = keyBackground(up, dp) }
+        }
+        val longPress = Runnable {
+            if (key.popupLabel == null || bubble != null) return@Runnable
+            val label = TextView(this@ScreenActivity).apply {
+                text = "↑ ${key.popupLabel}"; textSize = 18f; gravity = Gravity.CENTER
+                setPadding((14 * dp).toInt(), (8 * dp).toInt(), (14 * dp).toInt(), (8 * dp).toInt())
+            }
+            bubble = android.widget.PopupWindow(label, -2, -2, false).apply { isClippingEnabled = false }
+            label.measure(0, 0)
+            val at = IntArray(2); this.getLocationInWindow(at)
+            bubble?.showAtLocation(this, Gravity.NO_GRAVITY, at[0] + (width - label.measuredWidth) / 2, at[1] - label.measuredHeight - (6 * dp).toInt())
+            markBubble()
+        }
         setOnTouchListener { v, event ->
             when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { downY = event.y; popupDone = false; v.postDelayed(longPress, 400); v.isPressed = true }
-                MotionEvent.ACTION_MOVE -> if (!popupDone && key.popup != null && downY - event.y > 30 * dp) { v.removeCallbacks(longPress); popupDone = true; press(key.popup) }
-                MotionEvent.ACTION_UP -> { v.removeCallbacks(longPress); v.isPressed = false; if (!popupDone) press(key.main) }
-                MotionEvent.ACTION_CANCEL -> { v.removeCallbacks(longPress); v.isPressed = false }
+                MotionEvent.ACTION_DOWN -> { downY = event.y; up = false; v.postDelayed(longPress, 350); v.isPressed = true }
+                MotionEvent.ACTION_MOVE -> {
+                    val nowUp = key.popup != null && downY - event.y > 24 * dp
+                    if (nowUp != up) { up = nowUp; markBubble() }
+                    // A quick swipe up without waiting for the bubble types the alternative right away.
+                    if (up && bubble == null) { v.removeCallbacks(longPress); v.isPressed = false; press(key.popup!!); downY = Float.MAX_VALUE / 2 }
+                }
+                MotionEvent.ACTION_UP -> {
+                    v.removeCallbacks(longPress); v.isPressed = false
+                    val shown = bubble != null
+                    hideBubble()
+                    when {
+                        downY > Float.MAX_VALUE / 4 -> {}
+                        shown && up -> press(key.popup!!)
+                        shown -> {}
+                        else -> press(key.main)
+                    }
+                }
+                MotionEvent.ACTION_CANCEL -> { v.removeCallbacks(longPress); v.isPressed = false; hideBubble() }
             }
             true
         }
+    }
+
+    /** One input line, as in Termux: Enter sends what was typed (without Enter); Enter on an empty line sends Enter.
+     *  The phone's own keyboard works here, Japanese conversion included. */
+    private fun inputLine(dp: Float): android.widget.EditText = android.widget.EditText(this).apply {
+        hint = "ここに打って Enter で送る（空で Enter は改行を送る）"; setHintTextColor(DARK_GREEN); setTextColor(GREEN); textSize = 16f
+        isSingleLine = true; imeOptions = EditorInfo.IME_ACTION_SEND or EditorInfo.IME_FLAG_NO_FULLSCREEN
+        inputType = InputType.TYPE_CLASS_TEXT
+        setPadding((10 * dp).toInt(), (8 * dp).toInt(), (10 * dp).toInt(), (8 * dp).toInt())
+        background = android.graphics.drawable.GradientDrawable().apply { setColor(Color.BLACK); setStroke((1.5f * dp).toInt(), DARK_GREEN); cornerRadius = 6 * dp }
+        fun submit() {
+            val typed = text.toString()
+            if (typed.isEmpty()) KeyBytes.code(KeyEvent.KEYCODE_ENTER, takeMods(), false)?.let { send(it) }
+            else { sendKeyBytes(typed.toByteArray(Charsets.UTF_8)); setText("") }
+        }
+        setOnEditorActionListener { _, action, event ->
+            if (action == EditorInfo.IME_ACTION_SEND || action == EditorInfo.IME_ACTION_DONE || event?.keyCode == KeyEvent.KEYCODE_ENTER) {
+                if (event == null || event.action == KeyEvent.ACTION_DOWN) submit()
+                true
+            } else false
+        }
+        // With ⌘ / CTRL / ALT / ⇧ waiting, the next letter is a shortcut (⌘J, ^C…): send it at once with the
+        // modifier and keep it out of the line.
+        addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                if (mods == 0 || s == null || count <= 0 || before != 0) return
+                val added = s.subSequence(start, start + count).toString()
+                if (added.codePointCount(0, added.length) != 1 || added[0].code < 0x20) return
+                post {
+                    val e = editableText
+                    if (start + count <= e.length && e.subSequence(start, start + count).toString() == added) e.delete(start, start + count)
+                }
+                send(KeyBytes.text(added, takeMods()))
+            }
+            override fun afterTextChanged(s: android.text.Editable?) {}
+        })
+        input = this
     }
 
     private fun keyBackground(active: Boolean, dp: Float) = android.graphics.drawable.GradientDrawable().apply {
@@ -221,9 +312,126 @@ class ScreenActivity : Activity() {
     }
 
     /** Bytes typed on the soft keyboard: one printable character takes the waiting modifiers. */
+    /** "Saved on the PC" as a phone notification, so the status line does not keep saying it. */
+    private fun notifySaved(path: String) {
+        val manager = getSystemService(android.app.NotificationManager::class.java)
+        manager.createNotificationChannel(android.app.NotificationChannel("files", "PC に送ったファイル", android.app.NotificationManager.IMPORTANCE_DEFAULT))
+        manager.notify(path.hashCode(), android.app.Notification.Builder(this, "files").setSmallIcon(kazuph.ikesu.R.drawable.ic_notification)
+            .setContentTitle("${DecisionState.sources[source]?.name ?: "PC"} に保存しました").setContentText(path)
+            .setStyle(android.app.Notification.BigTextStyle().bigText(path)).setColor(GREEN)
+            .setVisibility(android.app.Notification.VISIBILITY_PRIVATE).setAutoCancel(true).build())
+    }
+
     private fun sendKeyBytes(bytes: ByteArray) {
         val text = String(bytes, Charsets.UTF_8)
         if (mods != 0 && text.codePointCount(0, text.length) == 1 && text[0].code >= 0x20) send(KeyBytes.text(text, takeMods())) else send(bytes)
+    }
+
+    /** Closing from here is not the person cancelling: drop the dismiss listener first, because Android runs it later. */
+    private fun closeNative() { native?.setOnDismissListener(null); native?.dismiss(); native = null; nativeShown = null }
+
+    /** Moves ikesu's selection one row toward the row being chosen, or chooses it. False when the signal is not for it. */
+    private fun advanceChoice(signal: JSONObject): Boolean {
+        val choice = choosing ?: return false
+        if (signal.optString("kind") != "menu" || signal.optString("title") != choice.title) return false
+        val raw = signal.optJSONArray("items") ?: return false
+        val items = (0 until raw.length()).map { raw.optJSONObject(it) ?: JSONObject() }
+        val target = items.indexOfFirst { !it.optBoolean("separator") && it.optString("label") == choice.label && it.optString("detail") == choice.detail }
+        val keys = MenuKeys.step(items.map { it.optBoolean("separator") to it.optBoolean("disabled") }, signal.optInt("sel", -1), target) ?: return false
+        if (keys.size == 1 && keys[0].toInt() == 13) { choosing = null; view.removeCallbacks(choiceTimeout) }
+        else { view.removeCallbacks(choiceTimeout); view.postDelayed(choiceTimeout, 3000) }
+        send(keys)
+        return true
+    }
+
+    /** One open ikesu menu or dialog at a time. Choosing sends the same keys a keyboard would (↑/↓ Enter, Esc). */
+    private fun showNative(signal: JSONObject) {
+        val text = signal.toString()
+        if (text == nativeShown) return
+        val kind = signal.optString("kind")
+        if (kind == "menu") lastMenu = signal
+        if (advanceChoice(signal)) return
+        if (choosing != null) { choosing = null; view.removeCallbacks(choiceTimeout) }
+        answeredInput?.let { (title, typed) ->
+            if (kind == "dialog" && signal.optString("title") == title && signal.optString("input") != typed) return
+            answeredInput = null
+        }
+        closeNative()
+        val dp = resources.displayMetrics.density
+        when (signal.optString("kind")) {
+            "menu" -> {
+                val raw = signal.optJSONArray("items") ?: org.json.JSONArray()
+                val items = (0 until raw.length()).map { raw.optJSONObject(it) ?: JSONObject() }
+                val flags = items.map { it.optBoolean("separator") to it.optBoolean("disabled") }
+                val sel = signal.optInt("sel", -1)
+                val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                val rows = mutableListOf<Pair<Int, View>>()
+                items.forEachIndexed { index, item ->
+                    if (item.optBoolean("separator")) {
+                        list.addView(View(this).apply { setBackgroundColor(DARK_GREEN) }, LinearLayout.LayoutParams(-1, (1 * dp).toInt()).apply { setMargins(0, (6 * dp).toInt(), 0, (6 * dp).toInt()) })
+                        return@forEachIndexed
+                    }
+                    val disabled = item.optBoolean("disabled")
+                    val row = TextView(this).apply {
+                        val extra = listOf(item.optString("detail"), item.optString("status")).filter { it.isNotEmpty() }.joinToString("  ")
+                        this.text = if (extra.isEmpty()) item.optString("label") else "${item.optString("label")}\n$extra"
+                        textSize = 20f; setTextColor(if (disabled) DARK_GREEN else GREEN)
+                        minHeight = (56 * dp).toInt(); gravity = Gravity.CENTER_VERTICAL
+                        setPadding((16 * dp).toInt(), (8 * dp).toInt(), (16 * dp).toInt(), (8 * dp).toInt())
+                        background = keyBackground(index == sel, dp).also { if (index == sel) setTextColor(Color.BLACK) }
+                        if (!disabled) setOnClickListener {
+                            choosing = Choice(signal.optString("title"), item.optString("label"), item.optString("detail"))
+                            closeNative()
+                            if (!advanceChoice(signal)) choosing = null
+                        }
+                    }
+                    list.addView(row, LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, (3 * dp).toInt(), 0, (3 * dp).toInt()) })
+                    rows += index to row
+                }
+                val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding((16 * dp).toInt(), (8 * dp).toInt(), (16 * dp).toInt(), 0) }
+                if (signal.optBoolean("filterable")) {
+                    // Narrow the list here; choosing still moves ikesu's own selection, so its filter stays untouched.
+                    body.addView(android.widget.EditText(this).apply {
+                        hint = "絞り込み"; setTextColor(GREEN); setHintTextColor(DARK_GREEN); textSize = 18f; isSingleLine = true
+                        addTextChangedListener(object : android.text.TextWatcher {
+                            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {
+                                val q = s?.toString()?.lowercase().orEmpty()
+                                rows.forEach { (i, v) -> v.visibility = if (q.isEmpty() || items[i].optString("label").lowercase().contains(q) || items[i].optString("detail").lowercase().contains(q)) View.VISIBLE else View.GONE }
+                            }
+                            override fun afterTextChanged(s: android.text.Editable?) {}
+                        })
+                    })
+                }
+                body.addView(android.widget.ScrollView(this).apply { addView(list) })
+                native = AlertDialog.Builder(this).setTitle(signal.optString("title").ifEmpty { "メニュー" }).setView(body)
+                    .setNegativeButton("閉じる", null)
+                    .setOnDismissListener { nativeShown = null; send(byteArrayOf(27)) }.show()
+            }
+            "dialog" -> {
+                val lines = signal.optJSONArray("lines")
+                val message = (listOf(signal.optString("detail")) + (0 until (lines?.length() ?: 0)).map { lines!!.optString(it) }).filter { it.isNotEmpty() }.joinToString("\n")
+                val field = if (signal.isNull("input") || !signal.has("input")) null else android.widget.EditText(this).apply {
+                    setText(signal.optString("input")); setSelection(text.length); textSize = 18f; setTextColor(GREEN); isSingleLine = true
+                }
+                var answered = false
+                val builder = AlertDialog.Builder(this).setTitle(signal.optString("title")).setMessage(message.ifEmpty { null })
+                    .setPositiveButton(signal.optString("confirm").ifEmpty { "OK" }) { _, _ ->
+                        answered = true
+                        // An input dialog: clear ikesu's field (Ctrl+U), type the edited text, then Enter.
+                        if (field != null) {
+                            val typed = field.text.toString().replace(Regex("[\\r\\n]"), " ")
+                            answeredInput = signal.optString("title") to typed
+                            send(byteArrayOf(21) + typed.toByteArray(Charsets.UTF_8) + byteArrayOf(13))
+                        } else send(byteArrayOf(13))
+                    }
+                if (!signal.optBoolean("continue_only")) builder.setNegativeButton(signal.optString("cancel").ifEmpty { "やめる" }) { _, _ -> answered = true; send(byteArrayOf(27)) }
+                field?.let { builder.setView(it) }
+                native = builder.setOnDismissListener { nativeShown = null; if (!answered) send(byteArrayOf(27)) }.show()
+            }
+            else -> return
+        }
+        nativeShown = text
     }
 
     private fun longPressMenu(col: Int, row: Int) {
@@ -232,8 +440,9 @@ class ScreenActivity : Activity() {
             "クリック（1回）" to { send(KeyBytes.click(col, row)) },
             "右クリック" to { send(KeyBytes.click(col, row, 2)) },
             "貼り付け" to { pasteClipboard() },
-            "画像・ファイルを送る" to { pickFile() },
-            "キーボードを出す" to { view.showKeyboard() },
+            "写真を送る（カメラロール）" to { pickPhoto() },
+            "ファイルを送る（ファイラー）" to { pickDocument() },
+            "キーボードを出す" to { input?.let { it.requestFocus(); (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(it, 0) } },
         )
         AlertDialog.Builder(this).setItems(items.map { it.first }.toTypedArray()) { _, which -> items[which].second() }.show()
     }
@@ -247,13 +456,30 @@ class ScreenActivity : Activity() {
     }
 
     // ---- 画像・ファイル: PC に保存され、そのパスが画面に打たれる（PROTOCOL 4） ----
+    /** 📎: choose between the camera roll and the file picker each time. */
     private fun pickFile() {
+        AlertDialog.Builder(this).setItems(arrayOf("写真（カメラロール）", "ファイル（ファイラー）")) { _, which -> if (which == 0) pickPhoto() else pickDocument() }.show()
+    }
+
+    /** Straight to the photos: the system photo picker (no storage permission needed). */
+    private fun pickPhoto() {
+        val picker = Intent(android.provider.MediaStore.ACTION_PICK_IMAGES).setType("*/*")
+            .putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/*", "video/*"))
+        // Android 12 without the photo picker: the regular image chooser.
+        val fallback = Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*")
+        picking = true
+        startActivityForResult(if (picker.resolveActivity(packageManager) != null) picker else fallback, PICK_FILE)
+    }
+
+    private fun pickDocument() {
+        picking = true
         startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), PICK_FILE)
     }
 
     @Deprecated("Activity result API is not used in this app")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == PICK_FILE) picking = false
         if (requestCode != PICK_FILE || resultCode != RESULT_OK) return
         val uri = data?.data ?: return
         sendFile(uri)
@@ -274,7 +500,7 @@ class ScreenActivity : Activity() {
             runOnUiThread {
                 result.onSuccess { data ->
                     // Choosing the file sent the app to the background, which closed the screen; it is reopening now.
-                    if (screenId < 0) { pendingFile = name to data; status.text = "画面を開き直してから「$name」を送ります…" }
+                    if (screenId < 0) { pendingFile = name to data; status.text = "画面が開いたら「$name」を送ります…" }
                     else sendFileNow(name, data)
                 }.onFailure { error -> status.text = error.message ?: "ファイルを読めませんでした" }
             }
@@ -284,7 +510,7 @@ class ScreenActivity : Activity() {
     private fun sendFileNow(name: String, data: String) {
         val target = DecisionState.sources[source] ?: return
         target.send(JSONObject().put("type", "screen_file").put("screen", screenId).put("beat", target.beat).put("name", name).put("data", data))
-        status.text = "「$name」を送りました。PC に保存しています…"
+        status.text = "「$name」を送っています…"
     }
 
     // ---- 音声: 話した内容を文字にして、画面に打つ（Enter は押さない） ----
@@ -323,11 +549,17 @@ class ScreenActivity : Activity() {
         ScreenBus.listener = { from, message -> if (from == source) handle(message) }
         // Coming back after the unlock ended: do not keep showing the old screen.
         if (DecisionState.sources[source]?.operable != true) { view.clear(); finish(); return }
+        // Back from the picker with the screen still open: keep using it.
+        if (screenId >= 0 || opening) return
         if (view.cols > 0) open(view.cols, view.rows)
     }
 
     // Leaving the screen closes it on the PC (PROTOCOL 4). Coming back opens a new one.
     override fun onStop() {
+        // Choosing a photo or file is part of using this screen: closing it would start a new ikesu client on return,
+        // which shows its first space instead of the one being used.
+        if (picking) { super.onStop(); return }
+        closeNative(); choosing = null; answeredInput = null; view.removeCallbacks(choiceTimeout)
         if (screenId >= 0) DecisionState.sources[source]?.send(JSONObject().put("type", "screen_close").put("screen", screenId))
         screenId = -1; opening = false; wanted = null
         if (voice.recording) voice.cancel()
@@ -353,15 +585,21 @@ class ScreenActivity : Activity() {
             "screen_opened" -> {
                 if (!opening) return
                 opening = false; screenId = message.optInt("screen")
+                scanner = NativeUiScanner(); lastMenu = null
                 status.text = "${DecisionState.sources[source]?.name ?: "PC"} の画面"
                 // The size changed while opening (the keyboard, for example): send the latest one.
                 wanted?.let { (c, r) -> if (c != message.optInt("cols") || r != message.optInt("rows")) sizeChanged(c, r) }
                 wanted = null
                 pendingFile?.let { (name, data) -> pendingFile = null; sendFileNow(name, data) }
             }
-            "screen_data" -> if (message.optInt("screen") == screenId) view.feed(Base64.decode(message.optString("data"), Base64.NO_WRAP))
+            "screen_data" -> if (message.optInt("screen") == screenId) {
+                val bytes = Base64.decode(message.optString("data"), Base64.NO_WRAP)
+                val result = scanner.scan(bytes)
+                result.signals.forEach { showNative(it) }
+                view.feed(result.screen)
+            }
             "screen_closed" -> if (message.optInt("screen") == screenId) { screenId = -1; Toast.makeText(this, "PC 側で画面が閉じました", Toast.LENGTH_LONG).show(); finish() }
-            "screen_file_saved" -> status.text = "PC に保存しました: ${message.optString("path")}"
+            "screen_file_saved" -> { status.text = "${DecisionState.sources[source]?.name ?: "PC"} の画面"; notifySaved(message.optString("path")) }
             "operate_expired" -> { if (isFinishing) return; screenId = -1; view.clear(); Toast.makeText(this, "接続が切れたか、顔・指紋で開いた時間が切れました", Toast.LENGTH_LONG).show(); finish() }
             "error" -> { opening = false; status.text = "PC 側: ${message.optString("message")}" }
         }
@@ -430,11 +668,21 @@ class TerminalCanvas(
         override fun onLongPress(e: MotionEvent) { cell(e)?.let { (c, r) -> onLongPress(c, r) } }
     })
     // Pinch in and out changes the text size, as in Termux; the column and row count follow.
+    // While pinching only the drawing is scaled (smooth); the new size and the PC's columns change once, on release.
+    private var pinch = 1f
+    private var pinchX = 0f
+    private var pinchY = 0f
     private val scaler = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScaleBegin(detector: ScaleGestureDetector): Boolean { pinch = 1f; pinchX = detector.focusX; pinchY = detector.focusY; return true }
         override fun onScale(detector: ScaleGestureDetector): Boolean {
-            val next = (sp * detector.scaleFactor).coerceIn(MIN_SP, MAX_SP)
-            if (kotlin.math.abs(next - sp) >= 0.5f) { sp = next; renderer = makeRenderer(); remeasure(); onTextSize(sp) }
+            pinch = (pinch * detector.scaleFactor).coerceIn(MIN_SP / sp, MAX_SP / sp)
+            invalidate()
             return true
+        }
+        override fun onScaleEnd(detector: ScaleGestureDetector) {
+            val next = (sp * pinch).coerceIn(MIN_SP, MAX_SP)
+            pinch = 1f
+            if (kotlin.math.abs(next - sp) >= 0.25f) { sp = next; renderer = makeRenderer(); remeasure(); onTextSize(sp) } else invalidate()
         }
     })
 
@@ -474,7 +722,9 @@ class TerminalCanvas(
 
     override fun onDraw(canvas: Canvas) {
         canvas.drawColor(Color.BLACK)
+        if (pinch != 1f) { canvas.save(); canvas.scale(pinch, pinch, pinchX, pinchY) }
         emulator?.let { renderer.render(it, canvas, 0, -1, -1, -1, -1) }
+        if (pinch != 1f) canvas.restore()
     }
 
     fun showKeyboard() {

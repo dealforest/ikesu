@@ -131,6 +131,7 @@ type machineClient struct {
 	workers           sync.WaitGroup
 	sidebar           render.MachineSidebar
 	frames            render.Encoder
+	nativeMenu        render.NativeMenuSignal
 	composer          render.Composer
 	outputFence       render.OutputFence
 	paintQueued       bool

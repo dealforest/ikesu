@@ -37,7 +37,7 @@ func (a *App) machineInputKey(k uv.Key) {
 	runes := []rune(*d.input)
 	cursor := min(max(0, d.d.InputCursor), len(runes))
 	switch {
-	case k.Code == 'c' && k.Mod.Contains(uv.ModCtrl):
+	case (k.Code == 'c' || k.Code == 'u') && k.Mod.Contains(uv.ModCtrl):
 		runes, cursor = nil, 0
 	case k.Code == uv.KeyLeft:
 		cursor = max(0, cursor-1)

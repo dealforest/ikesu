@@ -109,7 +109,9 @@ bridge は操作できる接続へ5秒ごとに `{"type":"beat","n":<通し番�
 
 アプリ → bridge: `{"type":"screen_open","cols":<20〜300>,"rows":<10〜200>}`。bridge は `ikesu` の画面をスマホ用の大きさで PTY の中に開き、その出力を送る。アプリの文字列を `ikesu` の引数に入れない。bridge → アプリ: `{"type":"screen_data","screen":<画面 ID>,"seq":<通し番号>,"data":"<PTY の出力の base64>"}`。30ms ごとにまとめて送る。アプリ → bridge: `{"type":"screen_input","screen":<画面 ID>,"beat":<n>,"data":"<キー入力の base64>"}`、`{"type":"screen_resize","screen":…,"cols":…,"rows":…}`、`{"type":"screen_close","screen":…}`。端末部品が自動で返す応答（端末の問い合わせへの返事、OSC 52 のクリップボード）は、アプリが送らない。アプリが裏へ回ったら `screen_close` を送る。操作できる状態が終わったら、bridge が画面を閉じる。
 
-bridge は開いたら `{"type":"screen_opened","screen","cols","rows"}`、閉じたら `{"type":"screen_closed","screen"}` を返す。見るには `screen`、打つには `input` の権限と新しい心拍が要る。bridge は ikesu run のジョブとして動くので、画面の ikesu には持ち主の設定の写しに `[experimental] allow_nested = true` を足したものを渡す（写しは閉じたら消す）。ikesu のサーバーが動いていないときは開かない。
+bridge は開いたら `{"type":"screen_opened","screen","cols","rows"}`、閉じたら `{"type":"screen_closed","screen"}` を返す。見るには `screen`、打つには `input` の権限と新しい心拍が要る。bridge は ikesu run のジョブとして動くので、画面の ikesu には持ち主の設定の写しに `[experimental] allow_nested = true` と `[ui] native_menus = true` を足したものを渡す（写しは閉じたら消す）。ikesu のサーバーが動いていないときは開かない。
+
+メニューとダイアログ: `[ui] native_menus = true` の ikesu の画面は、開いているメニューかダイアログが変わるたびに `ESC ] 7767 ; ikesu-ui ; <JSON の base64> BEL` を出力に足す（既定は false で、Mac の画面には出ない）。JSON は `{"kind":"menu","title","sel","items":[{"label","detail","status","disabled","separator"}],"filterable"}`、`{"kind":"dialog","title","detail","lines","confirm","cancel","input","continue_only"}`（`input` は文字を受けるダイアログだけ。それ以外は null）、閉じたら `{"kind":"none"}`。アプリはこの合図を端末部品に渡さず、Android の一覧とダイアログで出す。答えはふつうのキーで返す: 一覧は ↑/↓ を1つ送るたびに次の合図で位置を確かめ、目的の行で Enter。入力は Ctrl+U・文字・Enter。取り消しは Esc。
 
 アプリのキー: ⌘ は kitty のキーの形（`ESC [ 文字の番号 ; 1+修飾 u`、⌘ は 8）で送る。タップは SGR のマウスのダブルクリック（押して離すを2回）で送る。貼り付けは bracketed paste で送る。
 

@@ -47,6 +47,8 @@ class MainActivity : Activity() {
                              var cursorNavigated: Boolean = false)
     private val drafts = mutableMapOf<String, Draft>()
     private var selectedId: String? = null
+    /** The PC whose screen was asked for before the unlock: open it as soon as that PC accepts the signature. */
+    private var screenAfterUnlock: String? = null
     private var pendingCamera: Uri? = null
     private var pendingAttachmentId: String? = null
     private var settingsVisible = false
@@ -127,6 +129,11 @@ class MainActivity : Activity() {
         intent.getStringExtra("decision")?.let { selectedId = it; showList = false; settingsVisible = false }
     }
     private fun handleUpdate() {
+        screenAfterUnlock?.let { id ->
+            val source = DecisionState.sources[id]
+            if (source == null || !source.connected) screenAfterUnlock = null
+            else if (source.operable) { screenAfterUnlock = null; startActivity(Intent(this, ScreenActivity::class.java).putExtra(ScreenActivity.SOURCE, id)) }
+        }
         // A video removed with its decision closes the player and frees its preview.
         videoPreviews.keys.retainAll(DecisionState.videos.keys)
         videoViewer?.let { if (it.key !in DecisionState.videos) it.dismiss() }
@@ -283,7 +290,7 @@ class MainActivity : Activity() {
                 if (source.operable) block(button("🖥️ ${source.name} の画面を開く") {
                     startActivity(Intent(this, ScreenActivity::class.java).putExtra(ScreenActivity.SOURCE, source.id))
                 })
-                else block(button("🖥️ ${source.name} の画面（顔・指紋で開く）") { unlock() })
+                else block(button("🖥️ ${source.name} の画面（顔・指紋で開く）") { screenAfterUnlock = source.id; unlock() })
             }
             for (i in 0 until items.length()) items.optJSONObject(i)?.let { entry ->
                 val id = entry.optString("id")
