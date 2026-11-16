@@ -109,6 +109,12 @@ bridge は操作できる接続へ5秒ごとに `{"type":"beat","n":<通し番�
 
 アプリ → bridge: `{"type":"screen_open","cols":<20〜300>,"rows":<10〜200>}`。bridge は `ikesu` の画面をスマホ用の大きさで PTY の中に開き、その出力を送る。アプリの文字列を `ikesu` の引数に入れない。bridge → アプリ: `{"type":"screen_data","screen":<画面 ID>,"seq":<通し番号>,"data":"<PTY の出力の base64>"}`。30ms ごとにまとめて送る。アプリ → bridge: `{"type":"screen_input","screen":<画面 ID>,"beat":<n>,"data":"<キー入力の base64>"}`、`{"type":"screen_resize","screen":…,"cols":…,"rows":…}`、`{"type":"screen_close","screen":…}`。端末部品が自動で返す応答（端末の問い合わせへの返事、OSC 52 のクリップボード）は、アプリが送らない。アプリが裏へ回ったら `screen_close` を送る。操作できる状態が終わったら、bridge が画面を閉じる。
 
+bridge は開いたら `{"type":"screen_opened","screen","cols","rows"}`、閉じたら `{"type":"screen_closed","screen"}` を返す。見るには `screen`、打つには `input` の権限と新しい心拍が要る。bridge は ikesu run のジョブとして動くので、画面の ikesu には持ち主の設定の写しに `[experimental] allow_nested = true` を足したものを渡す（写しは閉じたら消す）。ikesu のサーバーが動いていないときは開かない。
+
+アプリのキー: ⌘ は kitty のキーの形（`ESC [ 文字の番号 ; 1+修飾 u`、⌘ は 8）で送る。タップは SGR のマウスのダブルクリック（押して離すを2回）で送る。貼り付けは bracketed paste で送る。
+
+ファイル: アプリ → bridge `{"type":"screen_file","screen","beat","name","data":"<base64>"}`（20 MB まで、`input` の権限と、送り始めの時点で新しい心拍が要る）。bridge は `~/Downloads/ikesu-phone/<日時>-<名前>` に 0600 で保存し（名前からフォルダと制御文字を消し、上書きしない）、そのパスをシェルの1語にクォートし、貼り付けの形（bracketed paste）で画面に打つ（Enter は押さない）。返事は `{"type":"screen_file_saved","screen","path"}`。
+
 ## 5. 取り消しと入れ替え
 
 `node apps/android/bridge/main.mjs devices` で登録済みの端末を出し、`… revoke <device>` で外す。外した端末の接続は、bridge の再起動なしにすぐ切る。端末を無くして PC に触れないときは、Cloudflare で `RELAY_KEY` を入れ替える。すべての端末がつながらなくなる。bridge の鍵を入れ替えたら、すべての端末をペアリングし直す。

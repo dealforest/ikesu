@@ -278,6 +278,13 @@ class MainActivity : Activity() {
         if (showList) {
             block(text("判断待ち", 28f))
             block(text("${items.length()} 件", 18f))
+            // Each PC's whole ikesu screen, once opened with the face or fingerprint (PROTOCOL 4).
+            for (source in DecisionState.sources.values.filter { it.connected }) {
+                if (source.operable) block(button("🖥️ ${source.name} の画面を開く") {
+                    startActivity(Intent(this, ScreenActivity::class.java).putExtra(ScreenActivity.SOURCE, source.id))
+                })
+                else block(button("🖥️ ${source.name} の画面（顔・指紋で開く）") { unlock() })
+            }
             for (i in 0 until items.length()) items.optJSONObject(i)?.let { entry ->
                 val id = entry.optString("id")
                 val row = optionRow(i, decisionHeading(entry.optString("raw_title"), entry.optString("raw_body"), entry.optString("kind")), entry.optString("location"), i == listCursor, false, supplement = entry.optString("question_label")) {

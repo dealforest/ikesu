@@ -154,6 +154,8 @@ class DecisionService : Service() {
         val thisGeneration = ++generation
         // The lists stay until each PC sends a fresh one, so a reconnect keeps the open decision and the drafts.
         val previous = DecisionState.sources.toMap()
+        // Reconnecting ends every screen: it must not stay frozen on the old contents.
+        previous.keys.forEach { id -> ScreenBus.listener?.invoke(id, JSONObject().put("type", "operate_expired")) }
         previous.values.forEach { it.link?.close("つなぎ直します") }
         DecisionState.sources.clear()
         receiving.forEach { (key, value) -> value.first.close(); File(cacheDir, "video-$key.partial").delete() }
@@ -204,6 +206,8 @@ class DecisionService : Service() {
     /** Leaves only the headings of a relay PC's decisions and deletes their received videos. */
     private fun lock(source: DecisionSource) {
         source.operable = false
+        // An open screen must not keep showing the PC once the unlock is over or the link is gone.
+        ScreenBus.listener?.invoke(source.id, JSONObject().put("type", "operate_expired"))
         val keys = (0 until source.decisions.length()).flatMap { index ->
             val videos = source.decisions.optJSONObject(index)?.optJSONArray("videos") ?: JSONArray()
             (0 until videos.length()).mapNotNull { videos.optJSONObject(it)?.optString("key") }
@@ -223,7 +227,14 @@ class DecisionService : Service() {
     }
 
     private fun handle(source: DecisionSource, message: JSONObject) {
-        when (message.optString("type")) {
+        val type = message.optString("type")
+        // The open screen of this PC also needs these (PROTOCOL 4).
+        if (type.startsWith("screen_") || type == "operate_expired" || type == "error") ScreenBus.listener?.invoke(source.id, message)
+        // No screen is showing (the app went to the background while it opened): close it on the PC.
+        if ((type == "screen_opened" || type == "screen_data") && ScreenBus.listener == null)
+            source.send(JSONObject().put("type", "screen_close").put("screen", message.optInt("screen")))
+        if (type.startsWith("screen_")) return
+        when (type) {
             "snapshot" -> { source.connected = true; retries.remove(source.id); updateDecisions(source, message.optJSONArray("decisions") ?: JSONArray(), false) }
             "notice" -> { source.connected = true; if (!source.operable) updateDecisions(source, message.optJSONArray("decisions") ?: JSONArray(), true) }
             "operate_ok" -> { source.operable = true; changed() }

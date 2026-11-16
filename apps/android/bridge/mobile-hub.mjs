@@ -6,6 +6,9 @@ import { addDevice, b64u, loadDevices } from './devices.mjs';
 import { constantEqual, Pairing, verifyOperate } from './pairing.mjs';
 import { appTag } from './relay-client.mjs';
 import { validateAnswer, validateShown } from './messages.mjs';
+import { MAX_FILE_BYTES, Screen, saveIncomingFile, serverAlive, shellQuote, validSize } from './screen.mjs';
+
+const MAX_SCREEN_INPUT = 64 * 1024;
 
 const ONLY = (object, keys) => object && typeof object === 'object' && !Array.isArray(object) && Object.keys(object).every(key => keys.includes(key));
 const HANDSHAKE_WINDOW_MS = 60_000;
@@ -22,7 +25,7 @@ class Session {
     if (this.closed) return;
     this.closed = true;
     if (failedHandshake) this.hub.noteHandshakeFailure(this.id);
-    clearTimeout(this.handshakeTimer); this.stopOperating(false);
+    clearTimeout(this.handshakeTimer); this.stopOperating(false); this.closeScreen(false);
     if (this.slot) this.hub.pairing?.release(this.slot);
     if (this.candidate) this.hub.pairing?.dropCandidate(this.candidate);
     this.hub.sessions.delete(this.key);
@@ -42,7 +45,11 @@ class Session {
       const plain = this.noise.decrypt(buffer);
       // 分割したメッセージは、顔・指紋で開いた後の回答（画像つき）だけが使う。開く前は溜めさせない。
       if (plain[0] === 0x01 && !(this.role === 'app' && this.operating)) { this.close(); return; }
+      // 分割の最初の1通が届いたときの心拍を覚える。大きなファイルは届き終えるまでに心拍が進むので、送り始めの時点で比べる。
+      const wasIdle = this.assembler.parts.size === 0;
       message = this.assembler.push(plain);
+      if (message === undefined && wasIdle) this.chunkBeat = this.beatN;
+      this.messageBeat = plain[0] === 0x01 ? (this.chunkBeat ?? this.beatN) : this.beatN;
     } catch { this.close(); return; }
     if (message === undefined) return;
     try { await (this.role === 'pair' ? this.onPair(message) : this.onApp(message)); }
@@ -129,13 +136,89 @@ class Session {
     clearTimeout(this.idleTimer); clearInterval(this.beatTimer);
     const was = this.operating;
     this.operating = false; this.sentVideos.clear();
+    this.closeScreen(true);
     // 終わった接続は閉じる。同じ握手ハッシュへの古い署名を送り直して開き直すことをさせない。
     // アプリはつなぎ直し、新しい握手ハッシュに顔・指紋で署名し直す。
     if (was && notify) { this.send({ type: 'operate_expired' }); this.close(); }
   }
   fresh(message) {
     if (message.beat === undefined) return true;
-    return Number.isInteger(message.beat) && this.beatN - message.beat < 2;
+    // まだ送っていない番号の心拍は受けない。
+    const at = this.messageBeat ?? this.beatN;
+    return Number.isInteger(message.beat) && message.beat <= this.beatN && at - message.beat < 2;
+  }
+  // ---- 画面（PROTOCOL.md 4章）。見るには screen、打つには input の権限と新しい心拍が要る ----
+  closeScreen(notify) {
+    const screen = this.screen; if (!screen) return;
+    this.screen = null; screen.close();
+    if (notify) this.send({ type: 'screen_closed', screen: screen.id });
+  }
+  async onScreen(message) {
+    const type = message.type;
+    const deny = text => { this.hub.log(`${this.device.name}: 画面の要求（${type}）を断りました: ${text}`); this.send({ type: 'error', message: text }); };
+    if (!this.operating) { deny('operate required'); return; }
+    if (type === 'screen_open') {
+      if (!ONLY(message, ['type', 'cols', 'rows']) || !validSize(message.cols, message.rows)) { this.close(); return; }
+      if (!this.can('screen')) { deny('permission denied'); return; }
+      this.closeScreen(true);
+      const ticket = this.screenTicket = (this.screenTicket ?? 0) + 1;
+      if (!await this.hub.serverAlive()) { deny('ikesu のサーバーにつながりません'); return; }
+      // 待っている間に次の screen_open が来たら、こちらは開かない（PTY を2つ作らない）。
+      if (!this.operating || this.closed || ticket !== this.screenTicket) return;
+      this.closeScreen(true);
+      const id = this.hub.nextScreenId++;
+      try {
+        this.screen = this.hub.openScreen({ id, cols: message.cols, rows: message.rows,
+          onData: (seq, bytes) => this.send({ type: 'screen_data', screen: id, seq, data: bytes.toString('base64') }),
+          onExit: info => {
+            if (!info?.closedByUs) this.hub.log(`${this.device.name}: 画面の ikesu が終わりました（終了コード ${info?.exitCode}、シグナル ${info?.signal}）: ${JSON.stringify(info?.head?.toString('utf8').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').slice(0, 200))}`);
+            if (this.screen?.id === id) { this.screen = null; this.send({ type: 'screen_closed', screen: id }); }
+          } });
+      } catch (error) { this.hub.log(`画面を開けません: ${error.message}`); deny('画面を開けません'); return; }
+      this.touch();
+      this.hub.log(`${this.device.name}: 画面を開きました（${message.cols}×${message.rows}）`);
+      this.send({ type: 'screen_opened', screen: id, cols: message.cols, rows: message.rows });
+      return;
+    }
+    const screen = this.screen;
+    if (type === 'screen_input') {
+      if (!ONLY(message, ['type', 'screen', 'beat', 'data']) || typeof message.data !== 'string' || message.data.length > MAX_SCREEN_INPUT * 2) { this.close(); return; }
+      if (!this.can('input')) { deny('permission denied'); return; }
+      // 打つときは心拍が必須。古い心拍のキー入力は、遅れて届いたものとして捨てる（PROTOCOL.md 3.5）。
+      if (!Number.isInteger(message.beat) || !this.fresh(message)) { deny('stale beat'); return; }
+      if (!screen || screen.id !== message.screen) return;
+      const bytes = Buffer.from(message.data, 'base64');
+      if (bytes.length > MAX_SCREEN_INPUT) { this.close(); return; }
+      this.touch(); screen.write(bytes); return;
+    }
+    if (type === 'screen_file') {
+      // スマホのファイルを PC に保存し、そのパスを画面に打つ（ドラッグ＆ドロップと同じ形。Enter は押さない）。
+      if (!ONLY(message, ['type', 'screen', 'beat', 'name', 'data']) || typeof message.name !== 'string' || typeof message.data !== 'string' ||
+          message.data.length > Math.ceil(MAX_FILE_BYTES / 3) * 4 + 4) { this.close(); return; }
+      if (!this.can('input')) { deny('permission denied'); return; }
+      if (!Number.isInteger(message.beat) || !this.fresh(message)) { deny('stale beat'); return; }
+      if (!screen || screen.id !== message.screen) return;
+      const bytes = Buffer.from(message.data, 'base64');
+      if (bytes.length > MAX_FILE_BYTES) { deny('ファイルが大きすぎます'); return; }
+      let file;
+      try { file = this.hub.saveFile(message.name, bytes); } catch (error) { deny(`保存できませんでした: ${error.message}`); return; }
+      this.hub.log(`${this.device.name}: スマホのファイルを保存しました: ${file}`);
+      // 貼り付けの形で打つ。ikesu が prefix やメニューの待ちでも、パスの文字が操作として読まれない。
+      this.touch(); screen.write(Buffer.from(`\x1b[200~${shellQuote(file)} \x1b[201~`));
+      this.send({ type: 'screen_file_saved', screen: screen.id, path: file });
+      return;
+    }
+    if (type === 'screen_resize') {
+      if (!ONLY(message, ['type', 'screen', 'cols', 'rows']) || !validSize(message.cols, message.rows)) { this.close(); return; }
+      if (screen && screen.id === message.screen) { this.touch(); screen.resize(message.cols, message.rows); }
+      return;
+    }
+    if (type === 'screen_close') {
+      if (!ONLY(message, ['type', 'screen'])) { this.close(); return; }
+      if (screen && screen.id === message.screen) this.closeScreen(true);
+      return;
+    }
+    this.close();
   }
   async onApp(message) {
     const type = message?.type;
@@ -152,6 +235,7 @@ class Session {
       await this.hub.shown(validateShown(message).ids); return;
     }
     if (type === 'operate_end') { this.stopOperating(true); return; }
+    if (typeof type === 'string' && type.startsWith('screen_')) { await this.onScreen(message); return; }
     if (type !== 'answer' && type !== 'later') { this.close(); return; }
     if (!this.operating) { this.send({ type: 'error', sequence: message?.sequence, message: 'operate required' }); return; }
     if (!this.can('answer')) { this.send({ type: 'error', sequence: message?.sequence, message: 'permission denied' }); return; }
@@ -170,8 +254,13 @@ class Session {
 
 export class MobileHub {
   constructor({ configDir, noiseKey, relay, transport, snapshot, answer, later, shown = async () => {}, videoPath = () => null, createdOf,
-    now = Date.now, log = () => {}, beatMs = 5000, idleMs = 600_000, handshakeMs = 10_000 }) {
+    now = Date.now, log = () => {}, beatMs = 5000, idleMs = 600_000, handshakeMs = 10_000,
+    ikesuBin = 'ikesu', serverAlive: alive, openScreen, saveFile }) {
     Object.assign(this, { configDir, noiseKey, relay, room: relay.room, transport, snapshot, answer, later, shown, videoPath, createdOf, now, log, beatMs, idleMs, handshakeMs });
+    this.nextScreenId = 1;
+    this.serverAlive = alive ?? (() => serverAlive(ikesuBin));
+    this.openScreen = openScreen ?? (options => new Screen({ ...options, ikesuBin }));
+    this.saveFile = saveFile ?? ((name, bytes) => saveIncomingFile(name, bytes));
     this.roomBytes = Buffer.from(relay.room, 'base64url');
     this.sessions = new Map(); this.devices = []; this.pairing = null; this.failures = new Map();
   }

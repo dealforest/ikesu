@@ -81,7 +81,7 @@ async function run() {
   // スマホとは中継（relay.json）だけでつながる。Tailscale と合言葉の経路は 0.4.155 で消した。
   const mobile = await startMobile({ configDir, stateDir, log, decisions: {
     snapshot: () => daemon.snapshot(), answer: value => daemon.answer(value), later: id => daemon.later(id), shown: ids => daemon.shown(ids),
-    videoPath: (id, key) => daemon.videoPath(id, key), createdOf: id => daemon.find(id)?.decision?.created_unix_ms } });
+    videoPath: (id, key) => daemon.videoPath(id, key), createdOf: id => daemon.find(id)?.decision?.created_unix_ms, ikesuBin: config.ikesuBin } });
   if (!mobile) { log('relay.json がありません。main.mjs relay-setup --url <wss://…> で中継を設定してください'); await lock.close(); return; }
   daemon.onSnapshot = () => mobile.hub.publish();
   daemon.hasClients = () => mobile.hub.clientCount() > 0;
