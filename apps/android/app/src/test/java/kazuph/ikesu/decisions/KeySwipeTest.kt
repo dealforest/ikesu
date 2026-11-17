@@ -91,3 +91,18 @@ class VoiceDownKeyTest {
         assertEquals(VoiceDownKey.Action.ENTER, VoiceDownKey().press(false, false))
     }
 }
+
+class KeyRepeatTest {
+    @Test fun keysWithoutAlternativeThatTypeRepeat() {
+        assertTrue(KeyRepeat.repeats(ExtraKey("BKSP", ScreenKey.Code(67))))
+        assertTrue(KeyRepeat.repeats(ExtraKey("↓", ScreenKey.Code(20))))
+        assertTrue(KeyRepeat.repeats(ExtraKey("#", ScreenKey.Text("#"))))
+    }
+
+    @Test fun keysWithAlternativeModifiersActionsAndBytesDoNotRepeat() {
+        assertFalse(KeyRepeat.repeats(ExtraKey("ESC", ScreenKey.Code(111), "exit", ScreenKey.Bytes("exit\r".toByteArray()))))
+        assertFalse(KeyRepeat.repeats(ExtraKey("⇧", ScreenKey.Modifier(KeyBytes.SHIFT))))
+        assertFalse(KeyRepeat.repeats(ExtraKey("🎤", ScreenKey.Action { })))
+        assertFalse(KeyRepeat.repeats(ExtraKey("^T", ScreenKey.Bytes(byteArrayOf(20)))))
+    }
+}

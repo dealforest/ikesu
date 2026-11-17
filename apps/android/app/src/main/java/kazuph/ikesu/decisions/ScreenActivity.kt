@@ -420,6 +420,18 @@ class ScreenActivity : Activity() {
             bubble?.showAtLocation(this, Gravity.NO_GRAVITY, at[0] + (width - label.measuredWidth) / 2, at[1] - label.measuredHeight - (6 * dp).toInt())
             markBubble()
         }
+        // 長押しの別の動きが無い文字・キーは、押している間くり返す（BKSP を押し続けると消え続ける）。
+        if (KeyRepeat.repeats(key)) {
+            val again = object : Runnable { override fun run() { press(key.main); postDelayed(this, KeyRepeat.INTERVAL_MS) } }
+            setOnTouchListener { v, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> { v.isPressed = true; press(key.main); v.postDelayed(again, KeyRepeat.DELAY_MS) }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { v.removeCallbacks(again); v.isPressed = false }
+                }
+                true
+            }
+            return@apply
+        }
         setOnTouchListener { v, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> { swipe.down(event.y); v.postDelayed(longPress, 350); v.isPressed = true }

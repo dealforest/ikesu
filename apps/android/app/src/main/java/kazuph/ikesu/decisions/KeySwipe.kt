@@ -60,3 +60,15 @@ class VoiceDownKey {
     /** The text was typed (or could not be made): whether to press Enter now. Clears the request either way. */
     fun textDone(typed: Boolean): Boolean { val enter = enterAfterText && typed; enterAfterText = false; return enter }
 }
+
+/**
+ * Keys without a long-press alternative repeat while held, as Termux's extra keys do (BKSP keeps deleting).
+ * Only keys that type a character or a key code repeat: modifiers, actions (paste, files, voice) and raw byte
+ * keys such as ^T (ikesu's prefix) do not.
+ */
+object KeyRepeat {
+    const val DELAY_MS = 350L
+    const val INTERVAL_MS = 50L
+
+    fun repeats(key: ExtraKey): Boolean = key.popup == null && (key.main is ScreenKey.Text || key.main is ScreenKey.Code)
+}
