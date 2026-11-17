@@ -331,7 +331,8 @@ class ScreenActivity : Activity() {
 
     /** A notification's decision opens as a panel over this screen. */
     private fun receivePanelRequest(intent: Intent) {
-        val panel = intent.getParcelableExtra(PANEL, Intent::class.java) ?: return
+        // getParcelableExtra(name, class) needs Android 13; the app runs from Android 12.
+        @Suppress("DEPRECATION") val panel = intent.getParcelableExtra<Intent>(PANEL) ?: return
         intent.removeExtra(PANEL)
         startActivity(panel.setClass(this, MainActivity::class.java))
     }

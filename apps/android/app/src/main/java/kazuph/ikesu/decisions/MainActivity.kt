@@ -52,7 +52,6 @@ class MainActivity : Activity() {
                              var uncertain: Boolean = false, var submittedItem: JSONObject? = null,
                              var cursorNavigated: Boolean = false)
     private var selectedId: String? = null
-    /** The PC whose screen was asked for before the unlock: open it as soon as that PC accepts the signature. */
     private var pendingCamera: Uri? = null
     private var pendingAttachmentId: String? = null
     private var settingsVisible = false
