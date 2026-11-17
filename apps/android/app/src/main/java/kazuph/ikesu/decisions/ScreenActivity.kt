@@ -366,10 +366,18 @@ class ScreenActivity : Activity() {
     override fun onPause() { resumed = false; super.onPause() }
 
     /** Volume keys, as on the decisions: down = Enter, down held = the decisions (or, while recording, stop and type
-     *  it), up held = start or stop recording. A short up press still raises the volume. */
+     *  it), up held = start or stop recording. A short up press still raises the volume. While recording, a short down
+     *  press also stops and types it; down presses while it becomes text press Enter once after it is typed. */
+    private val voiceDown = VoiceDownKey()
     private val volume = VolumeNav(
         up = { getSystemService(android.media.AudioManager::class.java).adjustSuggestedStreamVolume(android.media.AudioManager.ADJUST_RAISE, android.media.AudioManager.USE_DEFAULT_STREAM_TYPE, android.media.AudioManager.FLAG_SHOW_UI) },
-        down = { send(byteArrayOf(13)) },
+        down = {
+            when (voiceDown.press(voice.recording, transcribing)) {
+                VoiceDownKey.Action.STOP_RECORDING -> toggleVoice()
+                VoiceDownKey.Action.ENTER -> send(byteArrayOf(13))
+                VoiceDownKey.Action.NOTHING -> {}
+            }
+        },
         confirm = { if (voice.recording) toggleVoice() else openPanel("list") },
         back = { toggleVoice() })
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
@@ -394,10 +402,11 @@ class ScreenActivity : Activity() {
         if (key.label == "🎤") micView = this
         // Long press shows a bubble above the key with what the swipe up would type; sliding up while holding types it.
         // Letting go without sliding up types nothing. A quick swipe up types it at once, as before.
-        var downY = 0f; var up = false; var bubble: android.widget.PopupWindow? = null
+        // 1回のタッチで打つのは1回だけ。上へはじいて代わりのキー（exit など）を打った後は、指が動いても離しても打たない。
+        val swipe = KeySwipe(key.popup != null, 24 * dp); var bubble: android.widget.PopupWindow? = null
         fun hideBubble() { bubble?.dismiss(); bubble = null }
         fun markBubble() {
-            (bubble?.contentView as? TextView)?.apply { setTextColor(if (up) Color.BLACK else GREEN); background = keyBackground(up, dp) }
+            (bubble?.contentView as? TextView)?.apply { setTextColor(if (swipe.up) Color.BLACK else GREEN); background = keyBackground(swipe.up, dp) }
         }
         val longPress = Runnable {
             if (key.popupLabel == null || bubble != null) return@Runnable
@@ -413,25 +422,24 @@ class ScreenActivity : Activity() {
         }
         setOnTouchListener { v, event ->
             when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { downY = event.y; up = false; v.postDelayed(longPress, 350); v.isPressed = true }
+                MotionEvent.ACTION_DOWN -> { swipe.down(event.y); v.postDelayed(longPress, 350); v.isPressed = true }
                 MotionEvent.ACTION_MOVE -> {
-                    val nowUp = key.popup != null && downY - event.y > 24 * dp
-                    if (nowUp != up) { up = nowUp; markBubble() }
-                    // A quick swipe up without waiting for the bubble types the alternative right away.
-                    if (up && bubble == null) { v.removeCallbacks(longPress); v.isPressed = false; press(key.popup!!); downY = Float.MAX_VALUE / 2 }
+                    val (changed, now) = swipe.move(event.y, bubble != null)
+                    if (changed) markBubble()
+                    // A quick swipe up without waiting for the bubble types the alternative right away, once.
+                    if (now != null) { v.removeCallbacks(longPress); v.isPressed = false; press(key.popup!!) }
                 }
                 MotionEvent.ACTION_UP -> {
                     v.removeCallbacks(longPress); v.isPressed = false
                     val shown = bubble != null
                     hideBubble()
-                    when {
-                        downY > Float.MAX_VALUE / 4 -> {}
-                        shown && up -> press(key.popup!!)
-                        shown -> {}
-                        else -> press(key.main)
+                    when (swipe.release(shown)) {
+                        KeySwipe.Press.ALTERNATIVE -> press(key.popup!!)
+                        KeySwipe.Press.MAIN -> press(key.main)
+                        null -> {}
                     }
                 }
-                MotionEvent.ACTION_CANCEL -> { v.removeCallbacks(longPress); v.isPressed = false; hideBubble() }
+                MotionEvent.ACTION_CANCEL -> { swipe.cancel(); v.removeCallbacks(longPress); v.isPressed = false; hideBubble() }
             }
             true
         }
@@ -711,10 +719,15 @@ class ScreenActivity : Activity() {
                 runOnUiThread {
                     transcribing = false; markMic()
                     result.onSuccess { text ->
-                        if (text.isEmpty()) status.text = "声を聞き取れませんでした"
+                        if (text.isEmpty()) { voiceDown.textDone(false); status.text = "声を聞き取れませんでした" }
                         // Line breaks would press Enter and control characters would act as keys: type plain text only.
-                        else { send(text.replace(Regex("[\\r\\n\\t]+"), " ").replace(Regex("\\p{Cntrl}"), "").toByteArray(Charsets.UTF_8)); status.text = "${target()?.name ?: "PC"} の画面" }
-                    }.onFailure { error -> status.text = error.message ?: "文字起こしに失敗しました" }
+                        else {
+                            send(text.replace(Regex("[\\r\\n\\t]+"), " ").replace(Regex("\\p{Cntrl}"), "").toByteArray(Charsets.UTF_8))
+                            // 文字にしている間に音量の下を押していたら、打ち終えてから Enter を1回押す。
+                            if (voiceDown.textDone(true)) send(byteArrayOf(13))
+                            status.text = "${target()?.name ?: "PC"} の画面"
+                        }
+                    }.onFailure { error -> voiceDown.textDone(false); status.text = error.message ?: "文字起こしに失敗しました" }
                 }
             }.start()
             return
