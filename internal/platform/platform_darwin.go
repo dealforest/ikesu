@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"strings"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -17,6 +18,14 @@ func foregroundPID(fd int) int {
 		return 0
 	}
 	return pgid
+}
+
+func procStartTime(pid int) (time.Time, bool) {
+	kp, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
+	if err != nil || kp.Proc.P_pid != int32(pid) || kp.Proc.P_starttime.Sec <= 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(int64(kp.Proc.P_starttime.Sec), 0), true
 }
 
 func procName(pid int) string {

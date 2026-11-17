@@ -5,8 +5,6 @@ package platform
 
 import (
 	"github.com/kazuph/ikesu/internal/childenv"
-	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -64,24 +62,7 @@ func PPID(pid int) int {
 // Used by the session-file observer to correlate a freshly created agent
 // session file with the process that started it.
 func ProcStart(pid int) (time.Time, bool) {
-	if runtime.GOOS == "darwin" {
-		cmd := childenv.Command("ps", "-o", "lstart=", "-p", strconv.Itoa(pid))
-		cmd.Env = append(childenv.Scrub(os.Environ()), "LC_ALL=C")
-		out, err := cmd.Output()
-		if err != nil {
-			return time.Time{}, false
-		}
-		ts, err := time.ParseInLocation("Mon Jan _2 15:04:05 2006", strings.TrimSpace(string(out)), time.Local)
-		return ts, err == nil
-	}
-
-	out, err := childenv.Command("ps", "-o", "etimes=", "-p", strconv.Itoa(pid)).Output()
-	if err != nil {
-		return time.Time{}, false
-	}
-	secs, err := strconv.Atoi(strings.TrimSpace(string(out)))
-	if err != nil {
-		return time.Time{}, false
-	}
-	return time.Now().Add(-time.Duration(secs) * time.Second), true
+	// macOS は sysctl で読む。ps を起動すると、ペインの観察のたびにプロセスを作り、サーバーの CPU を食っていた
+	// （2026-11-17 の CPU プロファイルで ps の起動と環境の掃除が約2割）。
+	return procStartTime(pid)
 }
