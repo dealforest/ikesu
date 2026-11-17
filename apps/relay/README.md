@@ -20,7 +20,29 @@ npm test
 
 workerd をローカルで動かして、15 件の試験を流します（`@cloudflare/vitest-plugin`）。
 
-## デプロイ
+## ボタンでデプロイ（自分の Cloudflare アカウントへ）
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/kazuph/ikesu/tree/main/apps/relay)
+
+中継は、使う人がそれぞれ自分の Cloudflare アカウントに置きます。中継の鍵（`RELAY_KEY`）は Worker 全体で1つで、持つ人はどの部屋にも PC として入れるため、他人の中継は使いません。
+
+1. PC で鍵を作り、控えます。
+
+   ```sh
+   node -e 'console.log(require("crypto").randomBytes(32).toString("base64url"))'
+   ```
+
+2. 上のボタンを押します。Cloudflare にログインし、GitHub か GitLab に置くリポジトリの名前を決め、`RELAY_KEY` の欄に1の値を貼って、デプロイします。
+3. デプロイが終わると `https://ikesu-relay.<サブドメイン>.workers.dev` が出ます。
+4. PC で bridge に中継を設定します。`https://` を `wss://` に変え、1と同じ鍵を渡します。
+
+   ```sh
+   node apps/android/bridge/main.mjs relay-setup --url wss://ikesu-relay.<サブドメイン>.workers.dev --key <1の値>
+   ```
+
+5. スマホを登録します。`node apps/android/bridge/main.mjs pair --name <PC の名前>` の QR をアプリで読みます（`apps/android/README.md`）。
+
+## デプロイ（コマンドで）
 
 1. `npm install`
 2. Cloudflare にログインします。`npx wrangler login`

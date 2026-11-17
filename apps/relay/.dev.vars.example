@@ -1,0 +1,4 @@
+# The key that the relay and your PC's bridge share (base64url, 32 bytes). Make one with:
+#   node -e 'console.log(require("crypto").randomBytes(32).toString("base64url"))'
+# Give the same value to the bridge: node apps/android/bridge/main.mjs relay-setup --url wss://<your worker> --key <value>
+RELAY_KEY=

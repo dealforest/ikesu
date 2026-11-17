@@ -89,6 +89,21 @@ koi = false
 
 サイドバーが閉じているときや、鯉を出していないときは、鯉のための描き直しをしません。ブランドサイトのソースは [site/index.html](site/index.html) です。
 
+## スマホのアプリ（Android）
+
+Android のアプリで、ikesu の判断待ちを通知で受けて答え、PC の ikesu の画面をスマホで開けます。スマホと PC は Cloudflare Workers に置く小さな中継を通して、端から端まで暗号のまま話します。中継は中身を読めません。
+
+中継は、使う人がそれぞれ自分の Cloudflare アカウントに置きます。
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/kazuph/ikesu/tree/main/apps/relay)
+
+1. 中継の鍵を作る: `node -e 'console.log(require("crypto").randomBytes(32).toString("base64url"))'`
+2. ボタンを押し、`RELAY_KEY` の欄に鍵を貼って、デプロイする。
+3. PC で: `node apps/android/bridge/main.mjs relay-setup --url wss://ikesu-relay.<サブドメイン>.workers.dev --key <鍵>`
+4. スマホを登録する: `node apps/android/bridge/main.mjs pair --name <PC の名前>` の QR をアプリで読む。
+
+詳しくは [apps/relay](apps/relay/README.md) と [apps/android](apps/android/README.md)。
+
 ## 設定
 
 設定ファイルは `~/.config/ikesu/config.toml` です（`IKESU_CONFIG` で変えられます）。

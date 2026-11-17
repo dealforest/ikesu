@@ -87,6 +87,21 @@ koi = false
 
 The koi stop redrawing when the sidebar is hidden or no koi are shown. The brand site source is [site/index.html](site/index.html).
 
+## Phone app (Android)
+
+The Android app shows ikesu's decisions as notifications, answers them, and opens the PC's ikesu screen on the phone. The phone and the PC talk through a small relay on Cloudflare Workers, encrypted end to end; the relay cannot read what passes through it.
+
+Each user deploys their own relay to their own Cloudflare account:
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/kazuph/ikesu/tree/main/apps/relay)
+
+1. Make a relay key: `node -e 'console.log(require("crypto").randomBytes(32).toString("base64url"))'`
+2. Press the button, paste the key into `RELAY_KEY`, and deploy.
+3. On the PC: `node apps/android/bridge/main.mjs relay-setup --url wss://ikesu-relay.<your-subdomain>.workers.dev --key <the key>`
+4. Pair the phone: `node apps/android/bridge/main.mjs pair --name <PC name>` and scan the QR code with the app.
+
+Details (Japanese): [apps/relay](apps/relay/README.md), [apps/android](apps/android/README.md).
+
 ## Configuration
 
 The configuration file is `~/.config/ikesu/config.toml` (override with `IKESU_CONFIG`).
