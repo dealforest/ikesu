@@ -24,10 +24,10 @@ type ModelLimit struct {
 
 // Claude is Claude Code's rate-limit state.
 type Claude struct {
-	FiveHour, SevenDay                 *Bucket
-	ModelLimits                        []ModelLimit
+	FiveHour, SevenDay                     *Bucket
+	ModelLimits                            []ModelLimit
 	FiveHourObservedAt, SevenDayObservedAt time.Time
-	ObservedAt                         time.Time
+	ObservedAt                             time.Time
 }
 
 // ParseClaudeRateLimits reads the statusline JSON ({"rate_limits": {...}}) or
