@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,6 +30,7 @@ const (
 	// scanInterval is how often the folder is re-read for added or removed scripts.
 	scanInterval = 10 * time.Second
 	maxText      = 200
+	maxLines     = 20
 )
 
 var namePattern = regexp.MustCompile(`^(.+)\.([0-9]+)([smhd])(\.[^.]+)?$`)
@@ -51,15 +53,17 @@ func ParseName(file string) (string, time.Duration, bool) {
 // Item is one plugin's latest result.
 type Item struct {
 	File, Name string
-	Text       string // first non-empty line of the last successful run
-	Err        string // why the last run failed, empty on success
-	Ran        bool   // false until the first run finished
+	Lines      []string // lines before "---" of the last successful run; SGR colors kept
+	Err        string   // why the last run failed, empty on success
+	Ran        bool     // false until the first run finished
 }
 
 // Runner runs the scripts in Dir.
 type Runner struct {
 	Dir      string
 	OnChange func()
+	// Columns, when set, is passed to scripts as IKESU_SIDEBAR_COLUMNS so they can fit the sidebar.
+	Columns func() int
 
 	mu    sync.Mutex
 	items map[string]*Item
@@ -165,8 +169,13 @@ func (r *Runner) runOne(ctx context.Context, file string) {
 	cmd := childenv.CommandContextGroup(ctx, filepath.Join(r.Dir, file))
 	cmd.Dir = r.Dir
 	cmd.WaitDelay = time.Second
+	if r.Columns != nil {
+		if n := r.Columns(); n > 0 {
+			cmd.Env = append(cmd.Env, "IKESU_SIDEBAR_COLUMNS="+strconv.Itoa(n))
+		}
+	}
 	out, err := cmd.Output()
-	text, errText := FirstLine(out), ""
+	lines, errText := Lines(out), ""
 	if err != nil {
 		errText = err.Error()
 		if ctx.Err() == context.DeadlineExceeded {
@@ -177,12 +186,12 @@ func (r *Runner) runOne(ctx context.Context, file string) {
 	it := r.items[file]
 	changed := false
 	if it != nil {
-		prev := *it
+		prevLines, prevErr, prevRan := it.Lines, it.Err, it.Ran
 		if errText == "" {
-			it.Text = text
+			it.Lines = lines
 		}
 		it.Err, it.Ran = errText, true
-		changed = prev != *it
+		changed = !slices.Equal(prevLines, it.Lines) || prevErr != it.Err || prevRan != it.Ran
 	}
 	r.mu.Unlock()
 	if changed && r.OnChange != nil {
@@ -190,32 +199,81 @@ func (r *Runner) runOne(ctx context.Context, file string) {
 	}
 }
 
-// FirstLine is the first non-empty line of out without escape sequences or
-// control characters (SwiftBar treats the lines after it as a menu).
-func FirstLine(out []byte) string {
+// Lines are the output lines before "---" (SwiftBar treats the rest as a
+// menu), without SwiftBar's " | key=value" parameters. SGR color sequences
+// are kept; other escape sequences and control characters are removed.
+// Leading and trailing empty lines are dropped.
+func Lines(out []byte) []string {
 	s := bufio.NewScanner(bytes.NewReader(out))
 	s.Buffer(make([]byte, 0, 4096), 1<<20)
+	var lines []string
 	for s.Scan() {
-		line := strings.TrimSpace(ansi.Strip(s.Text()))
-		if line == "---" {
+		raw := strings.TrimRight(s.Text(), " \t\r")
+		if strings.TrimSpace(ansi.Strip(raw)) == "---" {
 			break
 		}
-		line = strings.Map(func(r rune) rune {
-			if r < 0x20 || r == 0x7f {
-				return -1
-			}
-			return r
-		}, line)
-		// SwiftBar の「| color=red」のような指定は表示しない。
+		line := keepSGR(raw)
 		if i := strings.Index(line, " | "); i >= 0 {
-			line = strings.TrimSpace(line[:i])
+			line = strings.TrimRight(line[:i], " ")
 		}
-		if line != "" {
-			if r := []rune(line); len(r) > maxText {
-				line = string(r[:maxText])
-			}
-			return line
+		if ansi.StringWidth(line) > maxText {
+			line = ansi.Truncate(line, maxText, "")
+		}
+		if len(lines) == 0 && strings.TrimSpace(ansi.Strip(line)) == "" {
+			continue
+		}
+		lines = append(lines, line)
+		if len(lines) == maxLines {
+			break
 		}
 	}
-	return ""
+	for len(lines) > 0 && strings.TrimSpace(ansi.Strip(lines[len(lines)-1])) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
+
+var sgr = regexp.MustCompile(`^\x1b\[[0-9;]*m`)
+
+// keepSGR removes control characters and escape sequences except SGR (colors).
+func keepSGR(line string) string {
+	var b strings.Builder
+	for i := 0; i < len(line); {
+		c := line[i]
+		if c == 0x1b {
+			if m := sgr.FindString(line[i:]); m != "" {
+				b.WriteString(m)
+				i += len(m)
+				continue
+			}
+			// skip any other escape: ESC [ ... final byte, or ESC + one byte
+			j := i + 1
+			if j < len(line) && line[j] == ']' {
+				// OSC: up to BEL or ESC \
+				for j < len(line) && line[j] != 0x07 && !(line[j] == 0x1b && j+1 < len(line) && line[j+1] == '\\') {
+					j++
+				}
+				if j < len(line) && line[j] == 0x1b {
+					j++
+				}
+				i = j + 1
+				continue
+			}
+			if j < len(line) && line[j] == '[' {
+				j++
+				for j < len(line) && (line[j] < 0x40 || line[j] > 0x7e) {
+					j++
+				}
+			}
+			i = j + 1
+			continue
+		}
+		if c < 0x20 || c == 0x7f {
+			i++
+			continue
+		}
+		b.WriteByte(c)
+		i++
+	}
+	return b.String()
 }

@@ -65,11 +65,9 @@ ikesu mac-dialog status
 
 Lets you answer agents' confirmations and questions in a native window. The panel never takes the keyboard. While you are looking at the space of the pane that asked, the window is placed behind other windows.
 
-### Sidebar usage and plugins
+### Sidebar plugins
 
-The bottom of the sidebar shows the Claude Code and Codex usage limits, read the same way as AgentPal: the colored part is what is left, │ is the even pace for the time left, red is use beyond the pace and green is room under it.
-
-Executable scripts in `~/.config/ikesu/plugins/sidebar/` run at the interval in their name, and their first output line is shown in the sidebar (named like SwiftBar plugins).
+Executable scripts in `~/.config/ikesu/plugins/sidebar/` run at the interval in their name (named like SwiftBar plugins). The lines they print before `---` are shown, with their ANSI colors, at the bottom of the sidebar. Scripts get the sidebar width in `IKESU_SIDEBAR_COLUMNS`.
 
 ```sh
 mkdir -p ~/.config/ikesu/plugins/sidebar
@@ -77,7 +75,7 @@ printf '#!/bin/sh\ncurl -s "wttr.in/Tokyo?format=3"\n' > ~/.config/ikesu/plugins
 chmod +x ~/.config/ikesu/plugins/sidebar/tenki.1h.sh
 ```
 
-Write the interval as `10s`, `5m`, `1h` or `1d`. Intervals under ten seconds run every ten seconds, and a script still running after ten seconds is stopped. Click the "使用量" (usage) or "プラグイン" (plugins) heading to fold it.
+Write the interval as `10s`, `5m`, `1h` or `1d`. Intervals under ten seconds run every ten seconds, and a script still running after ten seconds is stopped. Each plugin gets a heading; click it to fold. For Claude Code and Codex usage limits, call AgentPal's `agentpal usage` from a plugin.
 
 ## Koi pond
 

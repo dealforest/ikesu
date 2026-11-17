@@ -24,11 +24,13 @@ func TestParseName(t *testing.T) {
 	}
 }
 
-func TestFirstLine(t *testing.T) {
-	if got := FirstLine([]byte("\n\x1b[31m☀ 晴れ 18℃\x1b[0m | color=red\n---\nmenu\n")); got != "☀ 晴れ 18℃" {
-		t.Fatalf("first line = %q", got)
+func TestLines(t *testing.T) {
+	got := Lines([]byte("\n\x1b[31m☀ 晴れ\x1b[0m 18℃ | color=red\n\x1b]0;title\x07second\x01 line\n\n---\nmenu\n"))
+	want := []string{"\x1b[31m☀ 晴れ\x1b[0m 18℃", "second line"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("lines = %q", got)
 	}
-	if got := FirstLine([]byte("---\nmenu\n")); got != "" {
+	if got := Lines([]byte("---\nmenu\n")); len(got) != 0 {
 		t.Fatalf("menu only = %q", got)
 	}
 }
@@ -41,11 +43,11 @@ func TestRunnerRunsExecutableScripts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("tenki.1h.sh", "#!/bin/sh\necho 'sunny 18C'\necho second\n", 0o755)
+	write("tenki.1h.sh", "#!/bin/sh\necho 'sunny 18C'\necho \"cols=$IKESU_SIDEBAR_COLUMNS\"\n", 0o755)
 	write("off.1h.sh", "#!/bin/sh\necho never\n", 0o644)
 	write("fail.1h.sh", "#!/bin/sh\nexit 3\n", 0o755)
 	changed := make(chan struct{}, 16)
-	r := &Runner{Dir: dir, OnChange: func() { changed <- struct{}{} }}
+	r := &Runner{Dir: dir, OnChange: func() { changed <- struct{}{} }, Columns: func() int { return 24 }}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go r.Run(ctx)
@@ -53,7 +55,7 @@ func TestRunnerRunsExecutableScripts(t *testing.T) {
 	for {
 		items := r.Items()
 		if len(items) == 2 && items[0].Ran && items[1].Ran {
-			if items[0].File != "fail.1h.sh" || items[0].Err == "" || items[1].Text != "sunny 18C" || items[1].Err != "" {
+			if items[0].File != "fail.1h.sh" || items[0].Err == "" || len(items[1].Lines) != 2 || items[1].Lines[0] != "sunny 18C" || items[1].Lines[1] != "cols=24" || items[1].Err != "" {
 				t.Fatalf("items = %+v", items)
 			}
 			return

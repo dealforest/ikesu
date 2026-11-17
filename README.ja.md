@@ -67,11 +67,9 @@ ikesu mac-dialog status
 
 エージェントの確認や質問を、ネイティブの窓で答えられるようにします。パネルはキーボードを奪いません。その質問を出したペインのスペースを今見ているときは、窓を背面に置きます。
 
-### サイドバーの使用量とプラグイン
+### サイドバーのプラグイン
 
-サイドバーの下に、Claude Code と Codex の使用量の上限を出します。読み方は AgentPal と同じです。色の部分が残りで、│ は残り時間で使ったときの目安です。赤は目安より使いすぎ、緑は余裕を表します。
-
-`~/.config/ikesu/plugins/sidebar/` に置いた実行できるスクリプトは、名前の間隔ごとに動きます。出力の1行目がサイドバーに出ます（SwiftBar と同じ名前の付け方）。
+`~/.config/ikesu/plugins/sidebar/` に置いた実行できるスクリプトを、名前に書いた間隔ごとに動かします。出力の `---` より前の行を、色（ANSI）ごとサイドバーの下に出します（SwiftBar と同じ名前の付け方）。スクリプトには、サイドバーの幅が `IKESU_SIDEBAR_COLUMNS` で渡ります。
 
 ```sh
 mkdir -p ~/.config/ikesu/plugins/sidebar
@@ -79,7 +77,7 @@ printf '#!/bin/sh\ncurl -s "wttr.in/Tokyo?format=3"\n' > ~/.config/ikesu/plugins
 chmod +x ~/.config/ikesu/plugins/sidebar/tenki.1h.sh
 ```
 
-間隔は `10s`・`5m`・`1h`・`1d` のように書きます。10秒より短い間隔は10秒にし、10秒で終わらないスクリプトは止めます。「使用量」と「プラグイン」は見出しをクリックすると閉じます。
+間隔は `10s`・`5m`・`1h`・`1d` のように書きます。10秒より短い間隔は10秒にし、10秒で終わらないスクリプトは止めます。プラグインごとに見出しが付き、クリックすると閉じます。Claude Code と Codex の使用量は、AgentPal の `agentpal usage` をプラグインから呼ぶと出せます。
 
 ## 錦鯉の池
 

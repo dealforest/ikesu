@@ -1,22 +1,20 @@
 package render
 
 import (
+	"image/color"
+	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/kazuph/ikesu/internal/model"
-	"github.com/kazuph/ikesu/internal/usage"
 )
 
-func TestSidebarPanelDrawsUsageAndPluginsAboveFooter(t *testing.T) {
+func TestSidebarPanelDrawsPluginLinesWithColorsAboveFooter(t *testing.T) {
 	s := model.New("/tmp", 120, 40)
 	s.SidebarVisible = true
-	now := time.Unix(1000, 0)
-	b := usage.Bucket{UsedPercent: 70, WindowSeconds: 100, ResetAt: 1050}
-	panel := &SidebarPanel{Now: now, Sections: []SidebarPanelSection{
-		{Key: "usage", Title: "使用量", Lines: []SidebarPanelLine{{Usage: &usage.Row{Label: "CC W", Bucket: &b, ObservedAt: now}}, {Usage: &usage.Row{Label: "CX W", Codex: true}}}},
-		{Key: "plugins", Title: "プラグイン", Lines: []SidebarPanelLine{{Text: "sunny 18C"}}},
+	panel := &SidebarPanel{Sections: []SidebarPanelSection{
+		{Key: "usage.30s.sh", Title: "usage", Lines: []SidebarPanelLine{{Text: "CC W  \x1b[38;2;229;72;77m██\x1b[0m│ 40%"}, {Text: "CX W  ----"}}},
+		{Key: "tenki.1h.sh", Title: "tenki", Lines: []SidebarPanelLine{{Text: "sunny 18C"}}},
 	}}
 	area := s.SidebarArea()
 	s.SidebarPanelRows = SidebarPanelRows(panel, area.H-5)
@@ -31,20 +29,24 @@ func TestSidebarPanelDrawsUsageAndPluginsAboveFooter(t *testing.T) {
 		lines = append(lines, frameLine(f, y))
 	}
 	text := strings.Join(lines, "\n")
-	for _, want := range []string{"▾ 使用量", "CC W", "30%", "│", "CX W", "----", "▾ プラグイン", "sunny 18C"} {
+	for _, want := range []string{"▾ usage", "CC W  ██│ 40%", "CX W", "▾ tenki", "sunny 18C"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("panel missing %q:\n%s", want, text)
 		}
 	}
+	if strings.Contains(text, "\x1b") || strings.Contains(text, "[38;2") {
+		t.Fatalf("escape sequence drawn as text:\n%s", text)
+	}
+	if c := f.Cell(fr.X+7, fr.Y-4); c == nil || c.Content != "█" || !reflect.DeepEqual(c.Style.Fg, color.RGBA{229, 72, 77, 255}) {
+		t.Fatalf("colored cell = %+v", c)
+	}
 	if !strings.Contains(frameLine(f, fr.Y), "[menu]") {
 		t.Fatal("footer moved")
 	}
-	// 見出しの位置はクリックの判定と同じ。
 	heads := SidebarPanelLayout(s, panel)
 	if len(heads) != 2 || heads[0].Rect.Y != fr.Y-5 || heads[1].Rect.Y != fr.Y-2 {
 		t.Fatalf("headings = %+v", heads)
 	}
-	// 閉じた節は見出しだけになり、スペースの欄が広がる。
 	panel.Sections[0].Collapsed = true
 	if got := SidebarPanelRows(panel, area.H-5); got != 3 {
 		t.Fatalf("collapsed rows = %d", got)

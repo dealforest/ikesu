@@ -1,25 +1,22 @@
 package render
 
 import (
-	"fmt"
 	"image/color"
-	"math"
-	"time"
+	"strconv"
+	"strings"
+	"unicode/utf8"
 
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/kazuph/ikesu/internal/layout"
 	"github.com/kazuph/ikesu/internal/model"
-	"github.com/kazuph/ikesu/internal/usage"
 )
 
 // SidebarPanel is the block at the bottom of the left sidebar, above the
-// [menu]/[new] footer: the usage limits (as in AgentPal) and the outputs of
-// the sidebar plugins. Each section folds from its heading like a space
-// section.
+// [menu]/[new] footer: one section per sidebar plugin with its output. Each
+// section folds from its heading like a space section.
 type SidebarPanel struct {
 	Sections []SidebarPanelSection
-	Now      time.Time
 }
 
 // SidebarPanelSection is one foldable section.
@@ -29,9 +26,8 @@ type SidebarPanelSection struct {
 	Lines      []SidebarPanelLine
 }
 
-// SidebarPanelLine is a usage bar or a line of text.
+// SidebarPanelLine is a line of text; SGR colors in it are drawn.
 type SidebarPanelLine struct {
-	Usage *usage.Row
 	Text  string
 	Error bool
 }
@@ -94,10 +90,6 @@ func drawSidebarPanel(f *Frame, s *model.AppState, in Input) {
 	x, w := fr.X, fr.W
 	y, end := fr.Y-rows, fr.Y
 	f.Fill(x, y, w, rows, " ", uv.Style{})
-	now := p.Now
-	if now.IsZero() {
-		now = time.Now()
-	}
 	for _, sec := range p.Sections {
 		if y >= end {
 			return
@@ -111,102 +103,81 @@ func drawSidebarPanel(f *Frame, s *model.AppState, in Input) {
 			if y >= end {
 				return
 			}
-			switch {
-			case line.Usage != nil:
-				drawUsageLine(f, x, y, w, *line.Usage, now)
-			case line.Error:
-				f.Text(x+1, y, truncate(line.Text, max(0, w-1)), uv.Style{Fg: f.Palette.Dim}, x+w)
-			default:
-				f.Text(x+1, y, truncate(line.Text, max(0, w-1)), uv.Style{Fg: f.Palette.Text}, x+w)
+			base := uv.Style{Fg: f.Palette.Text}
+			if line.Error {
+				base = uv.Style{Fg: f.Palette.Dim}
 			}
+			drawANSIText(f, x+1, y, x+w, line.Text, base)
 			y++
 		}
 	}
 }
 
-var (
-	claudeUsageColor = color.RGBA{0xd9, 0x77, 0x57, 0xff}
-	codexUsageColor  = color.RGBA{0x6c, 0x9e, 0xf8, 0xff}
-	overuseColor     = color.RGBA{0xe5, 0x48, 0x4d, 0xff}
-	surplusColor     = color.RGBA{0x46, 0xc4, 0x6e, 0xff}
-)
-
-// drawUsageLine draws "CC W  ████▓▓│░░░ 62% 21:00": the colored part is what
-// is left, │ is the even pace for the time left, red marks use beyond the
-// pace and green the room under it.
-func drawUsageLine(f *Frame, x, y, w int, row usage.Row, now time.Time) {
-	const labelW = 7 // a space, up to five characters ("CC 5h", "FAB W") and a gap
-	if w < labelW+6 {
-		f.Text(x+1, y, truncate(row.Label, max(0, w-1)), uv.Style{Fg: f.Palette.Dim}, x+w)
-		return
-	}
-	f.Text(x+1, y, row.Label, uv.Style{Fg: f.Palette.Dim, Attrs: uv.AttrBold}, x+labelW-1)
-	if row.Bucket == nil {
-		f.Text(x+labelW, y, "----", uv.Style{Fg: f.Palette.Dim}, x+w)
-		return
-	}
-	b := *row.Bucket
-	remaining := b.RemainingPercent()
-	pct := fmt.Sprintf("%3d%%", int(math.Round(remaining)))
-	reset := resetLabel(b.ResetTime(), now)
-	// The reset time is shown only when the bar keeps at least ten cells.
-	tail := " " + pct
-	barW := w - labelW - ansi.StringWidth(tail)
-	if reset != "" && barW-1-ansi.StringWidth(reset) >= 10 {
-		tail += " " + reset
-		barW -= 1 + ansi.StringWidth(reset)
-	}
-	if barW < 1 {
-		return
-	}
-	fill := claudeUsageColor
-	if row.Codex {
-		fill = codexUsageColor
-	}
-	observed := row.ObservedAt
-	if observed.IsZero() {
-		observed = now
-	}
-	pace, hasPace := b.PaceRemainingPercent(observed)
-	diff, hasDiff := usage.PaceDifference{}, false
-	if hasPace {
-		diff, hasDiff = usage.Difference(remaining, pace)
-	}
-	marker := -1
-	if hasPace {
-		marker = min(barW-1, max(0, int(pace/100*float64(barW))))
-	}
-	bx := x + labelW
-	for i := 0; i < barW; i++ {
-		pos := (float64(i) + 0.5) / float64(barW) * 100
-		glyph, style := "░", uv.Style{Fg: f.Palette.Dim}
-		if pos < remaining {
-			glyph, style = "█", uv.Style{Fg: fill}
-		}
-		if hasDiff && pos >= diff.Lower && pos < diff.Upper {
-			c := surplusColor
-			if diff.Kind == usage.Overuse {
-				c = overuseColor
+// drawANSIText draws text whose SGR sequences (colors, bold, dim) come from a
+// plugin's output, clipped at limit.
+func drawANSIText(f *Frame, x, y, limit int, text string, base uv.Style) {
+	style := base
+	for i := 0; i < len(text) && x < limit; {
+		if text[i] == 0x1b {
+			end := strings.IndexByte(text[i:], 'm')
+			if end < 0 {
+				break
 			}
-			glyph, style = "█", uv.Style{Fg: c}
+			style = applySGR(style, base, text[i+2:i+end])
+			i += end + 1
+			continue
 		}
-		if i == marker {
-			glyph, style = "│", uv.Style{Fg: f.Palette.Text, Attrs: uv.AttrBold}
+		r, size := utf8.DecodeRuneInString(text[i:])
+		w := ansi.StringWidth(string(r))
+		if x+w > limit {
+			break
 		}
-		f.Set(bx+i, y, glyph, style)
+		if w > 0 {
+			f.Set(x, y, string(r), style)
+		}
+		x += w
+		i += size
 	}
-	f.Text(bx+barW, y, tail, uv.Style{Fg: f.Palette.Text}, x+w)
 }
 
-// resetLabel is the reset time: the clock time when it is within a day,
-// otherwise month/day.
-func resetLabel(t, now time.Time) string {
-	if t.IsZero() {
-		return ""
+// applySGR applies one SGR parameter list ("1;38;2;217;119;87") to style.
+func applySGR(style, base uv.Style, params string) uv.Style {
+	parts := strings.Split(params, ";")
+	if params == "" {
+		parts = []string{"0"}
 	}
-	local := t.Local()
-	if local.Sub(now) < 24*time.Hour {
-		return local.Format("15:04")
+	for i := 0; i < len(parts); i++ {
+		n, err := strconv.Atoi(parts[i])
+		if err != nil {
+			continue
+		}
+		switch {
+		case n == 0:
+			style = base
+		case n == 1:
+			style.Attrs |= uv.AttrBold
+		case n == 2:
+			style.Attrs |= uv.AttrFaint
+		case n == 22:
+			style.Attrs &^= uv.AttrBold | uv.AttrFaint
+		case n >= 30 && n <= 37:
+			style.Fg = ansi.BasicColor(n - 30)
+		case n >= 90 && n <= 97:
+			style.Fg = ansi.BasicColor(n - 90 + 8)
+		case n == 39:
+			style.Fg = base.Fg
+		case n == 38 && i+2 < len(parts) && parts[i+1] == "5":
+			if c, err := strconv.Atoi(parts[i+2]); err == nil && c >= 0 && c < 256 {
+				style.Fg = ansi.IndexedColor(c)
+			}
+			i += 2
+		case n == 38 && i+4 < len(parts) && parts[i+1] == "2":
+			r, _ := strconv.Atoi(parts[i+2])
+			g, _ := strconv.Atoi(parts[i+3])
+			b, _ := strconv.Atoi(parts[i+4])
+			style.Fg = color.RGBA{uint8(r), uint8(g), uint8(b), 0xff}
+			i += 4
+		}
 	}
-	return local.Format("1/2")
+	return style
 }
