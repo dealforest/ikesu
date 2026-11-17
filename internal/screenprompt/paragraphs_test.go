@@ -75,3 +75,16 @@ func TestQuestionHeadingNeverCutsTextOrURL(t *testing.T) {
 		}
 	}
 }
+
+// 質問の先頭が画面の上に出たときは、取り込めなかったことを質問の頭に書く（Issue #52）。
+func TestTruncatedClaudeQuestionSaysSo(t *testing.T) {
+	screen := fixture(t, "claude-long-paragraphs")
+	if p := Parse("claude", screen); p == nil || p.Truncated || strings.HasPrefix(p.Params.Title, TruncatedNotice) {
+		t.Fatalf("whole question marked truncated: %+v", p)
+	}
+	cut := screen[4:] // 横線・見出し・空行・1段落目の1行目が画面の外
+	p := Parse("claude", cut)
+	if p == nil || !p.Truncated || !strings.HasPrefix(p.Params.Title, TruncatedNotice) {
+		t.Fatalf("cut question not marked: %+v", p)
+	}
+}

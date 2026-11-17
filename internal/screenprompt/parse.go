@@ -17,20 +17,22 @@ import (
 type Prompt struct {
 	MCPServer     string
 	CodexQuestion bool
-	TextOpen      bool
-	Final         bool
-	Flow          string
-	Question      int
-	Total         int
-	Params        api.DecisionCreateParams
-	Keys          map[string]string
-	Checked       map[string]bool
-	Items         []string // arrow-navigation order, including the free input and progress row
-	Cursor        int
-	TextID        string
-	Progress      int
-	HasPreview    bool
-	Preview       *string
+	// Truncated は、質問の先頭が画面の上に出て読めていないこと（Claude の質問の枠の上端が見えない）。
+	Truncated  bool
+	TextOpen   bool
+	Final      bool
+	Flow       string
+	Question   int
+	Total      int
+	Params     api.DecisionCreateParams
+	Keys       map[string]string
+	Checked    map[string]bool
+	Items      []string // arrow-navigation order, including the free input and progress row
+	Cursor     int
+	TextID     string
+	Progress   int
+	HasPreview bool
+	Preview    *string
 }
 
 var numbered = regexp.MustCompile(`^\s*([❯›>]?)\s*(\d+)[.)]\s+(.*)$`)
@@ -86,6 +88,9 @@ func Parse(agent string, screen []string) *Prompt {
 
 // During input delivery a previously observed free row can display entered
 // text instead of its placeholder; that row retains its original identity.
+// TruncatedNotice は、質問の先頭を画面から取り込めなかったときに質問の頭へ付ける文。
+const TruncatedNotice = "（この質問は長く、先頭の部分が画面の外に出ていて取り込めませんでした。全文は AI のペインで確かめてください）"
+
 func ParseWithTextID(agent string, screen []string, textID string) *Prompt {
 	if agent != "claude" && agent != "codex" && agent != "devin" {
 		return nil
@@ -100,7 +105,10 @@ func ParseWithTextID(agent string, screen []string, textID string) *Prompt {
 	if agent == "codex" {
 		screen, codexLabel, codexBody = codexQuestionScreen(screen)
 	}
+	whole := len(screen)
 	screen = currentQuestionLines(screen)
+	// 前の質問などを切り落としたなら、今の質問の上端は画面の中にある。
+	cutAbove := len(screen) != whole
 	originalScreen := screen
 	screen, notice := cleanNotice(screen)
 	columns := screenColumns(screen)
@@ -137,6 +145,8 @@ func ParseWithTextID(agent string, screen []string, textID string) *Prompt {
 		}
 	}
 	var title []string
+	// 枠の上端（横線）か、質問の見出し（☐ や ← Submit の行）が見えていれば、質問は先頭から画面にある。
+	header := start > 0
 	for _, line := range lines[start:first] {
 		physical := line
 		line = strings.TrimSpace(line)
@@ -149,10 +159,12 @@ func ParseWithTextID(agent string, screen []string, textID string) *Prompt {
 			p.Params.QuestionLabel = questionLabel(line)
 			p.Params.Body = p.Params.QuestionLabel
 			p.Flow, p.Question, p.Total = flowTabs(line)
+			header = true
 			continue
 		}
 		if strings.HasPrefix(line, "☐ ") || strings.HasPrefix(line, "☒ ") {
 			askUserQuestion = true
+			header = true
 			continue
 		}
 		if strings.Trim(line, "╌") == "" {
@@ -166,6 +178,11 @@ func ParseWithTextID(agent string, screen []string, textID string) *Prompt {
 	p.Params.Title = questionParagraphs(title, columns)
 	if p.Params.Title == "" {
 		return nil
+	}
+	if agent == "claude" && !header && !cutAbove && start == 0 && first > 0 && strings.TrimSpace(lines[0]) != "" {
+		// 長い質問は先頭が画面の上へ流れて読めない。読めなかったことを質問の頭に書いて知らせる（Issue #52）。
+		p.Truncated = true
+		p.Params.Title = TruncatedNotice + "\n\n" + p.Params.Title
 	}
 	lowerTitle := strings.ToLower(p.Params.Title)
 	for _, word := range []string{"proceed", "permission", "trust", "run the following", "run this command", "allow", "確認", "承認", "許可"} {

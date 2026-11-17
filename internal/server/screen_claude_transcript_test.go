@@ -2,6 +2,7 @@ package server
 
 import (
 	"os"
+	"strings"
 
 	"testing"
 	"time"
@@ -161,4 +162,16 @@ func TestWaitingWatchCollectsPreview(t *testing.T) {
 			t.Errorf("preview skipped: %+v", w)
 		}
 	})
+}
+
+// 先頭が切れた質問（取り込めなかった旨の文が頭に付く）も、会話記録の質問と照合できる（Issue #52）。
+func TestTruncatedScreenQuestionStillMatchesTranscript(t *testing.T) {
+	p := &screenprompt.Prompt{Params: api.DecisionCreateParams{Kind: "agent_prompt", Title: screenprompt.TruncatedNotice + "\n\nthe tail of a long question?", Options: []api.DecisionOption{{ID: "1", Label: "Yes"}, {ID: "2", Label: "No"}}}}
+	q := session.ClaudeQuestion{Question: "A long head with https://example.com/x\n\nthe tail of a long question?", Options: []session.ClaudeQuestionOption{{Label: "Yes"}, {Label: "No"}}}
+	if !matchClaudeQuestion(p, q) {
+		t.Fatal("truncated screen question did not match its transcript question")
+	}
+	if got := claudeQuestionPresentation(p.Params, q); !strings.Contains(got.Title, "https://example.com/x") || strings.Contains(got.Title, screenprompt.TruncatedNotice) {
+		t.Fatalf("presentation = %q", got.Title)
+	}
 }
