@@ -504,3 +504,47 @@ func TestMouseAfterTheProcessExitsDoesNotBlock(t *testing.T) {
 	})
 	within(t, "kill after exit", 5*time.Second, func() { s.Kill(p.ID) })
 }
+
+// 入力を読まないアプリには、ホイールを溜め続けずに捨てる。クリックは捨てない（Issue #67 の3）。
+func TestWheelIsDroppedWhileInputIsBackedUp(t *testing.T) {
+	teststate.Lock(t)
+	script := filepath.Join(t.TempDir(), "noread.sh")
+	body := "#!/bin/sh\nstty raw -echo\nprintf '\\033[?1000h\\033[?1006h'\nwhile :; do sleep 1; done\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	teststate.Setenv(t, "SHELL", script)
+	s := NewSupervisor()
+	p, err := s.Spawn(1, "/tmp", 80, 24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.KillAll()
+	for deadline := time.Now().Add(15 * time.Second); !mouseOn(p) && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+	}
+	if !mouseOn(p) {
+		t.Fatal("application never enabled mouse reporting")
+	}
+	for i := 0; i < 20000; i++ {
+		p.SendMouse(uv.MouseWheelEvent{X: 1, Y: 1, Button: uv.MouseWheelDown})
+	}
+	// 書き込み役が PTY を満たして止まるまで待ってから、もう一度送る。PTY が受け取れない分は、
+	// 上限（4KB）を1イベント分だけ超えたところで止まる。
+	time.Sleep(200 * time.Millisecond)
+	for i := 0; i < 2000; i++ {
+		p.SendMouse(uv.MouseWheelEvent{X: 1, Y: 1, Button: uv.MouseWheelDown})
+	}
+	queued := p.writer.backlog()
+	if queued < mouseBacklogLimit || queued > mouseBacklogLimit+64 {
+		t.Fatalf("wheel backlog = %d bytes, want just over %d", queued, mouseBacklogLimit)
+	}
+	p.SendMouse(uv.MouseMotionEvent{X: 2, Y: 2})
+	if p.writer.backlog() != queued {
+		t.Fatal("motion was queued while input was backed up")
+	}
+	p.SendMouse(uv.MouseClickEvent{X: 1, Y: 1, Button: uv.MouseLeft})
+	p.SendMouse(uv.MouseReleaseEvent{X: 1, Y: 1, Button: uv.MouseLeft})
+	if p.writer.backlog() <= queued {
+		t.Fatal("click and release were dropped")
+	}
+}

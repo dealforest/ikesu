@@ -63,6 +63,17 @@ type ptyWriter struct {
 	dropped  int
 }
 
+// mouseBacklogLimit は、ホイールとマウス移動を捨て始める未書き込みの量。アプリが入力を読んでいれば
+// ここまで溜まらない（ホイール1回は十数バイト）。キー・貼り付け・送信は捨てない（Issue #67 の3）。
+const mouseBacklogLimit = 4 << 10
+
+// backlog は、まだ PTY へ書けていない入力のバイト数。
+func (w *ptyWriter) backlog() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.queued
+}
+
 func (w *ptyWriter) signal() {
 	select {
 	case w.ready <- struct{}{}:

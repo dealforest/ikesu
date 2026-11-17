@@ -601,3 +601,16 @@ func paneExit(t *testing.T, dir, paneID string) {
 // labelled claude whose screen shows a frozen spinner drops to idle
 // after ~15s, and a reported "working" authority over an explicitly
 // idle Claude screen is cleared after ~15s.
+
+// default のセッションは今までどおり状態のフォルダの直下、ほかのセッションはそのセッションのフォルダの下に guard を置く。
+func TestGuardRootIsPerSession(t *testing.T) {
+	teststate.Lock(t)
+	def := newTestServer(t, "default")
+	if got := def.guardRoot(); got != api.StateDir() {
+		t.Fatalf("default guard root = %q, want %q", got, api.StateDir())
+	}
+	proof := newTestServer(t, "proof")
+	if got := proof.guardRoot(); got != proof.dir || got == api.StateDir() {
+		t.Fatalf("proof guard root = %q, want %q", got, proof.dir)
+	}
+}

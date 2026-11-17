@@ -23,7 +23,7 @@ func TestGuardEntryUpgradeKeepsClaudePane(t *testing.T) {
 	}
 	s := startVersionMode(t, nil, false, old, "")
 	s.waitFor("prompt", 5*time.Second, func(tx string) bool { return strings.Contains(tx, "❯") })
-	dir := filepath.Join(s.stateDir, "guard", "shell", "p_1")
+	dir := filepath.Join(s.stateDir, s.name, "guard", "shell", "p_1")
 	prefix := filepath.Join(dir, "claude-prefix")
 	// A real long-lived pane process launches the inherited prefix for each
 	// command, as Claude does. No agent implementation or authorization is mocked.
@@ -130,7 +130,7 @@ func TestGuardDisabledPaneSurvivesHandoffWithoutAssets(t *testing.T) {
 	if err != nil || string(before) != string(after) {
 		t.Fatalf("shell changed: %s -> %s: %v", before, after, err)
 	}
-	if _, err := os.Lstat(filepath.Join(s.stateDir, "guard", "shell")); !os.IsNotExist(err) {
+	if _, err := os.Lstat(filepath.Join(s.stateDir, s.name, "guard", "shell")); !os.IsNotExist(err) {
 		t.Fatalf("disabled pane gained startup files: %v", err)
 	}
 }
@@ -157,9 +157,9 @@ func TestGuardGenerationRollbackAfterRealHandoffFailure(t *testing.T) {
 	for _, pane := range []string{"p1", split.Pane.PaneID} {
 		s.rpc(api.MethodPaneReportAgent, api.PaneReportAgentParams{PaneID: pane, Source: "rollback-test", Agent: "codex", State: "idle"}, nil)
 	}
-	marker := filepath.Join(s.stateDir, "guard", "agent-panes", "p_1.json")
+	marker := filepath.Join(s.stateDir, s.name, "guard", "agent-panes", "p_1.json")
 	s.waitFor("guard armed", 5*time.Second, func(string) bool { _, err := os.Stat(marker); return err == nil })
-	secondDir := filepath.Join(s.stateDir, "guard", "shell", strings.Replace(split.Pane.PaneID, "p", "p_", 1))
+	secondDir := filepath.Join(s.stateDir, s.name, "guard", "shell", strings.Replace(split.Pane.PaneID, "p", "p_", 1))
 	bad := filepath.Join(secondDir, "bash-env.current")
 	replacement, err := os.MkdirTemp(secondDir, "rollback-directory-")
 	if err != nil {
@@ -169,7 +169,7 @@ func TestGuardGenerationRollbackAfterRealHandoffFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.rpc(api.MethodPaneReportAgent, api.PaneReportAgentParams{PaneID: split.Pane.PaneID, Source: "rollback-test", Agent: "codex", State: "idle"}, nil)
-	paths := []string{marker, filepath.Join(s.stateDir, "guard", "shell", "p_1", "claude-prefix"), filepath.Join(s.stateDir, "guard", "shell", "p_1", "bash-env")}
+	paths := []string{marker, filepath.Join(s.stateDir, s.name, "guard", "shell", "p_1", "claude-prefix"), filepath.Join(s.stateDir, s.name, "guard", "shell", "p_1", "bash-env")}
 	before := map[string][]byte{}
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
@@ -200,7 +200,7 @@ func TestGuardGenerationRollbackAfterRealHandoffFailure(t *testing.T) {
 	if err := os.WriteFile(target, []byte("disposable"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	shim := filepath.Join(s.stateDir, "guard", "bin", "p_1", "rm")
+	shim := filepath.Join(s.stateDir, s.name, "guard", "bin", "p_1", "rm")
 	cmd := exec.Command(shim, target)
 	cmd.Env = []string{"HOME=" + outside, "PATH=/usr/bin:/bin", "AI_GUARD_REQUEST_REASON=対象プロジェクト: ikesu隔離試験。必要な理由: 引き継ぎ失敗後も旧判定の承認bindingを確認。実施内容: 使い捨てファイルを削除する。"}
 	var output bytes.Buffer

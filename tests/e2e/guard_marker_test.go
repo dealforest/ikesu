@@ -39,7 +39,7 @@ func TestGuardMarkerRoutingAfterRealHandoff(t *testing.T) {
 	if out, e := s.cli("server", "live-handoff", "--import-exe", next); e != nil {
 		t.Fatal(e, out)
 	}
-	marker := filepath.Join(s.stateDir, "guard", "agent-panes", "p_1.json")
+	marker := filepath.Join(s.stateDir, s.name, "guard", "agent-panes", "p_1.json")
 	data, e = os.ReadFile(marker)
 	if e != nil {
 		t.Fatal(e)
@@ -131,7 +131,7 @@ func TestGuardMarkerRoutingAfterRealHandoff(t *testing.T) {
 			if e := os.WriteFile(target, []byte("test-only"), 0600); e != nil {
 				t.Fatal(e)
 			}
-			shim := filepath.Join(s.stateDir, "guard", "bin", "p_1", "rm")
+			shim := filepath.Join(s.stateDir, s.name, "guard", "bin", "p_1", "rm")
 			cmd := exec.Command("/bin/zsh", "-c", `IKESU_GUARD_MARKER= IKESU_PANE_ID=p999 IKESU_SOCKET_PATH=/missing.sock "$1" "$2"`, "guard-test", shim, target)
 			cmd.Env = append(os.Environ(), "IKESU_CONFIG="+cfg, "IKESU_STATE_DIR="+s.stateDir, "AI_GUARD_REQUEST_REASON=隔離した検査用ファイルの削除を確認する")
 			var stdout, stderr bytes.Buffer

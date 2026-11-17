@@ -541,6 +541,10 @@ func (a *App) wheel(m uv.Mouse) {
 		a.forwardTo(pr.ID, uv.MouseWheelEvent(m))
 	case sn.AltScreen:
 		// Full-screen apps without mouse support scroll via arrow keys.
+		// 入力を読んでいないアプリには、ホイールから作った矢印キーも溜めない（Issue #67 の3）。
+		if p.InputBackedUp() {
+			return
+		}
 		code := uv.KeyUp
 		if !up {
 			code = uv.KeyDown

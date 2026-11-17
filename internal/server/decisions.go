@@ -283,7 +283,13 @@ func (s *Server) decisionRequest(req *api.Request) api.Response {
 			return decisionFailure(req.ID, err)
 		}
 		if d.Kind == "command_guard" && d.Answer != nil && d.Answer.OptionID != nil && *d.Answer.OptionID == "day_allow" && d.Origin != nil {
-			if err := guard.RecordDayApproval(api.StateDir(), d.Origin.Cwd); err != nil {
+			root := s.guardRoot()
+			if n, ok := parsePaneID(d.Origin.PaneID); ok {
+				if r := s.sup.Get(n).GuardRoot(); r != "" {
+					root = r
+				}
+			}
+			if err := guard.RecordDayApproval(root, d.Origin.Cwd); err != nil {
 				fmt.Fprintln(os.Stderr, "ikesu guard day approval:", err)
 			}
 		}

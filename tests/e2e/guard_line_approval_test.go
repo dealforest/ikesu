@@ -46,7 +46,7 @@ func newLineSession(t *testing.T, shim bool) *lineSession {
 	root := s.stateDir
 	path := fake + ":/usr/bin:/bin"
 	if shim {
-		path = filepath.Join(root, "guard", "bin", "p_1") + ":" + path
+		path = filepath.Join(root, s.name, "guard", "bin", "p_1") + ":" + path
 	}
 	return &lineSession{s: s, cfg: cfg, root: root, path: path}
 }
@@ -55,7 +55,7 @@ func newLineSession(t *testing.T, shim bool) *lineSession {
 func (l *lineSession) run(t *testing.T, agent, line string) (asked int, out string) {
 	t.Helper()
 	s := l.s
-	env := []string{"HOME=" + l.root, "PATH=" + l.path, "SHELL=/bin/zsh", "IKESU_CONFIG=" + l.cfg, "IKESU_STATE_DIR=" + l.root, "IKESU_SOCKET_PATH=" + api.APISocketPath(filepath.Join(s.stateDir, s.name)), "IKESU_SOCKET_PATH_EXPLICIT=1", "IKESU_PANE_ID=p1", "IKESU_GUARD_MARKER=" + filepath.Join(l.root, "guard", "agent-panes", "p_1.json"), "IKESU_GUARD_EXECUTABLE=" + binPath, "BASH_ENV=" + filepath.Join(l.root, "guard", "shell", "p_1", "bash-env"), "AI_GUARD_REQUEST_REASON=対象プロジェクト: ikesuの隔離試験。必要な理由: 行の承認の回数を検証。実施内容: 何もしない偽のコマンドを実行。"}
+	env := []string{"HOME=" + l.root, "PATH=" + l.path, "SHELL=/bin/zsh", "IKESU_CONFIG=" + l.cfg, "IKESU_STATE_DIR=" + l.root, "IKESU_SOCKET_PATH=" + api.APISocketPath(filepath.Join(s.stateDir, s.name)), "IKESU_SOCKET_PATH_EXPLICIT=1", "IKESU_PANE_ID=p1", "IKESU_GUARD_MARKER=" + filepath.Join(l.root, l.s.name, "guard", "agent-panes", "p_1.json"), "IKESU_GUARD_EXECUTABLE=" + binPath, "BASH_ENV=" + filepath.Join(l.root, l.s.name, "guard", "shell", "p_1", "bash-env"), "AI_GUARD_REQUEST_REASON=対象プロジェクト: ikesuの隔離試験。必要な理由: 行の承認の回数を検証。実施内容: 何もしない偽のコマンドを実行。"}
 	before := l.count(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
@@ -101,10 +101,10 @@ func (l *lineSession) count(t *testing.T) int {
 // L3 用の許可のファイルは作らない（temp-approvals に L3 のキーも無い）。
 func (l *lineSession) noL3GrantFiles(t *testing.T) {
 	t.Helper()
-	if _, e := os.Stat(filepath.Join(l.root, "guard", "one-shot-approvals")); !os.IsNotExist(e) {
+	if _, e := os.Stat(filepath.Join(l.root, l.s.name, "guard", "one-shot-approvals")); !os.IsNotExist(e) {
 		t.Errorf("one-shot approval file exists: %v", e)
 	}
-	if b, e := os.ReadFile(filepath.Join(l.root, "guard", "temp-approvals")); e == nil && strings.TrimSpace(string(b)) != "" {
+	if b, e := os.ReadFile(filepath.Join(l.root, l.s.name, "guard", "temp-approvals")); e == nil && strings.TrimSpace(string(b)) != "" {
 		t.Errorf("temp-approvals has entries for L3 commands: %q", b)
 	}
 }
@@ -150,14 +150,14 @@ func TestLineApprovalAsksOncePerLine(t *testing.T) {
 				for _, d := range all.Decisions {
 					who = append(who, d.Title+" / "+d.Origin.Command+" / "+d.Origin.GuardRule)
 				}
-				log, _ := os.ReadFile(filepath.Join(l.root, "guard", "decisions.jsonl"))
+				log, _ := os.ReadFile(filepath.Join(l.root, l.s.name, "guard", "decisions.jsonl"))
 				t.Fatalf("%q asked %d times, want %d\n%s\n%s\n%s", tc.line, asked, tc.want, out, strings.Join(who, "\n"), log)
 			}
 			l.noL3GrantFiles(t)
 			if os.Getenv("LINE_APPROVAL_LOG") != "" {
-				log, _ := os.ReadFile(filepath.Join(l.root, "guard", "decisions.jsonl"))
+				log, _ := os.ReadFile(filepath.Join(l.root, l.s.name, "guard", "decisions.jsonl"))
 				t.Logf("decisions.jsonl:\n%s", log)
-				entries, _ := os.ReadDir(filepath.Join(l.root, "guard", "bin", "p_1"))
+				entries, _ := os.ReadDir(filepath.Join(l.root, l.s.name, "guard", "bin", "p_1"))
 				var names []string
 				for _, e := range entries {
 					names = append(names, e.Name())

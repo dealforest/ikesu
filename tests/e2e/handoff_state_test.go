@@ -167,7 +167,7 @@ func TestLiveHandoffDecisionsPluginsAgentAndGuard(t *testing.T) {
 	}
 	seq := uint64(8)
 	s.rpc(api.MethodPaneReportAgent, api.PaneReportAgentParams{PaneID: "p1", Source: "handoff", Agent: "codex", State: "working", Seq: &seq, SessionID: &sessionID}, nil)
-	marker := filepath.Join(s.stateDir, "guard", "agent-panes", "p_1.json")
+	marker := filepath.Join(s.stateDir, s.name, "guard", "agent-panes", "p_1.json")
 	before, err := os.ReadFile(marker)
 	if err != nil {
 		t.Fatal(err)

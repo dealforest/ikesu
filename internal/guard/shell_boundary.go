@@ -20,6 +20,59 @@ func guardDirectory(i Input) string {
 	}
 	return ""
 }
+
+// guardStateBases は、セッションごとの guard のフォルダを並べている場所の候補。自分の状態のフォルダと、
+// その親（default のペインは状態のフォルダ、ほかのセッションは状態のフォルダの親がセッションを並べる場所）。
+// ここの guard/ と、その1つ下の */guard/ を、ほかのセッションの分も含めて守る（Issue #67。セッションごとに
+// フォルダを分けたので、自分の guard/ だけを守ると別のセッションの許可や shim を確認なしで書けた）。
+func guardStateBases(i Input) []string {
+	g := guardDirectory(i)
+	if g == "" {
+		return nil
+	}
+	state := filepath.Dir(g)
+	return []string{state, filepath.Dir(state)}
+}
+
+// otherGuardPath は、path がどこかのセッションの guard/ の中か。
+func otherGuardPath(i Input, path string) bool {
+	for _, base := range guardStateBases(i) {
+		for _, pair := range [][2]string{{filepath.Clean(base), filepath.Clean(path)}, {guardPhysical(base), guardPhysical(path)}} {
+			rel, err := filepath.Rel(pair[0], pair[1])
+			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				continue
+			}
+			parts := strings.Split(filepath.ToSlash(rel), "/")
+			if parts[0] == "guard" || len(parts) > 1 && parts[1] == "guard" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// guardLineClue は、行の文字に、どこかのセッションの guard/ の場所が見えるか。
+func guardLineClue(i Input, line string) bool {
+	if g := guardDirectory(i); g != "" && strings.Contains(line, g) {
+		return true
+	}
+	for _, base := range guardStateBases(i) {
+		if strings.Contains(line, filepath.Join(base, "guard")) {
+			return true
+		}
+		entries, err := os.ReadDir(base)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() && strings.Contains(line, filepath.Join(base, e.Name(), "guard")) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func guardFunction(i Input, name string) bool {
 	return name == "TRAPDEBUG" || strings.HasPrefix(name, "_ikesu_guard_") || name == "command" || has(defaults(i.GuardCommands, (Config{}).Commands()), name)
 }
@@ -35,6 +88,9 @@ func guardPath(i Input, path string) bool {
 		if pair[1] == pair[0] || strings.HasPrefix(pair[1], pair[0]+string(filepath.Separator)) {
 			return true
 		}
+	}
+	if otherGuardPath(i, path) {
+		return true
 	}
 	// The fixed entry is a symlink to the server's native executable. Protect
 	// writes to that real target too, including replacement via its parent.
@@ -165,7 +221,7 @@ func relativeWriteTier(i Input, cmd string, targets []string) int {
 	if has([]string{"rm", "rmdir", "trash", "rimraf"}, cmd) {
 		return TierL3
 	}
-	if root := guardDirectory(i); root != "" && strings.Contains(i.Line(), root) {
+	if guardLineClue(i, i.Line()) {
 		return TierL3
 	}
 	for _, path := range targets {
@@ -276,7 +332,7 @@ func treeBoundary(i Input, tree *syntax.File) error {
 						failure = unresolvedScriptError{"書き込み先のパスを安全に確定できません"}
 					}
 				} else if !i.runtimeLine && i.CwdUncertain && !filepath.IsAbs(path) && !(n.Op == syntax.DplOut && descriptorTarget(path)) {
-					if root := guardDirectory(i); root != "" && (strings.Contains(i.RawLine, root) || guardNameClue(i, wordText(n.Word))) {
+					if root := guardDirectory(i); root != "" && (guardLineClue(i, i.RawLine) || guardNameClue(i, wordText(n.Word))) {
 						// 行にガードの置き場所が見えている時は、cd 後の相対パスでも確認する。
 						failure = fmt.Errorf("ディレクトリ変更を含む入力の書き込み先を安全に確定できません")
 					} else if failure == nil || unresolvedFailure(failure) {
