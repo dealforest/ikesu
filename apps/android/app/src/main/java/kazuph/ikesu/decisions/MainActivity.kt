@@ -56,6 +56,8 @@ class MainActivity : Activity() {
     private var pendingAttachmentId: String? = null
     private var settingsVisible = false
     private var showList = true
+    /** An answer sent from this panel was accepted: when nothing is left to answer, the panel closes to the screen. */
+    private var answeredHere = false
     private var listCursor = 0
     private var textScale = 1f
     private var appliedScale = 1f
@@ -168,6 +170,7 @@ class MainActivity : Activity() {
                 val status = result.optString("status")
                 draft.uncertain = status == "unknown"
                 if (!draft.uncertain) draft.sequence = null
+                if (status == "answered") answeredHere = true
                 draft.waitingReconnect = false
                 val message = when (status) {
                     "answered" -> "回答しました"
@@ -189,6 +192,8 @@ class MainActivity : Activity() {
         }
         drafts.entries.removeAll { it.key !in ids && it.value.sequence == null }
         if (selectedId !in ids && drafts[selectedId]?.sequence == null) { selectedId = null; showList = true }
+        // 答え終えて0件になったら、空の一覧を出さずに閉じて PC の画面へ戻る。
+        if (PanelClose.afterAnswer(answeredHere, ids.size, drafts.values.count { it.sequence != null }, settingsVisible)) { finish(); return }
         if (settingsVisible) {
             (header.getChildAt(0) as? TextView)?.text = "ikesu · ${if (DecisionState.connected) "接続中" else "未接続"}"
         } else render()

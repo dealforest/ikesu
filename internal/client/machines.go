@@ -83,6 +83,7 @@ type pendingMachine struct {
 }
 
 type machineClient struct {
+	selectionFile *selectionFile
 	search        *workspaceSearch
 	searchButtons workspaceSearchButtons
 	searchRelease bool
@@ -219,6 +220,7 @@ func pumpMachines(session string, local net.Conn, in, out *os.File, settings *lo
 			m.order = append(m.order, p.ID)
 		}
 	}
+	m.selectionFile = newSelectionFile(session)
 	if state := settings.upgradeState; state != nil {
 		for id, saved := range state.Selections {
 			if e := m.endpoints[id]; e != nil && saved.Target == e.profile.Target && saved.Session == m.selectionSession(id) {
@@ -231,6 +233,12 @@ func pumpMachines(session string, local net.Conn, in, out *os.File, settings *lo
 		if state.Rollback {
 			m.failedUpgrades[state.Attempt] = true
 			m.notify("upgrade: " + state.Reason)
+		}
+	}
+	// A new screen for the phone opens where the phone's last screen was.
+	if e := m.endpoints["local"]; e != nil && e.selection == nil {
+		if saved := m.selectionFile.load(); saved != nil {
+			e.selection = &paintedSelection{target: e.profile.Target, session: m.selectionSession("local"), value: saved}
 		}
 	}
 	defer func() {

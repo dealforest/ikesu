@@ -106,3 +106,17 @@ class KeyRepeatTest {
         assertFalse(KeyRepeat.repeats(ExtraKey("^T", ScreenKey.Bytes(byteArrayOf(20)))))
     }
 }
+
+class PanelCloseTest {
+    @Test fun closesWhenTheLastAnswerLeavesNothing() {
+        assertTrue(PanelClose.afterAnswer(answeredHere = true, remaining = 0, sending = 0, settingsVisible = false))
+    }
+
+    @Test fun staysOpenOtherwise() {
+        // 開いただけで0件、まだ残っている、送信中、設定を開いている、のどれでも閉じない。
+        assertFalse(PanelClose.afterAnswer(false, 0, 0, false))
+        assertFalse(PanelClose.afterAnswer(true, 1, 0, false))
+        assertFalse(PanelClose.afterAnswer(true, 0, 1, false))
+        assertFalse(PanelClose.afterAnswer(true, 0, 0, true))
+    }
+}

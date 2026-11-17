@@ -72,3 +72,9 @@ object KeyRepeat {
 
     fun repeats(key: ExtraKey): Boolean = key.popup == null && (key.main is ScreenKey.Text || key.main is ScreenKey.Code)
 }
+
+/** The decisions panel closes to the PC screen once an answer sent from it leaves nothing to answer. */
+object PanelClose {
+    fun afterAnswer(answeredHere: Boolean, remaining: Int, sending: Int, settingsVisible: Boolean): Boolean =
+        answeredHere && remaining == 0 && sending == 0 && !settingsVisible
+}

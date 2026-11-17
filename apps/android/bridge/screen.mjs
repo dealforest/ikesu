@@ -101,11 +101,13 @@ export function saveIncomingFile(name, bytes, { home = os.homedir(), now = new D
 }
 
 export class Screen {
-  constructor({ id, cols, rows, ikesuBin, env = process.env, onData, onExit, spawn }) {
+  constructor({ id, cols, rows, ikesuBin, env = process.env, onData, onExit, spawn, selectionFile }) {
     Object.assign(this, { id, onData, onExit });
     this.seq = 0; this.pending = []; this.pendingBytes = 0; this.timer = null; this.closed = false;
     const childEnv = { ...env, TERM: 'xterm-256color', COLORTERM: 'truecolor' };
     delete childEnv.IKESU_PANE_ID;
+    delete childEnv.IKESU_SELECTION_FILE;
+    if (selectionFile) childEnv.IKESU_SELECTION_FILE = selectionFile;
     if (!spawn) { this.config = writeClientConfig(env); childEnv.IKESU_CONFIG = this.config.file; }
     if (!spawn) { try { ensureSpawnHelper(); spawn = require('node-pty').spawn; } catch (error) { this.removeConfig(); throw error; } }
     // つなぐセッションは、bridge が話しているサーバーと同じにする（IKESU_SOCKET_PATH のフォルダ名。引数なしは default）。
