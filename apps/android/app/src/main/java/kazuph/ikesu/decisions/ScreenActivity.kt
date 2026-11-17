@@ -724,7 +724,8 @@ class ScreenActivity : Activity() {
                         else {
                             send(text.replace(Regex("[\\r\\n\\t]+"), " ").replace(Regex("\\p{Cntrl}"), "").toByteArray(Charsets.UTF_8))
                             // 文字にしている間に音量の下を押していたら、打ち終えてから Enter を1回押す。
-                            if (voiceDown.textDone(true)) send(byteArrayOf(13))
+                            // 文字と同時に届くと貼り付けとして読まれることがあるので、少し間をあけて押す。
+                            if (voiceDown.textDone(true)) status.postDelayed({ send(byteArrayOf(13)) }, 200)
                             status.text = "${target()?.name ?: "PC"} の画面"
                         }
                     }.onFailure { error -> voiceDown.textDone(false); status.text = error.message ?: "文字起こしに失敗しました" }
