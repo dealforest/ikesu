@@ -36,15 +36,12 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
-open class MainActivity : Activity() {
-    /** Shown over the PC's screen (OverlayActivity): the screen stays open underneath and keeps drawing. */
-    protected open val overScreen = false
+/** The decisions and settings, as a panel over the PC's screen (ScreenActivity, the app's first page). The screen
+ *  stays open underneath and keeps drawing, so closing this panel shows it again at once. */
+class MainActivity : Activity() {
     companion object {
-        /** Kept across the list on its own and the one over the screen, so leaving either keeps what was typed. */
+        /** Kept after the panel closes, so opening it again keeps what was typed. */
         private val drafts = mutableMapOf<String, Draft>()
-        /** Open the PC's screen as the base once a PC can be operated. Set again when the app goes to the background
-         *  from the list, or when the screen closed by itself; a screen closed with Back leaves the list showing. */
-        var autoScreen = true
     }
     private val green = 0xFF33FF66.toInt()
     private val dim = 0xFF1E9948.toInt()
@@ -56,7 +53,6 @@ open class MainActivity : Activity() {
                              var cursorNavigated: Boolean = false)
     private var selectedId: String? = null
     /** The PC whose screen was asked for before the unlock: open it as soon as that PC accepts the signature. */
-    private var screenAfterUnlock: String? = null
     private var pendingCamera: Uri? = null
     private var pendingAttachmentId: String? = null
     private var settingsVisible = false
@@ -98,22 +94,21 @@ open class MainActivity : Activity() {
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Nothing to lay over: the request goes to the list itself.
-        if (overScreen && ScreenActivity.openSource == null) {
-            startActivity(Intent(intent).setClass(this, MainActivity::class.java).addFlags(DecisionService.FRONT))
+        // The panel always lies over the screen: without it, the screen opens first with this request.
+        if (!ScreenActivity.running) {
+            // A panel left in the task by an older version (opened from the launcher) has nothing to show.
+            if (intent.extras != null) startActivity(Intent(this, ScreenActivity::class.java).putExtra(ScreenActivity.PANEL, Intent(intent)))
             finish(); return
         }
         // What the PCs show (questions, screens) never appears in screenshots or the app switcher.
         window.setFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE, android.view.WindowManager.LayoutParams.FLAG_SECURE)
-        // Recordings left by a killed process are never sent.
-        cacheDir.listFiles { file -> file.name.startsWith("voice") && file.name.endsWith(".m4a") }?.forEach { it.delete() }
         window.isNavigationBarContrastEnforced = false
         window.isStatusBarContrastEnforced = false
         textScale = TextScale.clamp(getSharedPreferences("ui", MODE_PRIVATE).getFloat("textScale", 1f)); appliedScale = textScale
         root.addView(header)
         root.addView(ScrollView(this).apply { setBackgroundColor(Color.BLACK); addView(layout) }, LinearLayout.LayoutParams(-1, 0, 1f))
         root.addView(footer)
-        val content = if (!overScreen) root else FrameLayout(this).apply {
+        val content = FrameLayout(this).apply {
             // The screen shows above the panel; a tap there goes back to it.
             setBackgroundColor(0x99000000.toInt())
             setOnClickListener { finish() }
@@ -131,7 +126,7 @@ open class MainActivity : Activity() {
                 val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout())
                 // Edge-to-edge does not resize for the keyboard, so keep the content above it.
                 val ime = insets.getInsets(android.view.WindowInsets.Type.ime())
-                view.setPadding(bars.left + dp(20), if (overScreen) dp(4) else bars.top, bars.right + dp(20), maxOf(bars.bottom, ime.bottom))
+                view.setPadding(bars.left + dp(20), dp(4), bars.right + dp(20), maxOf(bars.bottom, ime.bottom))
                 val nowVisible = insets.isVisible(android.view.WindowInsets.Type.ime())
                 if (nowVisible && !imeVisible) (currentFocus as? EditText)?.let { field ->
                     field.post { field.requestRectangleOnScreen(android.graphics.Rect(0, 0, field.width, field.height), false) }
@@ -142,34 +137,14 @@ open class MainActivity : Activity() {
             }
         }
         registerReceiver(receiver, IntentFilter(DecisionService.CHANGED), RECEIVER_NOT_EXPORTED)
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         receiveIntent(intent)
-        startForegroundService(Intent(this, DecisionService::class.java))
         render()
-        openBaseScreen()
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); receiveIntent(intent); render() }
     override fun onDestroy() { viewer?.dismiss(); videoViewer?.dismiss(); runCatching { unregisterReceiver(receiver) }; super.onDestroy() }
-    override fun onStop() {
-        if (!overScreen && !isChangingConfigurations && ScreenActivity.openSource == null) autoScreen = true
-        super.onStop()
-    }
-    @Deprecated("Back closes the panel over the screen once it is at the list.")
+    @Deprecated("Back closes the panel once it is at the list.")
     override fun onBackPressed() {
-        if (overScreen && BackNav.target(settingsVisible, showList) != BackTarget.NOTHING) goBack() else super.onBackPressed()
-    }
-    /** The screen of [id]: over that screen, closing the panel shows it again. */
-    private fun openScreen(id: String) {
-        if (overScreen && ScreenActivity.openSource == id) { finish(); return }
-        startActivity(Intent(this, ScreenActivity::class.java).putExtra(ScreenActivity.SOURCE, id))
-    }
-    private fun openBaseScreen() {
-        if (overScreen || !autoScreen || ScreenActivity.openSource != null || isFinishing) return
-        if (settingsVisible || !showList) return
-        val source = DecisionState.sources.values.firstOrNull { it.connected && it.operable } ?: return
-        autoScreen = false
-        openScreen(source.id)
+        if (BackNav.target(settingsVisible, showList) != BackTarget.NOTHING) goBack() else super.onBackPressed()
     }
     private fun receiveIntent(intent: Intent) {
         TextScale.fromIntent((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0, intent.hasExtra("text_scale"), intent.getFloatExtra("text_scale", 1f))?.let { textScale = it; appliedScale = textScale; getSharedPreferences("ui", MODE_PRIVATE).edit().putFloat("textScale", textScale).apply() }
@@ -178,13 +153,6 @@ open class MainActivity : Activity() {
         if (intent.getBooleanExtra("settings", false)) settingsVisible = true
     }
     private fun handleUpdate() {
-        // The screen underneath closed: the list it was laid over is gone too.
-        if (overScreen && ScreenActivity.openSource == null) { finish(); return }
-        screenAfterUnlock?.let { id ->
-            val source = DecisionState.sources[id]
-            if (source == null || !source.connected) screenAfterUnlock = null
-            else if (source.operable) { screenAfterUnlock = null; autoScreen = false; openScreen(id) }
-        }
         // A video removed with its decision closes the player and frees its preview.
         videoPreviews.keys.retainAll(DecisionState.videos.keys)
         videoViewer?.let { if (it.key !in DecisionState.videos) it.dismiss() }
@@ -225,7 +193,6 @@ open class MainActivity : Activity() {
         if (settingsVisible) {
             (header.getChildAt(0) as? TextView)?.text = "ikesu · ${if (DecisionState.connected) "接続中" else "未接続"}"
         } else render()
-        openBaseScreen()
     }
     private fun current(): JSONObject? {
         val items = DecisionState.decisions
@@ -331,26 +298,18 @@ open class MainActivity : Activity() {
                 render()
             }
         }
-        DecisionState.sources.values.firstOrNull { it.connected && it.operable }?.let { source ->
-            header.addView(text("🖥️", 22f).apply {
-                setTextIsSelectable(false); movementMethod = null; contentDescription = "${source.name} の画面"
-                setPadding(dp(14), dp(10), dp(6), dp(10))
-                setOnClickListener { openScreen(source.id) }
-            })
-        }
         header.addView(headerAction)
+        // ✕ closes this panel and the screen underneath shows again.
+        header.addView(text("✕", 22f).apply {
+            setTextIsSelectable(false); movementMethod = null; contentDescription = "閉じて画面へ戻る"
+            setPadding(dp(18), dp(10), dp(4), dp(10))
+            setOnClickListener { finish() }
+        })
         if (settingsVisible) { renderSettings(); return }
         val items = DecisionState.decisions
         if (showList) {
             block(text("判断待ち", 28f))
             block(text("${items.length()} 件", 18f))
-            // Each PC's whole ikesu screen, once opened with the face or fingerprint (PROTOCOL 4).
-            for (source in DecisionState.sources.values.filter { it.connected }) {
-                if (source.operable) block(button("🖥️ ${source.name} の画面を開く") {
-                    openScreen(source.id)
-                })
-                else block(button("🖥️ ${source.name} の画面（顔・指紋で開く）") { screenAfterUnlock = source.id; unlock() })
-            }
             for (i in 0 until items.length()) items.optJSONObject(i)?.let { entry ->
                 val id = entry.optString("id")
                 val row = optionRow(i, decisionHeading(entry.optString("raw_title"), entry.optString("raw_body"), entry.optString("kind")), entry.optString("location"), i == listCursor, false, supplement = entry.optString("question_label")) {

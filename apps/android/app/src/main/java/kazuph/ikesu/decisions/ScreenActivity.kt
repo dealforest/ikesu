@@ -24,6 +24,7 @@ import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -107,8 +108,10 @@ object KeyBytes {
 class ScreenActivity : Activity() {
     companion object {
         const val SOURCE = "source"
-        /** The PC whose screen is open on the phone, so the decisions and settings open over it (OverlayActivity). */
-        @Volatile var openSource: String? = null
+        /** A MainActivity intent to open over this screen (from a notification). */
+        const val PANEL = "panel"
+        /** The app's first page is up: the decisions and settings (MainActivity) open as a panel over it. */
+        @Volatile var running = false
         private const val RED = 0xFFE53935.toInt()
         private const val GREEN = 0xFF33FF66.toInt()
         private const val DARK_GREEN = 0xFF1E9948.toInt()
@@ -118,12 +121,72 @@ class ScreenActivity : Activity() {
         private const val INPUT_PIECE = 48 * 1024
     }
 
-    private lateinit var source: String
+    /** The PC shown: the one asked for, else the one shown before, else the first that can be operated. */
+    private var source: String? = null
+    private fun target(): DecisionSource? = source?.let { DecisionState.sources[it] }
+    /** Over the terminal while the PC's screen cannot be shown: what is happening and what to do. */
+    private lateinit var cover: LinearLayout
+    private lateinit var coverText: TextView
+    private lateinit var coverButton: TextView
     private lateinit var view: TerminalCanvas
     private lateinit var status: TextView
     /** Top right: 🔔 and how many decisions wait. A tap goes to the decisions; the 🖥️ there comes back. */
     private lateinit var bell: TextView
-    private val changes = object : android.content.BroadcastReceiver() { override fun onReceive(c: Context?, i: Intent?) = markBell() }
+    private val changes = object : android.content.BroadcastReceiver() { override fun onReceive(c: Context?, i: Intent?) { markBell(); refresh() } }
+    private var started = false
+
+    private fun pickSource(): String? {
+        val all = DecisionState.sources.values
+        source?.let { if (it in DecisionState.sources) return it }
+        return (all.firstOrNull { it.connected && it.operable } ?: all.firstOrNull { it.connected } ?: all.firstOrNull())?.id
+    }
+
+    /** Shows the PC's screen when it can be operated, or says why not over the terminal. */
+    private fun refresh() {
+        if (!::cover.isInitialized) return
+        source = pickSource()
+        val t = target()
+        val name = t?.name ?: "PC"
+        fun show(message: String, action: String?, run: () -> Unit) {
+            cover.visibility = View.VISIBLE; coverText.text = message
+            coverButton.visibility = if (action == null) View.GONE else View.VISIBLE
+            coverButton.text = action ?: ""; coverButton.setOnClickListener { run() }
+            status.text = name
+        }
+        when {
+            t == null -> show("PC が登録されていません。右上の ⚙ の設定で、PC を登録してください。", "設定を開く") { openPanel("settings") }
+            !t.connected -> show("$name に接続しています…", null) {}
+            !t.operable -> {
+                show("$name の画面は、顔・指紋で開くと出ます。", "顔・指紋で開く") { unlock() }
+                // The link came up after the app opened: ask once, as opening the app does.
+                if (resumed && !askedUnlock && t.link?.ready == true) { askedUnlock = true; unlock() }
+            }
+            else -> {
+                cover.visibility = View.GONE
+                if (started && screenId < 0 && !opening && view.cols > 0) open(view.cols, view.rows)
+            }
+        }
+    }
+
+    /** The decisions ("list") or the settings ("settings") as a panel over this screen. */
+    private fun openPanel(extra: String) = startActivity(Intent(this, MainActivity::class.java).putExtra(extra, true))
+
+    /** Ends the PC's screen shown here (it stays on the PC side for other clients). */
+    private fun dropScreen() {
+        closeNative(); choosing = null; answeredInput = null; view.removeCallbacks(choiceTimeout)
+        if (screenId >= 0) target()?.send(JSONObject().put("type", "screen_close").put("screen", screenId))
+        screenId = -1; opening = false; wanted = null
+    }
+
+    private fun choosePc() {
+        val all = DecisionState.sources.values.toList()
+        if (all.size < 2) return
+        AlertDialog.Builder(this).setTitle("どの PC の画面を出すか")
+            .setItems(all.map { "${it.name}${if (it.connected) "" else "（未接続）"}" }.toTypedArray()) { _, i ->
+                if (all[i].id == source) return@setItems
+                dropScreen(); view.clear(); source = all[i].id; refresh()
+            }.show()
+    }
 
     private fun markBell() {
         if (!::bell.isInitialized) return
@@ -163,9 +226,15 @@ class ScreenActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
-        source = intent.getStringExtra(SOURCE) ?: run { finish(); return }
-        openSource = source
-        val name = DecisionState.sources[source]?.name ?: "PC"
+        running = true
+        // Recordings left by a killed process are never sent.
+        cacheDir.listFiles { file -> file.name.startsWith("voice") && file.name.endsWith(".m4a") }?.forEach { it.delete() }
+        if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
+        startForegroundService(Intent(this, DecisionService::class.java))
+        source = intent.getStringExtra(SOURCE)
+        source = pickSource()
+        val name = target()?.name ?: "PC"
         val dp = resources.displayMetrics.density
         val screenSp = getSharedPreferences("ui", MODE_PRIVATE).getFloat("screenTextSp", 13f)
         view = TerminalCanvas(this, screenSp, keys = { bytes -> sendKeyBytes(bytes) }, onTap = { col, row -> send(KeyBytes.click(col, row)) },
@@ -174,15 +243,15 @@ class ScreenActivity : Activity() {
         bell = TextView(this).apply {
             textSize = 18f; gravity = Gravity.CENTER; setPadding((12 * dp).toInt(), 0, (12 * dp).toInt(), 0)
             contentDescription = "判断待ち"
-            setOnClickListener { startActivity(Intent(this@ScreenActivity, OverlayActivity::class.java).putExtra("list", true)) }
+            setOnClickListener { openPanel("list") }
         }
         val gear = TextView(this).apply {
             text = "⚙"; textSize = 20f; setTextColor(GREEN); gravity = Gravity.CENTER; setPadding((12 * dp).toInt(), 0, (12 * dp).toInt(), 0)
             contentDescription = "設定"; background = keyBackground(false, dp)
-            setOnClickListener { startActivity(Intent(this@ScreenActivity, OverlayActivity::class.java).putExtra("settings", true)) }
+            setOnClickListener { openPanel("settings") }
         }
         markBell()
-        status = TextView(this).apply { text = "$name の画面を開いています…"; setTextColor(GREEN); textSize = 18f; setPadding((20 * dp).toInt(), (6 * dp).toInt(), (20 * dp).toInt(), (6 * dp).toInt()) }
+        status = TextView(this).apply { text = name; setOnClickListener { choosePc() }; setTextColor(GREEN); textSize = 18f; setPadding((20 * dp).toInt(), (6 * dp).toInt(), (20 * dp).toInt(), (6 * dp).toInt()) }
 
         // The owner's Termux layout (dotfiles/.termux/termux.properties), plus ⇧, ⌘, the ikesu prefix, voice, files and the keyboard.
         val rows = listOf(
@@ -215,7 +284,22 @@ class ScreenActivity : Activity() {
                 addView(bell, LinearLayout.LayoutParams(-2, (40 * dp).toInt()).apply { setMargins(0, (2 * dp).toInt(), (6 * dp).toInt(), (2 * dp).toInt()) })
                 addView(gear, LinearLayout.LayoutParams(-2, (40 * dp).toInt()).apply { setMargins(0, (2 * dp).toInt(), (8 * dp).toInt(), (2 * dp).toInt()) })
             }, LinearLayout.LayoutParams(-1, -2))
-            addView(view, LinearLayout.LayoutParams(-1, 0, 1f))
+            addView(FrameLayout(this@ScreenActivity).apply {
+                addView(view, FrameLayout.LayoutParams(-1, -1))
+                cover = LinearLayout(this@ScreenActivity).apply {
+                    orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.BLACK); visibility = View.GONE
+                    setPadding((20 * dp).toInt(), (40 * dp).toInt(), (20 * dp).toInt(), 0)
+                    isClickable = true
+                    coverText = TextView(this@ScreenActivity).apply { textSize = 22f; setTextColor(GREEN) }
+                    addView(coverText, LinearLayout.LayoutParams(-1, -2))
+                    coverButton = TextView(this@ScreenActivity).apply {
+                        textSize = 22f; setTextColor(Color.BLACK); gravity = Gravity.CENTER
+                        background = android.graphics.drawable.GradientDrawable().apply { setColor(GREEN); cornerRadius = 12 * dp }
+                    }
+                    addView(coverButton, LinearLayout.LayoutParams(-1, (60 * dp).toInt()).apply { topMargin = (24 * dp).toInt() })
+                }
+                addView(cover, FrameLayout.LayoutParams(-1, -1))
+            }, LinearLayout.LayoutParams(-1, 0, 1f))
             addView(inputLine(dp), LinearLayout.LayoutParams(-1, -2).apply { setMargins((4 * dp).toInt(), (2 * dp).toInt(), (4 * dp).toInt(), (2 * dp).toInt()) })
             addView(keys, LinearLayout.LayoutParams(-1, -2))
         }
@@ -228,7 +312,33 @@ class ScreenActivity : Activity() {
         }
         setContentView(root)
         view.onSize = { cols, rows2 -> sizeChanged(cols, rows2) }
+        receivePanelRequest(intent)
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent); setIntent(intent)
+        intent.getStringExtra(SOURCE)?.let { asked -> if (asked != source) { dropScreen(); view.clear(); source = asked; refresh() } }
+        receivePanelRequest(intent)
+    }
+
+    /** A notification's decision opens as a panel over this screen. */
+    private fun receivePanelRequest(intent: Intent) {
+        val panel = intent.getParcelableExtra(PANEL, Intent::class.java) ?: return
+        intent.removeExtra(PANEL)
+        startActivity(panel.setClass(this, MainActivity::class.java))
+    }
+
+    private var resumed = false
+    private var askedUnlock = false
+    private fun unlock() = Unlock.run(this) { m -> Toast.makeText(this, m, Toast.LENGTH_LONG).show() }
+    override fun onResume() {
+        super.onResume()
+        resumed = true
+        // Opening the app asks for a face or fingerprint before showing what the PCs sent.
+        askedUnlock = DecisionState.lockedLinks().isNotEmpty()
+        unlock()
+    }
+    override fun onPause() { resumed = false; super.onPause() }
 
     /** A key: the main label in the middle, and its swipe-up / long-press alternative small in the top-right corner. */
     private fun keyView(key: ExtraKey, dp: Float): TextView = object : TextView(this) {
@@ -352,7 +462,7 @@ class ScreenActivity : Activity() {
         val manager = getSystemService(android.app.NotificationManager::class.java)
         manager.createNotificationChannel(android.app.NotificationChannel("files", "PC に送ったファイル", android.app.NotificationManager.IMPORTANCE_DEFAULT))
         manager.notify(path.hashCode(), android.app.Notification.Builder(this, "files").setSmallIcon(kazuph.ikesu.R.drawable.ic_notification)
-            .setContentTitle("${DecisionState.sources[source]?.name ?: "PC"} に保存しました").setContentText(path)
+            .setContentTitle("${target()?.name ?: "PC"} に保存しました").setContentText(path)
             .setStyle(android.app.Notification.BigTextStyle().bigText(path)).setColor(GREEN)
             .setVisibility(android.app.Notification.VISIBILITY_PRIVATE).setAutoCancel(true).build())
     }
@@ -543,7 +653,7 @@ class ScreenActivity : Activity() {
     }
 
     private fun sendFileNow(name: String, data: String) {
-        val target = DecisionState.sources[source] ?: return
+        val target = target() ?: return
         target.send(JSONObject().put("type", "screen_file").put("screen", screenId).put("beat", target.beat).put("name", name).put("data", data))
         status.text = "「$name」を送っています…"
     }
@@ -563,7 +673,7 @@ class ScreenActivity : Activity() {
                     result.onSuccess { text ->
                         if (text.isEmpty()) status.text = "声を聞き取れませんでした"
                         // Line breaks would press Enter and control characters would act as keys: type plain text only.
-                        else { send(text.replace(Regex("[\\r\\n\\t]+"), " ").replace(Regex("\\p{Cntrl}"), "").toByteArray(Charsets.UTF_8)); status.text = "${DecisionState.sources[source]?.name ?: "PC"} の画面" }
+                        else { send(text.replace(Regex("[\\r\\n\\t]+"), " ").replace(Regex("\\p{Cntrl}"), "").toByteArray(Charsets.UTF_8)); status.text = "${target()?.name ?: "PC"} の画面" }
                     }.onFailure { error -> status.text = error.message ?: "文字起こしに失敗しました" }
                 }
             }.start()
@@ -585,14 +695,13 @@ class ScreenActivity : Activity() {
         markBell()
         ScreenBus.listener = { from, message -> if (from == source) handle(message) }
         // Coming back after the unlock ended: do not keep showing the old screen.
-        if (DecisionState.sources[source]?.operable != true) { view.clear(); MainActivity.autoScreen = true; finish(); return }
-        // Back from the picker with the screen still open: keep using it.
-        if (screenId >= 0 || opening) return
-        if (view.cols > 0) open(view.cols, view.rows)
+        started = true
+        if (target()?.operable != true) { dropScreen(); view.clear() }
+        refresh()
     }
 
     override fun onDestroy() {
-        if (::source.isInitialized && openSource == source) openSource = null
+        running = false
         super.onDestroy()
     }
 
@@ -602,23 +711,22 @@ class ScreenActivity : Activity() {
         // which shows its first space instead of the one being used.
         runCatching { unregisterReceiver(changes) }
         if (picking) { super.onStop(); return }
-        closeNative(); choosing = null; answeredInput = null; view.removeCallbacks(choiceTimeout)
-        if (screenId >= 0) DecisionState.sources[source]?.send(JSONObject().put("type", "screen_close").put("screen", screenId))
-        screenId = -1; opening = false; wanted = null
+        started = false
+        dropScreen()
         if (voice.recording) voice.cancel()
         ScreenBus.listener = null
         super.onStop()
     }
 
     private fun open(cols: Int, rows: Int) {
-        val target = DecisionState.sources[source]
+        val target = target()
         if (target == null || !target.operable) { status.text = "顔・指紋で開いてから、画面を開いてください"; return }
         if (opening) return
         opening = target.send(JSONObject().put("type", "screen_open").put("cols", cols).put("rows", rows))
     }
 
     private fun sizeChanged(cols: Int, rows: Int) {
-        if (screenId >= 0) DecisionState.sources[source]?.send(JSONObject().put("type", "screen_resize").put("screen", screenId).put("cols", cols).put("rows", rows))
+        if (screenId >= 0) target()?.send(JSONObject().put("type", "screen_resize").put("screen", screenId).put("cols", cols).put("rows", rows))
         else if (opening) wanted = cols to rows
         else if (ScreenBus.listener != null) open(cols, rows)
     }
@@ -629,7 +737,7 @@ class ScreenActivity : Activity() {
                 if (!opening) return
                 opening = false; screenId = message.optInt("screen")
                 scanner = NativeUiScanner(); lastMenu = null
-                status.text = "${DecisionState.sources[source]?.name ?: "PC"} の画面"
+                status.text = "${target()?.name ?: "PC"} の画面"
                 // The size changed while opening (the keyboard, for example): send the latest one.
                 wanted?.let { (c, r) -> if (c != message.optInt("cols") || r != message.optInt("rows")) sizeChanged(c, r) }
                 wanted = null
@@ -641,16 +749,16 @@ class ScreenActivity : Activity() {
                 result.signals.forEach { showNative(it) }
                 view.feed(result.screen)
             }
-            "screen_closed" -> if (message.optInt("screen") == screenId) { screenId = -1; MainActivity.autoScreen = true; Toast.makeText(this, "PC 側で画面が閉じました", Toast.LENGTH_LONG).show(); finish() }
-            "screen_file_saved" -> { status.text = "${DecisionState.sources[source]?.name ?: "PC"} の画面"; notifySaved(message.optString("path")) }
-            "operate_expired" -> { if (isFinishing) return; screenId = -1; MainActivity.autoScreen = true; view.clear(); Toast.makeText(this, "接続が切れたか、顔・指紋で開いた時間が切れました", Toast.LENGTH_LONG).show(); finish() }
+            "screen_closed" -> if (message.optInt("screen") == screenId) { screenId = -1; view.clear(); Toast.makeText(this, "PC 側で画面が閉じました", Toast.LENGTH_LONG).show(); refresh() }
+            "screen_file_saved" -> { status.text = "${target()?.name ?: "PC"} の画面"; notifySaved(message.optString("path")) }
+            "operate_expired" -> { if (isFinishing) return; screenId = -1; dropScreen(); view.clear(); Toast.makeText(this, "接続が切れたか、顔・指紋で開いた時間が切れました", Toast.LENGTH_LONG).show(); refresh() }
             "error" -> { opening = false; status.text = "PC 側: ${message.optString("message")}" }
         }
     }
 
     private fun send(bytes: ByteArray) {
         if (screenId < 0 || bytes.isEmpty()) return
-        val target = DecisionState.sources[source] ?: return
+        val target = target() ?: return
         target.send(JSONObject().put("type", "screen_input").put("screen", screenId).put("beat", target.beat)
             .put("data", Base64.encodeToString(bytes, Base64.NO_WRAP)))
     }
