@@ -5,11 +5,19 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
-    "dev": "wrangler dev"
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.8.2",
     "vitest": "4.1.12",
     "wrangler": "4.162.0"
+  },
+  "cloudflare": {
+    "bindings": {
+      "RELAY_KEY": {
+        "description": "The key your PC's bridge shares with this relay: base64url, 32 bytes. Make one with `node -e 'console.log(require(\"crypto\").randomBytes(32).toString(\"base64url\"))'` and keep it: you give the same value to `relay-setup --key`. See [the README](https://github.com/kazuph/ikesu/tree/main/apps/relay#readme)."
+      }
+    }
   }
 }
