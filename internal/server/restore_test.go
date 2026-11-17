@@ -114,13 +114,17 @@ func newTestServer(t *testing.T, session string) *Server {
 	st := model.New(cwd, 80, 24)
 	sup := runtime.NewSupervisor()
 	app := tui.NewApp(st, sup, io.Discard, cwd)
-	return &Server{
+	s := &Server{
 		receiptClock: wallReceiptClock{},
 		session:      session,
 		dir:          filepath.Join(base, session),
 		app:          app,
 		sup:          sup,
 	}
+	// 台帳への書き込みは別の goroutine で後から走る。TempDir を消す前に終わるのを待つ
+	// （待たないと、消している途中に書かれて「directory not empty」で落ちる。2026-11-17 mini の race で発生）。
+	t.Cleanup(s.ledgerWG.Wait)
+	return s
 }
 
 // reportAgent sends a pane.report_agent call, failing the test on error.
