@@ -183,7 +183,8 @@ func (s *Server) deliverMailWrite(w mailWrite) (bool, error) {
 	// meanwhile so no flush writes it twice.
 	// written=true with no error means accepted: completeMailWrite records
 	// delivery and releases the in-flight markers when the bytes are written.
-	go s.completeMailWrite(w, done)
+	s.mailAckWG.Add(1)
+	go func() { defer s.mailAckWG.Done(); s.completeMailWrite(w, done) }()
 	return true, nil
 }
 

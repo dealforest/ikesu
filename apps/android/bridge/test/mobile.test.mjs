@@ -474,6 +474,8 @@ test('画面: 顔・指紋の前は開けない。開いたら出力が届き、
   const opened = await a.recv(m => m.type === 'screen_opened');
   assert.deepEqual([opened.cols, opened.rows], [40, 20]);
   const screen = fake.screens[0];
+  // スマホごとのファイルに、最後に見ていたスペースを覚える（戻ったときにそこから始める）。
+  assert.equal(screen.selectionFile, path.join(env.configDir, 'screens', `${env.hub.devices[0].device}.json`));
   screen.onData(0, Buffer.from('hello'));
   const data = await a.recv(m => m.type === 'screen_data');
   assert.equal(Buffer.from(data.data, 'base64').toString(), 'hello');

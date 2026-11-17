@@ -1,4 +1,5 @@
 // 中継から届く接続を受け持つ。握手・ペアリング・通知・操作（PROTOCOL.md 3〜3.5・5）。
+import path from 'node:path';
 import { createReadStream } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { Assembler, encodeMessage, NoiseResponder } from './noise-channel.mjs';
@@ -178,7 +179,9 @@ class Session {
       this.closeScreen(true);
       const id = this.hub.nextScreenId++;
       try {
-        this.screen = this.hub.openScreen({ id, cols: message.cols, rows: message.rows,
+        // スマホごとに、最後に見ていたスペースとタブを覚えるファイル。アプリを離れて戻ったとき、新しい画面がそこから始まる。
+        const selectionFile = this.hub.configDir && /^[A-Za-z0-9_-]+$/.test(this.device.device) ? path.join(this.hub.configDir, 'screens', `${this.device.device}.json`) : undefined;
+        this.screen = this.hub.openScreen({ id, cols: message.cols, rows: message.rows, selectionFile,
           onData: (seq, bytes) => this.send({ type: 'screen_data', screen: id, seq, data: bytes.toString('base64') }),
           onExit: info => {
             if (!info?.closedByUs) this.hub.log(`${this.device.name}: 画面の ikesu が終わりました（終了コード ${info?.exitCode}、シグナル ${info?.signal}）: ${JSON.stringify(info?.head?.toString('utf8').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').slice(0, 200))}`);

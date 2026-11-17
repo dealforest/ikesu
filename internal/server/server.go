@@ -205,6 +205,10 @@ type Server struct {
 	ledgerRunning bool
 	ledgerIdle    chan struct{}
 	ledgerWG      sync.WaitGroup
+	// mailAckWG counts completeMailWrite goroutines (they open the session's
+	// database after the PTY write ends). Tests wait for it before removing
+	// the state folder; shutdown does not, since a stuck PTY write would hang it.
+	mailAckWG     sync.WaitGroup
 	saveMu        sync.Mutex
 	saveTimer     *time.Timer // pending coalesced session.json write
 	saveRunning   bool        // guarded by saveMu

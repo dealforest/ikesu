@@ -28,6 +28,9 @@ func (m *machineClient) rememberSelection(id string, in render.Input) {
 		return
 	}
 	e.selection = &paintedSelection{target: e.profile.Target, session: m.selectionSession(id), value: endpoint.CaptureSelection(in.State)}
+	if id == "local" {
+		m.selectionFile.save(e.selection.value)
+	}
 }
 
 func (m *machineClient) reconnectSelection(id string) *endpoint.ViewSelection {
