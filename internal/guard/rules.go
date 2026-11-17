@@ -53,6 +53,7 @@ type Input struct {
 	shellPID             string
 	shellArrays          map[string]map[int]string
 	probePrivate         bool
+	probePath            string // 判定の gh・git を探す PATH（ペインを開いたときの値。空ならコマンドの PATH）
 	stateRoot            string // guard の状態のフォルダ。所有の確認の結果を覚えるのに使う（空なら覚えない）
 	gitOptions           []string
 	gitStripped          []string

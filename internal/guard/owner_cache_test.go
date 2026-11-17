@@ -37,7 +37,7 @@ esac
 	git := `#!/bin/sh
 case "$*" in
 *"symbolic-ref"*) echo feat;;
-*"remote get-url"*) echo "` + remote + `";;
+*"remote get-url --push origin"*) echo "` + remote + `";;
 *) exit 1;;
 esac
 `
@@ -161,5 +161,61 @@ func TestAuthorizeLineUsesRememberedOrganizationPush(t *testing.T) {
 	out.Reset()
 	if AuthorizeLine(Config{}, root, i, "git push origin HEAD:refs/heads/main", &out, await) {
 		t.Fatalf("main push allowed: %s", out.String())
+	}
+}
+
+// 登録していない URL への push は、今いるリポではなく URL の先で判定する。GitHub に repo view を聞かない。
+func TestGitPushJudgesTheURLItPushesTo(t *testing.T) {
+	_, i, bin := ownerFixture(t, "git@github.com:org/app.git")
+	for line, want := range map[string]string{
+		"git push origin HEAD:refs/heads/feat":                              "allow",
+		"git push https://github.com/victim/repo.git HEAD:refs/heads/feat":  "block",
+		"git push git@github.com:victim/repo HEAD:refs/heads/feat":          "block",
+		"git push https://example.com/org/app.git HEAD:refs/heads/feat":     "ask",
+		"git push https://example.com/github.com/org/app HEAD:refs/heads/x": "ask",
+		"git push not-a-remote HEAD:refs/heads/feat":                        "ask",
+	} {
+		if _, v, _ := lineVerdict(Config{}, i, line); v.Decision != want {
+			t.Errorf("%s => %s/%s, want %s", line, v.Decision, v.Rule, want)
+		}
+	}
+	if c, _ := os.ReadFile(filepath.Join(bin, "calls")); strings.Contains(string(c), "repo view") {
+		t.Fatalf("asked GitHub for repo view: %q", c)
+	}
+}
+
+// 行の中の PATH= で偽の gh を前に置いても、判定はペインを開いたときの PATH の gh で行う。
+func TestAuthorizeLineProbesWithPanePATH(t *testing.T) {
+	root, i, bin := ownerFixture(t, "git@github.com:victim/repo.git")
+	fake := t.TempDir()
+	if e := os.WriteFile(filepath.Join(fake, "gh"), []byte("#!/bin/sh\ncase \"$*\" in *owner.type*) echo Organization;; *permissions.push*) echo true;; *) echo kazuph;; esac\n"), 0o755); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.Symlink(filepath.Join(bin, "git"), filepath.Join(fake, "git")); e != nil {
+		t.Fatal(e)
+	}
+	i.stateRoot = ""
+	await := func(api.DecisionCreateParams, time.Duration) (api.Decision, error) {
+		return api.Decision{}, errors.New("asked")
+	}
+	var out bytes.Buffer
+	if AuthorizeLine(Config{}, root, i, "PATH="+fake+":/usr/bin:/bin git push origin HEAD:refs/heads/feat", &out, await) {
+		t.Fatalf("fake gh allowed a push to a personal repo: %s", out.String())
+	}
+	if b, _ := os.ReadFile(ownerCacheFile(root)); strings.Contains(string(b), "victim") {
+		t.Fatalf("fake answer remembered: %q", b)
+	}
+}
+
+// PR 作成のログイン名の確認も、覚えた名前を使い、GitHub が遅くても block しない。
+func TestPRCreateUsesRememberedLogin(t *testing.T) {
+	_, i, bin := ownerFixture(t, "git@github.com:org/app.git")
+	if v := ownerVerdict(i, "org/app", "PR 作成"); v.Decision != "allow" {
+		c, _ := os.ReadFile(filepath.Join(bin, "calls"))
+		t.Fatalf("first: %+v\n%s", v, c)
+	}
+	githubDown(t, bin)
+	if _, v, _ := lineVerdict(Config{}, i, "gh pr create --repo org/app --title x --body y"); v.Decision != "allow" {
+		t.Fatalf("PR create while GitHub is down: %s/%s %s", v.Decision, v.Rule, v.Reason)
 	}
 }

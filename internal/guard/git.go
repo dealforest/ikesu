@@ -10,13 +10,34 @@ import (
 )
 
 // Probes are read-only, use the caller's environment, and remove our own shim.
+// probeTimeout は判定のための問い合わせ（gh・git）を待つ長さ。試験では、負荷で新しい実行ファイルの
+// 起動が遅れても落ちないよう TestMain で延ばす。
+var probeTimeout = 3 * time.Second
+var ghProbeTimeout = 15 * time.Second
+
 func probe(i Input, cmd string, a ...string) string {
 	if i.probePrivate {
 		return ""
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	wait := probeTimeout
+	if cmd == "gh" {
+		// gh は起動と鍵の読み出しだけで1〜3秒かかり、GitHub が遅いと3秒を超える（2026-11-17 実測 1.1〜3.7秒）。
+		// 3秒で打ち切ると権限のある push でも確認が出ていた。答えは24時間覚えるので、待つのは初回だけ。
+		wait = ghProbeTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
 	defer cancel()
-	env := environment(i.Env)
+	m := i.Env
+	if i.probePath != "" {
+		// 判定に使う gh・git は、ペインを開いたときの PATH から探す。行の中の PATH= や export で
+		// 偽の gh・git に差し替えさせない。
+		m = map[string]string{}
+		for k, v := range i.Env {
+			m[k] = v
+		}
+		m["PATH"] = i.probePath
+	}
+	env := environment(m)
 	p, e := Resolve(cmd, env)
 	if e != nil {
 		return ""
@@ -91,16 +112,28 @@ func gitPush(i Input) Verdict {
 		}
 		return result("block", "git-main", "main/master への push は AI からは禁止です。必要なら人間が手動で実行してください。")
 	}
-	repo := probe(i, "gh", "repo", "view", probe(i, "git", "remote", "get-url", remote), "--json", "nameWithOwner", "--jq", ".nameWithOwner")
-	if repo == "" {
-		repo = repository(probe(i, "git", "remote", "get-url", remote))
+	// push 先は、登録したリモートなら push 用の URL、そうでなければ引数（URL やパス）そのもの。
+	// 登録していない名前を今いるリポとして判定しない（git push https://… が cwd のリポで通っていた）。
+	url := probe(i, "git", "remote", "get-url", "--push", remote)
+	configured := url != ""
+	if !configured {
+		url = remote
+	}
+	// URL から読めれば GitHub に聞かない（gh repo view は遅いと毎回3秒待っていた）。
+	repo := repository(url)
+	if repo == "" && configured {
+		repo = probe(i, "gh", "repo", "view", url, "--json", "nameWithOwner", "--jq", ".nameWithOwner")
 	}
 	return ownerVerdict(i, repo, "push")
 }
+
+// repository は github.com の URL（https://・ssh://・git@github.com:）から owner/name を読む。
+// ほかのホストや、パスの途中に github.com を含むだけの URL は空を返す。
+var githubURL = regexp.MustCompile(`^(?:(?:https?|ssh|git)://(?:[^@/]+@)?github\.com(?::[0-9]+)?/|[^@/:]+@github\.com:)([A-Za-z0-9-]+/[A-Za-z0-9._-]+?)(?:\.git)?/?$`)
+
 func repository(s string) string {
-	if n := strings.Index(s, "github.com"); n >= 0 {
-		s = strings.TrimLeft(s[n+len("github.com"):], ":/")
-		return strings.TrimSuffix(s, ".git")
+	if m := githubURL.FindStringSubmatch(strings.TrimSpace(s)); m != nil {
+		return m[1]
 	}
 	return ""
 }

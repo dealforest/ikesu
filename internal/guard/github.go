@@ -84,12 +84,12 @@ func github(i Input) Verdict {
 			repo = probe(i, "gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner")
 		}
 		if repo == "" {
-			repo = repository(probe(i, "git", "remote", "get-url", "origin"))
+			repo = repository(probe(i, "git", "remote", "get-url", "--push", "origin"))
 		}
 		if !strings.Contains(repo, "/") {
 			return result("block", "gh-target", "PR の target repo を特定できません。--repo を明示してください。")
 		}
-		if probe(i, "gh", "api", "/user", "--jq", ".login") == "" {
+		if githubLogin(i) == "" {
 			return result("block", "gh-auth", "gh 認証情報が取得できないため block。gh auth status を確認してください。")
 		}
 		return ownerVerdict(i, repo, "PR 作成")

@@ -38,6 +38,7 @@ func AuthorizeLine(c Config, root string, i Input, line string, errOut io.Writer
 	}
 	i.LaunchCwd = m.Cwd
 	i.stateRoot = root
+	i.probePath = m.ProbePath
 	callerEnv := i.Env
 	snapshot := i.shellVariables
 	arrays := i.shellArrays
