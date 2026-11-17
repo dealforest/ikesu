@@ -67,6 +67,18 @@ ikesu mac-dialog status
 
 エージェントの確認や質問を、ネイティブの窓で答えられるようにします。パネルはキーボードを奪いません。その質問を出したペインのスペースを今見ているときは、窓を背面に置きます。
 
+### サイドバーのプラグイン
+
+`~/.config/ikesu/plugins/sidebar/` に置いた実行できるスクリプトを、名前に書いた間隔ごとに動かします。出力の `---` より前の行を、色（ANSI）ごとサイドバーの下に出します（SwiftBar と同じ名前の付け方）。スクリプトには、サイドバーの幅が `IKESU_SIDEBAR_COLUMNS` で渡ります。
+
+```sh
+mkdir -p ~/.config/ikesu/plugins/sidebar
+printf '#!/bin/sh\ncurl -s "wttr.in/Tokyo?format=3"\n' > ~/.config/ikesu/plugins/sidebar/tenki.1h.sh
+chmod +x ~/.config/ikesu/plugins/sidebar/tenki.1h.sh
+```
+
+間隔は `10s`・`5m`・`1h`・`1d` のように書きます。10秒より短い間隔は10秒にし、10秒で終わらないスクリプトは止めます。プラグインごとに見出しが付き、クリックすると閉じます。Claude Code と Codex の使用量は、AgentPal の `agentpal usage` をプラグインから呼ぶと出せます。
+
 ## 錦鯉の池
 
 右のサイドバーのエージェント一覧の下に空きがあると、サイドバーの背景のまま錦鯉が泳ぎます。鯉1匹がエージェント1体を表します。

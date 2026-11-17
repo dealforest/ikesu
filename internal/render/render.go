@@ -132,6 +132,7 @@ type Input struct {
 	ServerUI           bool
 	State              *model.AppState
 	SidebarConfig      config.Config
+	SidebarPanel       *SidebarPanel // the usage and plugin block at the bottom of the left sidebar
 	WorkspaceTokens    map[int]map[string]string
 	Panes              map[int]*PaneSnap
 	Scroll             map[int]int

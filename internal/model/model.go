@@ -72,6 +72,7 @@ type AppState struct {
 	Overlay                                             *OverlayPaneState
 	Active                                              int // index into Workspaces
 	SidebarHidden                                       bool
+	SidebarPanelRows                                    int // rows the usage/plugin block takes above the left sidebar's footer (set each frame)
 	RightSidebarMode                                    string
 	RightSidebarSize                                    int
 	RightSidebarManual                                  bool

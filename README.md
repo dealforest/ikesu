@@ -65,6 +65,18 @@ ikesu mac-dialog status
 
 Lets you answer agents' confirmations and questions in a native window. The panel never takes the keyboard. While you are looking at the space of the pane that asked, the window is placed behind other windows.
 
+### Sidebar plugins
+
+Executable scripts in `~/.config/ikesu/plugins/sidebar/` run at the interval in their name (named like SwiftBar plugins). The lines they print before `---` are shown, with their ANSI colors, at the bottom of the sidebar. Scripts get the sidebar width in `IKESU_SIDEBAR_COLUMNS`.
+
+```sh
+mkdir -p ~/.config/ikesu/plugins/sidebar
+printf '#!/bin/sh\ncurl -s "wttr.in/Tokyo?format=3"\n' > ~/.config/ikesu/plugins/sidebar/tenki.1h.sh
+chmod +x ~/.config/ikesu/plugins/sidebar/tenki.1h.sh
+```
+
+Write the interval as `10s`, `5m`, `1h` or `1d`. Intervals under ten seconds run every ten seconds, and a script still running after ten seconds is stopped. Each plugin gets a heading; click it to fold. For Claude Code and Codex usage limits, call AgentPal's `agentpal usage` from a plugin.
+
 ## Koi pond
 
 When there is room below the agent list in the right sidebar, koi swim there over the sidebar's own background. Each koi stands for an agent:

@@ -15,6 +15,9 @@ func (a *App) sidebarClick(m uv.Mouse) {
 	if m.Button != uv.MouseLeft {
 		return
 	}
+	if a.sidebarPanelClick(m.X, m.Y) {
+		return
+	}
 	if a.sidebarPress(m) {
 		return
 	}
