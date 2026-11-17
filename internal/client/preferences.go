@@ -48,6 +48,12 @@ func loadLocalSettings(session string) (*localSettings, error) {
 	} else {
 		s.config = &c
 	}
+	// A client inside a host app (the phone's screen) starts from its own config every time and keeps what it
+	// changes (the sidebar, its width) to itself: sharing this file would carry the phone's layout to the PC's client.
+	if s.config != nil && s.config.UI.NativeMenus {
+		s.path = ""
+		return s, nil
+	}
 	preferences, err := endpoint.LoadViewPreferences(s.path)
 	if err != nil {
 		return nil, err
@@ -57,6 +63,10 @@ func loadLocalSettings(session string) (*localSettings, error) {
 }
 
 func (s *localSettings) save(preferences endpoint.ViewPreferences) error {
+	if s.path == "" {
+		s.preferences = &preferences
+		return nil
+	}
 	if err := endpoint.SaveViewPreferences(s.path, preferences); err != nil {
 		return err
 	}

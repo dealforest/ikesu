@@ -3,17 +3,23 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { nestedClientConfig } from '../screen.mjs';
 
-test('allow_nested を [experimental] に、native_menus を [ui] に足す。前からある同じ行は置き換え、ほかの行は残す', () => {
-  assert.equal(nestedClientConfig('prefix = "ctrl+t"\n[experimental]\nallow_nested = false\nfoo = 1\n[ui]\nnative_menus = false\n[other]\nallow = 2\n'),
-    'prefix = "ctrl+t"\n[experimental]\nallow_nested = true\nfoo = 1\n[ui]\nnative_menus = true\n[other]\nallow = 2\n\n');
+test('allow_nested を [experimental] に、native_menus とサイドバーを隠す設定を [ui] に足す。前からある同じ行は置き換え、ほかの行は残す', () => {
+  assert.equal(nestedClientConfig('prefix = "ctrl+t"\n[experimental]\nallow_nested = false\nfoo = 1\n[ui]\nnative_menus = false\nsidebar_start_collapsed = false\n[keys]\ntoggle_sidebar = "prefix+s"\n[other]\nallow = 2\n'),
+    'prefix = "ctrl+t"\n[experimental]\nallow_nested = true\nfoo = 1\n[ui]\nsidebar_collapsed_mode = "hidden"\nsidebar_start_collapsed = true\nnative_menus = true\n[keys]\ntoggle_sidebar = ["prefix+s", "f12"]\n[other]\nallow = 2\n\n');
+});
+
+test('サイドバーの出し入れに F12 を足す。持ち主の割り当ては残し、無ければ既定の prefix+b を残す', () => {
+  assert.match(nestedClientConfig(''), /\[keys\]\ntoggle_sidebar = \["prefix\+b", "f12"\]\n/);
+  assert.match(nestedClientConfig('[keys]\ntoggle_sidebar = ["ctrl+b", "f12"] # mine\n'), /toggle_sidebar = \["ctrl\+b", "f12"\]\n/);
+  assert.match(nestedClientConfig('[keys]\ntoggle_sidebar = ""\n'), /toggle_sidebar = \["f12"\]\n/);
 });
 
 test('表が無ければ最後に足す。空の設定でも足す', () => {
   const out = nestedClientConfig('prefix = "ctrl+t"\n');
   assert.match(out, /^prefix = "ctrl\+t"\n/);
   assert.match(out, /\[experimental\]\nallow_nested = true\n/);
-  assert.match(out, /\[ui\]\nnative_menus = true\n/);
-  assert.match(nestedClientConfig(''), /\[ui\]\nnative_menus = true\n$/);
+  assert.match(out, /\[ui\]\n(.*\n)*native_menus = true\n/);
+  assert.match(nestedClientConfig(''), /\[ui\]\nsidebar_collapsed_mode = "hidden"\nsidebar_start_collapsed = true\nnative_menus = true\n/);
 });
 
 import fs from 'node:fs';

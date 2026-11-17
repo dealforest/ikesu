@@ -104,8 +104,6 @@ object DecisionState : AnswerChannel {
 class DecisionService : Service() {
     companion object {
         const val CHANGED = "kazuph.ikesu.CHANGED"
-        /** Brings the decisions screen to the front: the PC's screen above it (ScreenActivity) is closed, as leaving it does. */
-        const val FRONT = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         const val RECONNECT = "kazuph.ikesu.RECONNECT"
         private const val CONNECTION = "connection"
         private const val QUESTIONS = "questions"
@@ -145,11 +143,15 @@ class DecisionService : Service() {
         manager.notify(FOREGROUND_ID, connectionNotification())
         sendBroadcast(Intent(CHANGED).setPackage(packageName))
     }
+    /** Opens [intent] (the decisions panel) over the PC's screen, the app's first page: the screen stays open underneath. */
+    private fun panel(code: Int, intent: Intent): PendingIntent = PendingIntent.getActivities(this, code,
+        arrayOf(Intent(this, ScreenActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), intent),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     private fun connectionNotification(): Notification = Notification.Builder(this, CONNECTION)
         .setSmallIcon(R.drawable.ic_notification).setContentTitle("ikesu")
         .setContentText("${if (DecisionState.connected) "接続中" else "未接続"} · 未回答 ${DecisionState.decisions.length()}件")
         .setColor(0xFF33FF66.toInt())
-        .setOngoing(true).setContentIntent(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java).putExtra("list", true).addFlags(FRONT), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build()
+        .setOngoing(true).setContentIntent(panel(0, Intent(this, MainActivity::class.java).putExtra("list", true))).build()
 
     /** (Re)opens a connection to each paired PC. */
     private fun connect() {
@@ -291,8 +293,8 @@ class DecisionService : Service() {
             if (!item.optBoolean("notify")) { notificationIds[key]?.let(manager::cancel); continue }
             if (old[key] == true) continue
             val number = notificationIds.getOrPut(key) { nextNotification++ }
-            val intent = Intent(this, MainActivity::class.java).putExtra("decision", key).addFlags(FRONT)
-            val pending = PendingIntent.getActivity(this, number, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            val intent = Intent(this, MainActivity::class.java).putExtra("decision", key)
+            val pending = panel(number, intent)
             manager.notify(number, Notification.Builder(this, QUESTIONS).setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle(decisionHeading(item.optString("raw_title"), item.optString("raw_body"), item.optString("kind")))
                 .setContentText(item.optString("location", "判断を待っています"))
