@@ -257,17 +257,17 @@ class ScreenActivity : Activity() {
         val rows = listOf(
             listOf(ExtraKey("⇧", ScreenKey.Modifier(KeyBytes.SHIFT)), ExtraKey("⌘", ScreenKey.Modifier(KeyBytes.SUPER)),
                 ExtraKey("^T", ScreenKey.Bytes(byteArrayOf(20))),
-                ExtraKey("🎤", ScreenKey.Action { toggleVoice() }), ExtraKey("📎", ScreenKey.Action { pickFile() }),
-                ExtraKey("貼付", ScreenKey.Action { pasteClipboard() })),
+                ExtraKey("貼付", ScreenKey.Action { pasteClipboard() }), ExtraKey("📎", ScreenKey.Action { pickFile() }),
+                ExtraKey("🎤", ScreenKey.Action { toggleVoice() })),
             listOf(ExtraKey("ESC", ScreenKey.Code(KeyEvent.KEYCODE_ESCAPE)), ExtraKey("|", ScreenKey.Text("|"), "PGUP", ScreenKey.Code(KeyEvent.KEYCODE_PAGE_UP)),
                 ExtraKey("$", ScreenKey.Text("$"), "PGDN", ScreenKey.Code(KeyEvent.KEYCODE_PAGE_DOWN)), ExtraKey("/", ScreenKey.Text("/"), "clear", ScreenKey.Text("/clear")),
                 ExtraKey("#", ScreenKey.Text("#")), ExtraKey("↑", ScreenKey.Code(KeyEvent.KEYCODE_DPAD_UP), "new", ScreenKey.Bytes(byteArrayOf(20))),
-                ExtraKey("@", ScreenKey.Text("@")), ExtraKey("\\", ScreenKey.Text("\\")), ExtraKey("~", ScreenKey.Text("~"), "^", ScreenKey.Text("^"))),
+                ExtraKey("@", ScreenKey.Text("@")), ExtraKey("\\", ScreenKey.Text("\\")), ExtraKey("BKSP", ScreenKey.Code(KeyEvent.KEYCODE_DEL))),
             listOf(ExtraKey("TAB", ScreenKey.Code(KeyEvent.KEYCODE_TAB), "S-TAB", ScreenKey.Bytes("\u001b[Z".toByteArray())),
                 ExtraKey("CTRL", ScreenKey.Modifier(KeyBytes.CTRL), "^C", ScreenKey.Bytes(byteArrayOf(3))), ExtraKey("ALT", ScreenKey.Modifier(KeyBytes.ALT)),
                 ExtraKey("!", ScreenKey.Text("!")), ExtraKey("←", ScreenKey.Code(KeyEvent.KEYCODE_DPAD_LEFT), "prev", ScreenKey.Bytes(byteArrayOf(16))),
                 ExtraKey("↓", ScreenKey.Code(KeyEvent.KEYCODE_DPAD_DOWN)), ExtraKey("→", ScreenKey.Code(KeyEvent.KEYCODE_DPAD_RIGHT), "next", ScreenKey.Bytes(byteArrayOf(14))),
-                ExtraKey("⏎", ScreenKey.Code(KeyEvent.KEYCODE_ENTER), "\\⏎", ScreenKey.Bytes("\\\r".toByteArray())), ExtraKey("BKSP", ScreenKey.Code(KeyEvent.KEYCODE_DEL))),
+                ExtraKey("~", ScreenKey.Text("~"), "^", ScreenKey.Text("^")), ExtraKey("⏎", ScreenKey.Code(KeyEvent.KEYCODE_ENTER), "\\⏎", ScreenKey.Bytes("\\\r".toByteArray()))),
         )
         val keys = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.BLACK); setPadding((2 * dp).toInt(), (2 * dp).toInt(), (2 * dp).toInt(), (2 * dp).toInt()) }
         // Every row spans the same 9-column grid, so the keys line up (a 6-key row gets 1.5 columns each).
@@ -352,6 +352,7 @@ class ScreenActivity : Activity() {
         gravity = Gravity.CENTER; setTextColor(GREEN); textSize = 15f
         background = keyBackground(false, dp)
         if (key.main is ScreenKey.Modifier) modifierViews[key.main.bit] = this
+        if (key.label == "🎤") micView = this
         // Long press shows a bubble above the key with what the swipe up would type; sliding up while holding types it.
         // Letting go without sliding up types nothing. A quick swipe up types it at once, as before.
         var downY = 0f; var up = false; var bubble: android.widget.PopupWindow? = null
@@ -683,11 +684,27 @@ class ScreenActivity : Activity() {
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 3); return
         }
-        try { voice.start(); status.text = "録音中…（🎤 でもう一度押すと文字にして打ちます）" } catch (error: Exception) { Toast.makeText(this, "録音を始められませんでした: ${error.message}", Toast.LENGTH_LONG).show() }
+        try { voice.start(); status.text = "録音中…" } catch (error: Exception) { Toast.makeText(this, "録音を始められませんでした: ${error.message}", Toast.LENGTH_LONG).show() }
         markMic()
     }
 
-    private fun markMic() { /* The status line says what the microphone is doing. */ }
+    private var micPulse: android.animation.ObjectAnimator? = null
+    /** The 🎤 key itself shows the microphone: red and blinking while recording, yellow while turning it into text. */
+    private fun markMic() {
+        val mic = micView ?: return
+        val dp = resources.displayMetrics.density
+        micPulse?.cancel(); micPulse = null; mic.alpha = 1f
+        when {
+            voice.recording -> {
+                mic.background = android.graphics.drawable.GradientDrawable().apply { setColor(RED); cornerRadius = 6 * dp }
+                micPulse = android.animation.ObjectAnimator.ofFloat(mic, "alpha", 1f, 0.35f).apply {
+                    duration = 600; repeatMode = android.animation.ValueAnimator.REVERSE; repeatCount = android.animation.ValueAnimator.INFINITE; start()
+                }
+            }
+            transcribing -> mic.background = android.graphics.drawable.GradientDrawable().apply { setColor(0xFFFFCC33.toInt()); cornerRadius = 6 * dp }
+            else -> mic.background = keyBackground(false, dp)
+        }
+    }
 
     override fun onStart() {
         super.onStart()
@@ -713,7 +730,7 @@ class ScreenActivity : Activity() {
         if (picking) { super.onStop(); return }
         started = false
         dropScreen()
-        if (voice.recording) voice.cancel()
+        if (voice.recording) { voice.cancel(); markMic() }
         ScreenBus.listener = null
         super.onStop()
     }
@@ -915,8 +932,9 @@ class TerminalCanvas(
 
     fun feed(bytes: ByteArray) { emulator?.append(bytes, bytes.size); invalidate() }
 
-    /** Forgets what was drawn (so nothing of the PC stays visible). */
-    fun clear() { emulator = null; cols = 0; rows = 0; invalidate() }
+    /** Forgets what was drawn (so nothing of the PC stays visible), keeping a blank terminal of the same size so the
+     *  next screen opens at once. */
+    fun clear() { emulator = null; cols = 0; rows = 0; remeasure() }
 
     override fun onDraw(canvas: Canvas) {
         canvas.drawColor(Color.BLACK)
