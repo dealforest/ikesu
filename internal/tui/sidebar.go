@@ -52,6 +52,11 @@ func (a *App) setSidebarConfig(c config.Config, startup bool) {
 	if startup && c.UI.SidebarStartCollapsed {
 		a.st.SidebarVisible = false
 	}
+	// スマホのアプリの画面（ネイティブのメニューを使うクライアント）では、右のエージェントの一覧を出さない。
+	// 狭い画面を端末に使い、エージェントはアプリの判断待ちの一覧で見る。
+	if startup && c.UI.NativeMenus {
+		a.st.RightSidebarMode = "hidden"
+	}
 	if err != nil {
 		a.worktreeError(err)
 	}
