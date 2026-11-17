@@ -106,8 +106,26 @@ func ObserveClaudeSessionFile(cwd string, start time.Time) (string, bool) {
 	return observeClaudeRoot(filepath.Join(home, ".claude"), cwd, start)
 }
 
+func claudeProjectDir(cwd string) string {
+	b := []byte(cwd)
+	for i, c := range b {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+			b[i] = '-'
+		}
+	}
+	return string(b)
+}
+
 func observeClaudeRoot(configRoot, cwd string, start time.Time) (string, bool) {
 	root := filepath.Join(configRoot, "projects")
+	// Claude は会話を projects/<cwd の英数字以外を - にした名前>/ に置く。そのフォルダがあれば
+	// そこだけを見る（全プロジェクトを毎回歩くと、ペインの観察のたびに千件近いファイルを stat していた）。
+	// 無ければ今までどおり全体を見る。
+	if dir := filepath.Join(root, claudeProjectDir(cwd)); cwd != "" {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			root = dir
+		}
+	}
 	// A session file's recorded timestamp precedes its last write, so a
 	// file untouched since before the window cannot qualify; checking
 	// mtime first keeps the scan cheap.

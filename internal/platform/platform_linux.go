@@ -4,7 +4,11 @@ package platform
 
 import (
 	"os"
+	"strconv"
 	"strings"
+	"time"
+
+	"github.com/kazuph/ikesu/internal/childenv"
 
 	"golang.org/x/sys/unix"
 )
@@ -160,4 +164,16 @@ func foregroundSudo(pid int) bool {
 		pid = atoi(f[1])
 	}
 	return false
+}
+
+func procStartTime(pid int) (time.Time, bool) {
+	out, err := childenv.Command("ps", "-o", "etimes=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return time.Time{}, false
+	}
+	secs, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return time.Now().Add(-time.Duration(secs) * time.Second), true
 }
