@@ -43,6 +43,8 @@ class RelayLink(
                 synchronized(lock) { webSocket.send(session.first().toByteString()) }
             }
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                // One Noise message is at most 65,535 bytes (PROTOCOL 3): a larger frame is not ours, so it is not copied.
+                if (bytes.size > MAX_FRAME) { close("通信を読めませんでした: 大きすぎる1通"); return }
                 try {
                     synchronized(lock) {
                         if (!session.ready) { session.finish(bytes.toByteArray()); listener.onReady(this@RelayLink); return }
@@ -100,6 +102,7 @@ class RelayLink(
     }
 
     companion object {
+        const val MAX_FRAME = 65_535
         private const val PACE_BYTES_PER_SECOND = 3_000_000L
         private const val QUEUE_LIMIT = 1024L * 1024L
         val client: OkHttpClient = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS)

@@ -105,13 +105,15 @@ export class Screen {
     const childEnv = { ...env, TERM: 'xterm-256color', COLORTERM: 'truecolor' };
     delete childEnv.IKESU_PANE_ID;
     if (!spawn) { this.config = writeClientConfig(env); childEnv.IKESU_CONFIG = this.config.file; }
-    if (!spawn) { ensureSpawnHelper(); spawn = require('node-pty').spawn; }
+    if (!spawn) { try { ensureSpawnHelper(); spawn = require('node-pty').spawn; } catch (error) { this.removeConfig(); throw error; } }
     // つなぐセッションは、bridge が話しているサーバーと同じにする（IKESU_SOCKET_PATH のフォルダ名。引数なしは default）。
     const session = env.IKESU_SOCKET_PATH ? path.basename(path.dirname(env.IKESU_SOCKET_PATH)) : '';
     // 引数に渡せない名前のセッションは開かない（default につないで新しいサーバーを作らないため）。
     if (session && session !== 'default' && !/^[A-Za-z0-9._-]+$/.test(session)) { this.removeConfig(); throw Error(`このセッション名には画面を開けません: ${session}`); }
     const args = session && session !== 'default' ? ['--session', session] : [];
-    this.pty = spawn(ikesuBin, args, { name: 'xterm-256color', cols, rows, cwd: env.HOME || process.cwd(), env: childEnv, encoding: null });
+    // 起動に失敗したら、写した設定を残さない。
+    try { this.pty = spawn(ikesuBin, args, { name: 'xterm-256color', cols, rows, cwd: env.HOME || process.cwd(), env: childEnv, encoding: null }); }
+    catch (error) { this.removeConfig(); throw error; }
     // 最初の出力の一部を残しておき、すぐ終わったときの理由を記録に書けるようにする。
     this.head = Buffer.alloc(0);
     this.pty.onData(chunk => { const bytes = Buffer.from(chunk); if (this.head.length < 400) this.head = Buffer.concat([this.head, bytes]).subarray(0, 400); this.buffer(bytes); });
