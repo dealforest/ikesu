@@ -185,7 +185,9 @@ func (a *App) draw() {
 		}
 		warning += fmt.Sprintf("%d 個のペインでシェルを起動できません（理由は各ペインに表示）", len(a.restoreWarnings))
 	}
+	panel := a.layoutSidebarPanel()
 	in := render.Input{
+		SidebarPanel:        panel,
 		RestoreFailures:     a.restoreWarnings,
 		ServerUI:            a.serverUI,
 		PanePalette:         a.panePalette,

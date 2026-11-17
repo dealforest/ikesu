@@ -105,6 +105,7 @@ func (v *Viewer) with(a *App, fn func(*App)) {
 	wasViewer := a.viewerActive
 	a.viewerActive = true
 	v.app.st, v.app.sup = a.st, a.sup
+	v.app.panel = a.panel
 	v.app.trackers, v.app.reported, v.app.sessions = a.trackers, a.reported, a.sessions
 	v.app.decisionAttention = a.decisionAttention
 	v.app.blockerObservations = a.blockerObservations

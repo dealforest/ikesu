@@ -159,6 +159,7 @@ type appJob struct {
 // through Do/PushInput/Resize so all state changes stay on the loop
 // goroutine.
 type App struct {
+	panel             *sidebarPanelState // usage limits and sidebar plugins at the bottom of the left sidebar
 	loopTiming        *loopTiming
 	koiClock          render.KoiAnimation
 	koiLocalActive    bool
@@ -698,6 +699,7 @@ func (a *App) Run() {
 	defer a.inputSource.Prefix(false, false)
 	defer a.removeEditorFiles()
 	defer close(a.doneCh)
+	a.startSidebarPanel(a.doneCh)
 	defer a.closeGitActivity()
 	defer a.pruneBranchCache(nil)
 	processCtx, cancelProcessPoll := context.WithCancel(context.Background())

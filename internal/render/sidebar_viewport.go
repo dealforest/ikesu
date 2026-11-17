@@ -35,7 +35,7 @@ func SidebarViewFor(s *model.AppState, panes map[int]*PaneSnap, cfg config.Confi
 	mid := SidebarSplitY(s)
 	right := s.RightSidebarArea()
 	view := SidebarView{
-		Workspace: SidebarViewport{Rect: layout.Rect{X: a.X, Y: a.Y + 2, W: iw, H: max(0, mid-a.Y-3)}},
+		Workspace: SidebarViewport{Rect: layout.Rect{X: a.X, Y: a.Y + 2, W: iw, H: max(0, mid-a.Y-3-s.SidebarPanelRows)}},
 		Agents:    SidebarViewport{Rect: layout.Rect{X: right.X + 1, Y: 2, W: max(0, right.W-1), H: max(0, right.H-2)}},
 	}
 	if serverUI {
