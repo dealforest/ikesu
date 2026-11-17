@@ -349,6 +349,20 @@ class ScreenActivity : Activity() {
     }
     override fun onPause() { resumed = false; super.onPause() }
 
+    /** Volume keys, as on the decisions: down = Enter, down held = the decisions (or, while recording, stop and type
+     *  it), up held = start or stop recording. A short up press still raises the volume. */
+    private val volume = VolumeNav(
+        up = { getSystemService(android.media.AudioManager::class.java).adjustSuggestedStreamVolume(android.media.AudioManager.ADJUST_RAISE, android.media.AudioManager.USE_DEFAULT_STREAM_TYPE, android.media.AudioManager.FLAG_SHOW_UI) },
+        down = { send(byteArrayOf(13)) },
+        confirm = { if (voice.recording) toggleVoice() else openPanel("list") },
+        back = { toggleVoice() })
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (volume.keyDown(keyCode, event.repeatCount == 0)) { event.startTracking(); return true }
+        return super.onKeyDown(keyCode, event)
+    }
+    override fun onKeyLongPress(keyCode: Int, event: KeyEvent): Boolean = volume.keyLongPress(keyCode) || super.onKeyLongPress(keyCode, event)
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean = volume.keyUp(keyCode) || super.onKeyUp(keyCode, event)
+
     /** A key: the main label in the middle, and its swipe-up / long-press alternative small in the top-right corner. */
     private fun keyView(key: ExtraKey, dp: Float): TextView = object : TextView(this) {
         private val corner = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = DARK_GREEN; textSize = 9f * resources.displayMetrics.scaledDensity; textAlign = android.graphics.Paint.Align.RIGHT }

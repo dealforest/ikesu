@@ -279,7 +279,8 @@ class MainActivity : Activity() {
         when (BackNav.target(settingsVisible, showList)) {
             BackTarget.CLOSE_SETTINGS -> { settingsVisible = false; render() }
             BackTarget.TO_LIST -> { showList = true; render() }
-            BackTarget.NOTHING -> {}
+            // At the list, back (volume up held) closes the panel: the PC's screen underneath shows again.
+            BackTarget.NOTHING -> finish()
         }
     }
     private fun render(scrollToCursor: Boolean = false) {
