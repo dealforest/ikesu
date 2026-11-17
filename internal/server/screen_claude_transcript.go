@@ -38,7 +38,7 @@ func matchClaudeQuestion(p *screenprompt.Prompt, q session.ClaudeQuestion) bool 
 	if p.Total > 0 && (p.Question != q.Index || p.Total <= q.Index) {
 		return false
 	}
-	screenTitle := compactQuestion(p.Params.Title)
+	screenTitle := compactQuestion(strings.TrimPrefix(p.Params.Title, screenprompt.TruncatedNotice))
 	if screenTitle == "" || !strings.Contains(compactQuestion(q.Question), screenTitle) {
 		return false
 	}
