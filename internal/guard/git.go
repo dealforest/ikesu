@@ -3,6 +3,7 @@ package guard
 import (
 	"context"
 	"github.com/kazuph/ikesu/internal/childenv"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -12,7 +13,7 @@ import (
 // Probes are read-only, use the caller's environment, and remove our own shim.
 // probeTimeout は判定のための問い合わせ（gh・git）を待つ長さ。試験では、負荷で新しい実行ファイルの
 // 起動が遅れても落ちないよう TestMain で延ばす。
-var probeTimeout = 3 * time.Second
+var probeTimeout = 10 * time.Second
 var ghProbeTimeout = 15 * time.Second
 
 func probe(i Input, cmd string, a ...string) string {
@@ -170,10 +171,56 @@ func githubAPI(i Input, endpoint, jq string) string {
 // githubLogin は gh のログイン名。手元の gh の設定の値は、24時間以内に GitHub（gh api /user）で
 // 確かめた名前と同じときだけ使う（ネットに出ない）。手元の設定は GH_CONFIG_DIR などで差し替えられるので、
 // 確かめていない名前は使わず GitHub に聞き、答えを覚える。
+// localGitHubUser は gh の設定ファイル（hosts.yml）から github.com の user を読む。gh を起動しない
+// （負荷が高いと gh の起動だけで3秒を超え、確認が出ていた）。読めなければ空。
+func localGitHubUser(i Input) string {
+	dir := i.Env["GH_CONFIG_DIR"]
+	if dir == "" && i.Env["XDG_CONFIG_HOME"] != "" {
+		dir = filepath.Join(i.Env["XDG_CONFIG_HOME"], "gh")
+	}
+	if dir == "" && i.Env["HOME"] != "" {
+		dir = filepath.Join(i.Env["HOME"], ".config", "gh")
+	}
+	if dir == "" {
+		return ""
+	}
+	b, e := os.ReadFile(filepath.Join(dir, "hosts.yml"))
+	if e != nil {
+		return ""
+	}
+	in, indent := false, -1
+	for _, line := range strings.Split(string(b), "\n") {
+		trimmed := strings.TrimLeft(line, " ")
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		depth := len(line) - len(trimmed)
+		if depth == 0 {
+			in = strings.TrimRight(trimmed, " ") == "github.com:"
+			indent = -1
+			continue
+		}
+		if !in {
+			continue
+		}
+		if indent < 0 {
+			indent = depth
+		}
+		if depth == indent && strings.HasPrefix(trimmed, "user:") {
+			return strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "user:")), `"'`)
+		}
+	}
+	return ""
+}
+
 func githubLogin(i Input) string {
 	cache := ownerCache(i)
 	if cache != "" {
-		if local := probe(i, "gh", "config", "get", "-h", "github.com", "user"); githubName.MatchString(local) && validApproval(cache, "login:github.com:"+local, time.Now()) {
+		local := localGitHubUser(i)
+		if local == "" {
+			local = probe(i, "gh", "config", "get", "-h", "github.com", "user")
+		}
+		if githubName.MatchString(local) && validApproval(cache, "login:github.com:"+local, time.Now()) {
 			return local
 		}
 	}
@@ -187,11 +234,11 @@ func githubLogin(i Input) string {
 func ownerVerdict(i Input, repo, operation string) Verdict {
 	ask := askAt("ownership", "リモート・所有者を確認できないため承認が必要です。", TierL2, DestGitHub)
 	if !strings.Contains(repo, "/") {
-		return ask
+		return askAt("ownership", "push 先の GitHub のリポジトリを確定できないため承認が必要です。", TierL2, DestGitHub)
 	}
 	login := githubLogin(i)
 	if login == "" {
-		return ask
+		return askAt("ownership", "GitHub のログイン名を時間内に確かめられないため承認が必要です。", TierL2, DestGitHub)
 	}
 	owner, _, _ := strings.Cut(repo, "/")
 	if owner == login {
@@ -228,13 +275,16 @@ func ownerVerdict(i Input, repo, operation string) Verdict {
 		if has([]string{"read", "triage"}, p) {
 			return result("block", "organization-denied", "組織 ("+owner+") への "+operation+" 権限がないため禁止です。")
 		}
-		return ask
+		return askAt("ownership", "組織 ("+owner+") への書き込み権限を GitHub で時間内に確かめられないため承認が必要です。", TierL2, DestGitHub)
 	}
 	if operation == "push" && typ != "" {
 		return result("block", "foreign-repo", "非所有リポジトリ ("+owner+") への push は禁止です。")
 	}
 	if operation == "PR 作成" {
 		return result("block", "foreign-repo", "AI による他人所有リポ ("+repo+") への PR 作成は禁止です。")
+	}
+	if typ == "" {
+		return askAt("ownership", "リポジトリ ("+repo+") の持ち主を GitHub で時間内に確かめられないため承認が必要です。", TierL2, DestGitHub)
 	}
 	return ask
 }

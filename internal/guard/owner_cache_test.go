@@ -219,3 +219,18 @@ func TestPRCreateUsesRememberedLogin(t *testing.T) {
 		t.Fatalf("PR create while GitHub is down: %s/%s %s", v.Decision, v.Rule, v.Reason)
 	}
 }
+
+// ログイン名は gh を起動せず hosts.yml から読む（GitHub で確かめた名前と一致するときだけ）。
+func TestLocalGitHubUserReadsHostsFile(t *testing.T) {
+	dir := t.TempDir()
+	hosts := "github.com:\n    users:\n        other:\n            user: nested\n    git_protocol: ssh\n    user: kazuph\nghe.example.com:\n    user: someone\n"
+	if e := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte(hosts), 0o600); e != nil {
+		t.Fatal(e)
+	}
+	if got := localGitHubUser(Input{Env: map[string]string{"GH_CONFIG_DIR": dir}}); got != "kazuph" {
+		t.Fatalf("user = %q", got)
+	}
+	if got := localGitHubUser(Input{Env: map[string]string{"GH_CONFIG_DIR": t.TempDir()}}); got != "" {
+		t.Fatalf("missing file = %q", got)
+	}
+}
