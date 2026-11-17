@@ -65,13 +65,39 @@ func force(a []string) bool {
 }
 func mainBranch(s string) bool {
 	s = strings.TrimPrefix(s, "+")
-	return has([]string{"main", "master", "refs/heads/main", "refs/heads/master"}, s)
+	if strings.ContainsAny(s, "*?[") {
+		// ワイルドカードの refspec は main に届きうる。
+		return true
+	}
+	s = strings.TrimPrefix(strings.TrimPrefix(s, "refs/"), "heads/")
+	return has([]string{"main", "master"}, s)
 }
+
+// abbreviates は、name が options のどれかの省略形（前方の一部）か。
+func abbreviates(name string, options []string) bool {
+	if len(name) <= 2 {
+		return false
+	}
+	for _, o := range options {
+		if strings.HasPrefix(o, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// git push の長いオプション（正式な名前だけ。省略形は一覧に無いので聞く）。
+var (
+	gitPushForceOptions         = []string{"--force", "--force-with-lease", "--force-if-includes"}
+	gitPushValueOptions         = []string{"--push-option", "--receive-pack", "--exec", "--repo"}
+	gitPushAttachedValueOptions = []string{"--recurse-submodules", "--signed"}
+	gitPushFlagOptions          = []string{"--dry-run", "--porcelain", "--delete", "--tags", "--follow-tags", "--no-follow-tags", "--atomic", "--no-atomic", "--no-force-with-lease", "--no-force-if-includes", "--set-upstream", "--thin", "--no-thin", "--quiet", "--verbose", "--progress", "--no-progress", "--no-verify", "--verify", "--signed", "--no-signed", "--ipv4", "--ipv6", "--no-recurse-submodules", "--prune"}
+)
 
 // pushConfigKey は、-c で渡すと push 先の URL やリモートを変えられる設定の名前か。
 func pushConfigKey(kv string) bool {
 	k := strings.ToLower(kv)
-	return strings.HasPrefix(k, "url.") || strings.HasPrefix(k, "remote.") || strings.HasPrefix(k, "branch.")
+	return strings.HasPrefix(k, "url.") || strings.HasPrefix(k, "remote.") || strings.HasPrefix(k, "branch.") || strings.HasPrefix(k, "push.") || strings.HasPrefix(k, "include")
 }
 
 const gitMainReason = "main/master への push は AI からは禁止です。必要なら人間が手動で実行してください。"
@@ -86,6 +112,11 @@ func gitPush(i Input) Verdict {
 	var positional []string
 	repoOption := ""
 	all := false
+	forceBlock := result("block", "git-push-force", "git push --force 系は禁止です。履歴を書き換えず通常の push を使ってください。")
+	unknown := func(v string) Verdict {
+		// git は長いオプションの省略形（--mirr など）も受け付ける。一覧に無い書き方は意味を確定できないので聞く。
+		return askAt("ownership", "git push のオプション "+v+" の意味を確定できないため承認が必要です（省略形は使わず正式な名前で書いてください）。", TierL2, DestGitHub)
+	}
 	for n := 0; n < len(a); n++ {
 		v := a[n]
 		if v == "--" {
@@ -93,29 +124,52 @@ func gitPush(i Input) Verdict {
 			positional = append(positional, a[n+1:]...)
 			break
 		}
-		switch {
-		case has([]string{"-o", "--push-option", "--receive-pack", "--exec", "--repo"}, v):
-			// 値を取るオプション。値を remote と読まない。
-			if n+1 < len(a) && v == "--repo" {
-				repoOption = a[n+1]
+		if strings.HasPrefix(v, "--") {
+			name, value, hasValue := strings.Cut(v, "=")
+			switch {
+			case has(gitPushForceOptions, name):
+				return forceBlock
+			case name == "--mirror":
+				// すべての ref を強制で書き換える。
+				return result("block", "git-push-force", "git push --mirror は全 ref を強制で書き換えるため禁止です。")
+			case name == "--all" || name == "--branches":
+				all = true
+			case has(gitPushValueOptions, name):
+				if !hasValue {
+					if n+1 >= len(a) {
+						return unknown(v)
+					}
+					n++
+					value = a[n]
+				}
+				if name == "--repo" {
+					repoOption = value
+				}
+			case has(gitPushFlagOptions, name) && !hasValue:
+			case has(gitPushAttachedValueOptions, name):
+			case abbreviates(name, append([]string{"--mirror"}, gitPushForceOptions...)):
+				// --force-w・--mirr などの省略形は強制の push。
+				return forceBlock
+			default:
+				return unknown(v)
 			}
-			n++
 			continue
-		case strings.HasPrefix(v, "--repo="):
-			repoOption = strings.TrimPrefix(v, "--repo=")
-			continue
-		case v == "--mirror":
-			// すべての ref を強制で書き換える。
-			return result("block", "git-push-force", "git push --mirror は全 ref を強制で書き換えるため禁止です。")
-		case v == "--all" || v == "--branches":
-			all = true
-			continue
-		case strings.HasPrefix(v, "--"):
-			continue
-		case strings.HasPrefix(v, "-") && len(v) > 1:
-			// まとめた短いオプション（-qo など）の最後が o なら、次が値。
-			if strings.HasSuffix(v, "o") {
-				n++
+		}
+		if strings.HasPrefix(v, "-") && len(v) > 1 {
+			// まとめた短いオプション（-fu・-qo値 など）を1文字ずつ読む。o の後ろは値。
+			for k := 1; k < len(v); k++ {
+				switch c := v[k]; {
+				case c == 'f':
+					return forceBlock
+				case c == 'o':
+					if k == len(v)-1 {
+						n++
+					}
+					k = len(v)
+				case strings.IndexByte("nuqvd46", c) >= 0:
+				default:
+					return unknown(v)
+				}
 			}
 			continue
 		}
@@ -163,7 +217,11 @@ func gitPush(i Input) Verdict {
 	}
 	if i.gitPushConfig {
 		// 判定の git には -c を渡さないので、書き換えた後の push 先を確かめられない。
-		return askAt("ownership", "-c で push 先の設定（url.*・remote.*・branch.*）を変えた push は、行き先を確定できないため承認が必要です。", TierL2, DestGitHub)
+		return askAt("ownership", "-c で push 先や push の動きの設定（url.*・remote.*・branch.*・push.*・include*）を変えた push は、行き先を確定できないため承認が必要です。", TierL2, DestGitHub)
+	}
+	if strings.HasPrefix(remote, "-") {
+		// 判定の git がオプションとして読んでしまう。
+		return askAt("ownership", "push 先 "+remote+" を確定できないため承認が必要です。", TierL2, DestGitHub)
 	}
 	if remote == "" {
 		// 引数なし: git と同じ順で push 先のリモートを決める。

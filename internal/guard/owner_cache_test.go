@@ -315,3 +315,32 @@ func TestOwnerVerdictSaysWhenGHIsMissing(t *testing.T) {
 		t.Fatalf("missing gh: %+v", v)
 	}
 }
+
+// まとめた短いオプション・長いオプションの省略形・main に届く refspec・push の動きを変える -c も、すり抜けさせない。
+func TestGitPushOptionSpellingsCannotSlipPast(t *testing.T) {
+	_, i, _ := ownerFixture(t, "git@github.com:org/app.git")
+	for line, want := range map[string]string{
+		"git push -fu origin feat":                                         "block",
+		"git push -uf origin feat":                                         "block",
+		"git push --force-w origin feat":                                   "block",
+		"git push --mirr origin":                                           "block",
+		"git push --al origin":                                             "ask",
+		"git push --rep=https://github.com/victim/repo.git":                "ask",
+		"git push --push-o origin https://github.com/victim/repo.git feat": "ask",
+		"git push -ofoo git@github.com:victim/repo.git origin":             "block",
+		"git push -ofoo origin main":                                       "block",
+		"git push -qo ci.skip origin feat":                                 "allow",
+		"git push -u origin feat":                                          "allow",
+		"git push --set-upstream origin feat":                              "allow",
+		"git push origin 'refs/heads/*:refs/heads/*'":                      "block",
+		"git push origin feat:heads/main":                                  "block",
+		"git push origin 'feat:refs/heads/m*'":                             "block",
+		"git push -- -q feat":                                              "ask",
+		"git -c push.default=matching push":                                "ask",
+		"git -c include.path=/tmp/x push origin feat":                      "ask",
+	} {
+		if _, v, _ := lineVerdict(Config{}, i, line); v.Decision != want {
+			t.Errorf("%s => %s/%s, want %s", line, v.Decision, v.Rule, want)
+		}
+	}
+}
