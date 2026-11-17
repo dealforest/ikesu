@@ -107,6 +107,9 @@ object KeyBytes {
 class ScreenActivity : Activity() {
     companion object {
         const val SOURCE = "source"
+        /** The PC whose screen is open on the phone, so the decisions and settings open over it (OverlayActivity). */
+        @Volatile var openSource: String? = null
+        private const val RED = 0xFFE53935.toInt()
         private const val GREEN = 0xFF33FF66.toInt()
         private const val DARK_GREEN = 0xFF1E9948.toInt()
         private const val PICK_FILE = 41
@@ -126,8 +129,10 @@ class ScreenActivity : Activity() {
         if (!::bell.isInitialized) return
         val waiting = DecisionState.decisions.length()
         bell.text = if (waiting > 0) "🔔 $waiting" else "🔔"
-        bell.setTextColor(if (waiting > 0) Color.BLACK else GREEN)
-        bell.background = keyBackground(waiting > 0, resources.displayMetrics.density)
+        bell.setTextColor(if (waiting > 0) Color.WHITE else GREEN)
+        bell.background = if (waiting > 0) android.graphics.drawable.GradientDrawable().apply {
+            setColor(RED); cornerRadius = 6 * resources.displayMetrics.density
+        } else keyBackground(false, resources.displayMetrics.density)
     }
     private var screenId = -1
     /** A screen_open is on its way; size changes wait for screen_opened instead of opening a second screen. */
@@ -159,6 +164,7 @@ class ScreenActivity : Activity() {
         super.onCreate(savedInstanceState)
         window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         source = intent.getStringExtra(SOURCE) ?: run { finish(); return }
+        openSource = source
         val name = DecisionState.sources[source]?.name ?: "PC"
         val dp = resources.displayMetrics.density
         val screenSp = getSharedPreferences("ui", MODE_PRIVATE).getFloat("screenTextSp", 13f)
@@ -168,7 +174,12 @@ class ScreenActivity : Activity() {
         bell = TextView(this).apply {
             textSize = 18f; gravity = Gravity.CENTER; setPadding((12 * dp).toInt(), 0, (12 * dp).toInt(), 0)
             contentDescription = "判断待ち"
-            setOnClickListener { startActivity(Intent(this@ScreenActivity, MainActivity::class.java).putExtra("list", true).addFlags(DecisionService.FRONT)) }
+            setOnClickListener { startActivity(Intent(this@ScreenActivity, OverlayActivity::class.java).putExtra("list", true)) }
+        }
+        val gear = TextView(this).apply {
+            text = "⚙"; textSize = 20f; setTextColor(GREEN); gravity = Gravity.CENTER; setPadding((12 * dp).toInt(), 0, (12 * dp).toInt(), 0)
+            contentDescription = "設定"; background = keyBackground(false, dp)
+            setOnClickListener { startActivity(Intent(this@ScreenActivity, OverlayActivity::class.java).putExtra("settings", true)) }
         }
         markBell()
         status = TextView(this).apply { text = "$name の画面を開いています…"; setTextColor(GREEN); textSize = 18f; setPadding((20 * dp).toInt(), (6 * dp).toInt(), (20 * dp).toInt(), (6 * dp).toInt()) }
@@ -201,7 +212,8 @@ class ScreenActivity : Activity() {
             addView(LinearLayout(this@ScreenActivity).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
                 addView(status, LinearLayout.LayoutParams(0, -2, 1f))
-                addView(bell, LinearLayout.LayoutParams(-2, (40 * dp).toInt()).apply { setMargins(0, (2 * dp).toInt(), (8 * dp).toInt(), (2 * dp).toInt()) })
+                addView(bell, LinearLayout.LayoutParams(-2, (40 * dp).toInt()).apply { setMargins(0, (2 * dp).toInt(), (6 * dp).toInt(), (2 * dp).toInt()) })
+                addView(gear, LinearLayout.LayoutParams(-2, (40 * dp).toInt()).apply { setMargins(0, (2 * dp).toInt(), (8 * dp).toInt(), (2 * dp).toInt()) })
             }, LinearLayout.LayoutParams(-1, -2))
             addView(view, LinearLayout.LayoutParams(-1, 0, 1f))
             addView(inputLine(dp), LinearLayout.LayoutParams(-1, -2).apply { setMargins((4 * dp).toInt(), (2 * dp).toInt(), (4 * dp).toInt(), (2 * dp).toInt()) })
@@ -573,10 +585,15 @@ class ScreenActivity : Activity() {
         markBell()
         ScreenBus.listener = { from, message -> if (from == source) handle(message) }
         // Coming back after the unlock ended: do not keep showing the old screen.
-        if (DecisionState.sources[source]?.operable != true) { view.clear(); finish(); return }
+        if (DecisionState.sources[source]?.operable != true) { view.clear(); MainActivity.autoScreen = true; finish(); return }
         // Back from the picker with the screen still open: keep using it.
         if (screenId >= 0 || opening) return
         if (view.cols > 0) open(view.cols, view.rows)
+    }
+
+    override fun onDestroy() {
+        if (::source.isInitialized && openSource == source) openSource = null
+        super.onDestroy()
     }
 
     // Leaving the screen closes it on the PC (PROTOCOL 4). Coming back opens a new one.
@@ -624,9 +641,9 @@ class ScreenActivity : Activity() {
                 result.signals.forEach { showNative(it) }
                 view.feed(result.screen)
             }
-            "screen_closed" -> if (message.optInt("screen") == screenId) { screenId = -1; Toast.makeText(this, "PC 側で画面が閉じました", Toast.LENGTH_LONG).show(); finish() }
+            "screen_closed" -> if (message.optInt("screen") == screenId) { screenId = -1; MainActivity.autoScreen = true; Toast.makeText(this, "PC 側で画面が閉じました", Toast.LENGTH_LONG).show(); finish() }
             "screen_file_saved" -> { status.text = "${DecisionState.sources[source]?.name ?: "PC"} の画面"; notifySaved(message.optString("path")) }
-            "operate_expired" -> { if (isFinishing) return; screenId = -1; view.clear(); Toast.makeText(this, "接続が切れたか、顔・指紋で開いた時間が切れました", Toast.LENGTH_LONG).show(); finish() }
+            "operate_expired" -> { if (isFinishing) return; screenId = -1; MainActivity.autoScreen = true; view.clear(); Toast.makeText(this, "接続が切れたか、顔・指紋で開いた時間が切れました", Toast.LENGTH_LONG).show(); finish() }
             "error" -> { opening = false; status.text = "PC 側: ${message.optString("message")}" }
         }
     }

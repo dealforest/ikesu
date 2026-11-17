@@ -12,6 +12,7 @@
         <activity android:name=".decisions.MainActivity" android:launchMode="singleTop" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
         </activity>
+        <activity android:name=".decisions.OverlayActivity" android:launchMode="singleTop" android:exported="false" android:theme="@style/IkesuTheme.Overlay" android:windowSoftInputMode="adjustResize" />
         <service android:name=".decisions.DecisionService" android:exported="false" android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Maintain connection to the user's ikesu decision bridge" />
         </service>
