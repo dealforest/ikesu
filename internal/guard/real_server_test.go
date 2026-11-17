@@ -70,6 +70,7 @@ func realGuardFixture(t *testing.T) string {
 }
 
 func TestMain(m *testing.M) {
+	probeTimeout, ghProbeTimeout = 30*time.Second, 30*time.Second
 	code := m.Run()
 	if guardFixture.server != nil {
 		if conn, err := net.DialTimeout("unix", guardFixture.socket, time.Second); err == nil {

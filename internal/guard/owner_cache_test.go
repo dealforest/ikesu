@@ -37,7 +37,7 @@ esac
 	git := `#!/bin/sh
 case "$*" in
 *"symbolic-ref"*) echo feat;;
-*"remote get-url"*) echo "` + remote + `";;
+*"remote get-url --push --all origin"*) echo "` + remote + `";;
 *) exit 1;;
 esac
 `
@@ -161,5 +161,186 @@ func TestAuthorizeLineUsesRememberedOrganizationPush(t *testing.T) {
 	out.Reset()
 	if AuthorizeLine(Config{}, root, i, "git push origin HEAD:refs/heads/main", &out, await) {
 		t.Fatalf("main push allowed: %s", out.String())
+	}
+}
+
+// 登録していない URL への push は、今いるリポではなく URL の先で判定する。GitHub に repo view を聞かない。
+func TestGitPushJudgesTheURLItPushesTo(t *testing.T) {
+	_, i, bin := ownerFixture(t, "git@github.com:org/app.git")
+	for line, want := range map[string]string{
+		"git push origin HEAD:refs/heads/feat":                              "allow",
+		"git push https://github.com/victim/repo.git HEAD:refs/heads/feat":  "block",
+		"git push git@github.com:victim/repo HEAD:refs/heads/feat":          "block",
+		"git push https://example.com/org/app.git HEAD:refs/heads/feat":     "ask",
+		"git push https://example.com/github.com/org/app HEAD:refs/heads/x": "ask",
+		"git push not-a-remote HEAD:refs/heads/feat":                        "ask",
+	} {
+		if _, v, _ := lineVerdict(Config{}, i, line); v.Decision != want {
+			t.Errorf("%s => %s/%s, want %s", line, v.Decision, v.Rule, want)
+		}
+	}
+	if c, _ := os.ReadFile(filepath.Join(bin, "calls")); strings.Contains(string(c), "repo view") {
+		t.Fatalf("asked GitHub for repo view: %q", c)
+	}
+}
+
+// 行の中の PATH= で偽の gh を前に置いても、判定はペインを開いたときの PATH の gh で行う。
+func TestAuthorizeLineProbesWithPanePATH(t *testing.T) {
+	root, i, bin := ownerFixture(t, "git@github.com:victim/repo.git")
+	fake := t.TempDir()
+	if e := os.WriteFile(filepath.Join(fake, "gh"), []byte("#!/bin/sh\ncase \"$*\" in *owner.type*) echo Organization;; *permissions.push*) echo true;; *) echo kazuph;; esac\n"), 0o755); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.Symlink(filepath.Join(bin, "git"), filepath.Join(fake, "git")); e != nil {
+		t.Fatal(e)
+	}
+	i.stateRoot = ""
+	await := func(api.DecisionCreateParams, time.Duration) (api.Decision, error) {
+		return api.Decision{}, errors.New("asked")
+	}
+	var out bytes.Buffer
+	if AuthorizeLine(Config{}, root, i, "PATH="+fake+":/usr/bin:/bin git push origin HEAD:refs/heads/feat", &out, await) {
+		t.Fatalf("fake gh allowed a push to a personal repo: %s", out.String())
+	}
+	if b, _ := os.ReadFile(ownerCacheFile(root)); strings.Contains(string(b), "victim") {
+		t.Fatalf("fake answer remembered: %q", b)
+	}
+}
+
+// PR 作成のログイン名の確認も、覚えた名前を使い、GitHub が遅くても block しない。
+func TestPRCreateUsesRememberedLogin(t *testing.T) {
+	_, i, bin := ownerFixture(t, "git@github.com:org/app.git")
+	if v := ownerVerdict(i, "org/app", "PR 作成"); v.Decision != "allow" {
+		c, _ := os.ReadFile(filepath.Join(bin, "calls"))
+		t.Fatalf("first: %+v\n%s", v, c)
+	}
+	githubDown(t, bin)
+	if _, v, _ := lineVerdict(Config{}, i, "gh pr create --repo org/app --title x --body y"); v.Decision != "allow" {
+		t.Fatalf("PR create while GitHub is down: %s/%s %s", v.Decision, v.Rule, v.Reason)
+	}
+}
+
+// ログイン名は gh を起動せず hosts.yml から読む（GitHub で確かめた名前と一致するときだけ）。
+func TestLocalGitHubUserReadsHostsFile(t *testing.T) {
+	dir := t.TempDir()
+	hosts := "github.com:\n    users:\n        other:\n            user: nested\n    git_protocol: ssh\n    user: kazuph\nghe.example.com:\n    user: someone\n"
+	if e := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte(hosts), 0o600); e != nil {
+		t.Fatal(e)
+	}
+	if got := localGitHubUser(Input{Env: map[string]string{"GH_CONFIG_DIR": dir}}); got != "kazuph" {
+		t.Fatalf("user = %q", got)
+	}
+	if got := localGitHubUser(Input{Env: map[string]string{"GH_CONFIG_DIR": t.TempDir()}}); got != "" {
+		t.Fatalf("missing file = %q", got)
+	}
+}
+
+// push の引数の書き方を変えても、main・強制・他人のリポの判定をすり抜けない。
+func TestGitPushArgumentFormsCannotSlipPast(t *testing.T) {
+	_, i, _ := ownerFixture(t, "git@github.com:org/app.git")
+	for line, want := range map[string]string{
+		"git push -- origin main":                                                              "block",
+		"git push -- origin feat:main":                                                         "block",
+		"git push -- https://github.com/victim/repo.git feat":                                  "block",
+		"git push -o origin https://github.com/victim/repo.git feat":                           "block",
+		"git push --push-option origin https://github.com/victim/repo.git x":                   "block",
+		"git push --repo=https://github.com/victim/repo.git":                                   "block",
+		"git push --mirror origin":                                                             "block",
+		"git push --all origin":                                                                "block",
+		"git push --branches origin":                                                           "block",
+		"git push origin +feat":                                                                "block",
+		"git -c url.git@github.com:victim/.pushInsteadOf=git@github.com:org/ push origin feat": "ask",
+		"git -c remote.origin.pushurl=git@github.com:victim/repo.git push origin feat":         "ask",
+		"git push -o ci.skip origin feat":                                                      "allow",
+		"git push origin feat":                                                                 "allow",
+	} {
+		if _, v, _ := lineVerdict(Config{}, i, line); v.Decision != want {
+			t.Errorf("%s => %s/%s, want %s", line, v.Decision, v.Rule, want)
+		}
+	}
+}
+
+// pushurl が2つ以上あるときは全部を判定し、1つでも他人のリポなら止める。
+func TestGitPushChecksEveryPushURL(t *testing.T) {
+	_, i, bin := ownerFixture(t, "")
+	git := "#!/bin/sh\ncase \"$*\" in\n*symbolic-ref*) echo feat;;\n*\"remote get-url --push --all origin\"*) printf 'git@github.com:org/app.git\\ngit@github.com:victim/repo.git\\n';;\n*) exit 1;;\nesac\n"
+	if e := os.WriteFile(filepath.Join(bin, "git"), []byte(git), 0o755); e != nil {
+		t.Fatal(e)
+	}
+	if _, v, _ := lineVerdict(Config{}, i, "git push origin feat"); v.Decision != "block" {
+		t.Fatalf("second pushurl ignored: %s/%s", v.Decision, v.Rule)
+	}
+}
+
+// PR の対象は gh と同じく fetch 側の URL で決める（push 用 URL で自分の fork と取り違えない）。
+func TestPRCreateTargetsFetchURL(t *testing.T) {
+	_, i, bin := ownerFixture(t, "")
+	git := "#!/bin/sh\ncase \"$*\" in\n*symbolic-ref*) echo feat;;\n*\"remote get-url --push\"*) echo git@github.com:kazuph/fork.git;;\n*\"remote get-url origin\"*) echo git@github.com:victim/repo.git;;\n*) exit 1;;\nesac\n"
+	if e := os.WriteFile(filepath.Join(bin, "git"), []byte(git), 0o755); e != nil {
+		t.Fatal(e)
+	}
+	if _, v, _ := lineVerdict(Config{}, i, "gh pr create --title x --body y"); v.Decision == "allow" {
+		t.Fatalf("PR to the fetch repo allowed: %s/%s", v.Decision, v.Rule)
+	}
+}
+
+// 覚えた名前と hosts.yml が一致すれば、gh を1回も起動せずに判定する。
+func TestRememberedPushDoesNotStartGH(t *testing.T) {
+	root, i, bin := ownerFixture(t, "git@github.com:org/app.git")
+	if v := ownerVerdict(i, "org/app", "push"); v.Decision != "allow" {
+		t.Fatalf("first: %+v", v)
+	}
+	if e := os.MkdirAll(filepath.Join(root, ".config", "gh"), 0o700); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.WriteFile(filepath.Join(root, ".config", "gh", "hosts.yml"), []byte("github.com:\n    user: kazuph\n"), 0o600); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.Remove(filepath.Join(bin, "calls")); e != nil {
+		t.Fatal(e)
+	}
+	if _, v, _ := lineVerdict(Config{}, i, "git push origin feat"); v.Decision != "allow" {
+		t.Fatalf("remembered push: %s/%s %s", v.Decision, v.Rule, v.Reason)
+	}
+	if c, _ := os.ReadFile(filepath.Join(bin, "calls")); len(c) != 0 {
+		t.Fatalf("gh started: %q", c)
+	}
+}
+
+// ペインを開いたときの PATH に gh が無ければ、そう書いて聞く（コマンドの PATH には戻さない）。
+func TestOwnerVerdictSaysWhenGHIsMissing(t *testing.T) {
+	_, i, _ := ownerFixture(t, "")
+	i.probePath = t.TempDir()
+	if v := ownerVerdict(i, "org/app", "push"); v.Decision != "ask" || !strings.Contains(v.Reason, "gh が") {
+		t.Fatalf("missing gh: %+v", v)
+	}
+}
+
+// まとめた短いオプション・長いオプションの省略形・main に届く refspec・push の動きを変える -c も、すり抜けさせない。
+func TestGitPushOptionSpellingsCannotSlipPast(t *testing.T) {
+	_, i, _ := ownerFixture(t, "git@github.com:org/app.git")
+	for line, want := range map[string]string{
+		"git push -fu origin feat":                                         "block",
+		"git push -uf origin feat":                                         "block",
+		"git push --force-w origin feat":                                   "block",
+		"git push --mirr origin":                                           "block",
+		"git push --al origin":                                             "ask",
+		"git push --rep=https://github.com/victim/repo.git":                "ask",
+		"git push --push-o origin https://github.com/victim/repo.git feat": "ask",
+		"git push -ofoo git@github.com:victim/repo.git origin":             "block",
+		"git push -ofoo origin main":                                       "block",
+		"git push -qo ci.skip origin feat":                                 "allow",
+		"git push -u origin feat":                                          "allow",
+		"git push --set-upstream origin feat":                              "allow",
+		"git push origin 'refs/heads/*:refs/heads/*'":                      "block",
+		"git push origin feat:heads/main":                                  "block",
+		"git push origin 'feat:refs/heads/m*'":                             "block",
+		"git push -- -q feat":                                              "ask",
+		"git -c push.default=matching push":                                "ask",
+		"git -c include.path=/tmp/x push origin feat":                      "ask",
+	} {
+		if _, v, _ := lineVerdict(Config{}, i, line); v.Decision != want {
+			t.Errorf("%s => %s/%s, want %s", line, v.Decision, v.Rule, want)
+		}
 	}
 }

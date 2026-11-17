@@ -23,6 +23,7 @@ type Marker struct {
 	Tab         string  `json:"tab_id"`
 	Socket      string  `json:"socket"`
 	Mode        string  `json:"mode"`
+	ProbePath   string  `json:"probe_path,omitempty"`
 	Policy      *Config `json:"-"`
 }
 
@@ -91,7 +92,7 @@ func (a *Assets) Prepare(env []string, cwd string) ([]string, error) {
 	if e := a.remove(); e != nil {
 		return nil, e
 	}
-	a.meta = Marker{Pane: m["IKESU_PANE_ID"], Cwd: cwd, Workspace: m["IKESU_WORKSPACE_ID"], Tab: m["IKESU_TAB_ID"], Socket: m["IKESU_SOCKET_PATH"], Mode: a.Config.EffectiveMode()}
+	a.meta = Marker{Pane: m["IKESU_PANE_ID"], Cwd: cwd, Workspace: m["IKESU_WORKSPACE_ID"], Tab: m["IKESU_TAB_ID"], Socket: m["IKESU_SOCKET_PATH"], Mode: a.Config.EffectiveMode(), ProbePath: EnvMap(childenv.Scrub(env))["PATH"]}
 	m["IKESU_GUARD_BIN"] = a.Bin
 	m["IKESU_GUARD_MARKER"] = a.MarkerPath
 	m["IKESU_GUARD_LAUNCH_CWD"] = cwd
