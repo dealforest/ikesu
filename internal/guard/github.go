@@ -84,7 +84,7 @@ func github(i Input) Verdict {
 			repo = probe(i, "gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner")
 		}
 		if repo == "" {
-			repo = repository(probe(i, "git", "remote", "get-url", "--push", "origin"))
+			repo = repository(probe(i, "git", "remote", "get-url", "origin"))
 		}
 		if !strings.Contains(repo, "/") {
 			return result("block", "gh-target", "PR の target repo を特定できません。--repo を明示してください。")

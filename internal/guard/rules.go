@@ -59,6 +59,7 @@ type Input struct {
 	gitStripped          []string
 	gitDirUnknown        bool
 	gitAlias             bool
+	gitPushConfig        bool // -c で push 先を変える設定（url.*・remote.*・branch.*）が付いている
 	OpaquePrefix         bool `json:"-"`
 	scriptVariables      map[string]bool
 	claudeBashEnv        string

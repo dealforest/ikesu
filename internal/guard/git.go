@@ -67,6 +67,15 @@ func mainBranch(s string) bool {
 	s = strings.TrimPrefix(s, "+")
 	return has([]string{"main", "master", "refs/heads/main", "refs/heads/master"}, s)
 }
+
+// pushConfigKey は、-c で渡すと push 先の URL やリモートを変えられる設定の名前か。
+func pushConfigKey(kv string) bool {
+	k := strings.ToLower(kv)
+	return strings.HasPrefix(k, "url.") || strings.HasPrefix(k, "remote.") || strings.HasPrefix(k, "branch.")
+}
+
+const gitMainReason = "main/master への push は AI からは禁止です。必要なら人間が手動で実行してください。"
+
 func gitPush(i Input) Verdict {
 	a := i.Args[1:]
 	if force(a) {
@@ -74,19 +83,57 @@ func gitPush(i Input) Verdict {
 	}
 	branch := probe(i, "git", "symbolic-ref", "--quiet", "--short", "HEAD")
 	destMain := mainBranch(branch)
-	count := 0
-	remote := "origin"
-	for _, v := range a {
+	var positional []string
+	repoOption := ""
+	all := false
+	for n := 0; n < len(a); n++ {
+		v := a[n]
 		if v == "--" {
+			// -- の後ろも remote と refspec。読み飛ばさない（git push -- origin main が通っていた）。
+			positional = append(positional, a[n+1:]...)
 			break
 		}
-		if strings.HasPrefix(v, "-") {
+		switch {
+		case has([]string{"-o", "--push-option", "--receive-pack", "--exec", "--repo"}, v):
+			// 値を取るオプション。値を remote と読まない。
+			if n+1 < len(a) && v == "--repo" {
+				repoOption = a[n+1]
+			}
+			n++
+			continue
+		case strings.HasPrefix(v, "--repo="):
+			repoOption = strings.TrimPrefix(v, "--repo=")
+			continue
+		case v == "--mirror":
+			// すべての ref を強制で書き換える。
+			return result("block", "git-push-force", "git push --mirror は全 ref を強制で書き換えるため禁止です。")
+		case v == "--all" || v == "--branches":
+			all = true
+			continue
+		case strings.HasPrefix(v, "--"):
+			continue
+		case strings.HasPrefix(v, "-") && len(v) > 1:
+			// まとめた短いオプション（-qo など）の最後が o なら、次が値。
+			if strings.HasSuffix(v, "o") {
+				n++
+			}
 			continue
 		}
-		count++
-		if count == 1 {
-			remote = v
-			continue
+		positional = append(positional, v)
+	}
+	remote := ""
+	if len(positional) > 0 {
+		remote = positional[0]
+	} else if repoOption != "" {
+		remote = repoOption
+	}
+	refspecs := []string{}
+	if len(positional) > 1 {
+		refspecs = positional[1:]
+	}
+	for _, v := range refspecs {
+		if strings.HasPrefix(v, "+") {
+			return result("block", "git-push-force", "+ を付けた refspec は強制 push なので禁止です。")
 		}
 		if strings.Contains(v, ":") {
 			v = v[strings.LastIndex(v, ":")+1:]
@@ -98,11 +145,12 @@ func gitPush(i Input) Verdict {
 		}
 		destMain = destMain || mainBranch(v)
 	}
+	destMain = destMain || all
 	if i.gitDirUnknown {
 		// The repository behind an unresolved -C is unknown, so neither the
 		// .allow-main permit nor ownership of the current directory applies.
 		if destMain {
-			return result("block", "git-main", "main/master への push は AI からは禁止です。必要なら人間が手動で実行してください。")
+			return result("block", "git-main", gitMainReason)
 		}
 		return askAt("ownership", "git -C の場所を確定できないため承認が必要です。", TierL2, DestGitHub)
 	}
@@ -111,21 +159,53 @@ func gitPush(i Input) Verdict {
 		if root != "" && regularFile(filepath.Join(root, ".allow-main")) {
 			return result("allow", "main-permit", "main/master の許可ファイルあり")
 		}
-		return result("block", "git-main", "main/master への push は AI からは禁止です。必要なら人間が手動で実行してください。")
+		return result("block", "git-main", gitMainReason)
 	}
-	// push 先は、登録したリモートなら push 用の URL、そうでなければ引数（URL やパス）そのもの。
+	if i.gitPushConfig {
+		// 判定の git には -c を渡さないので、書き換えた後の push 先を確かめられない。
+		return askAt("ownership", "-c で push 先の設定（url.*・remote.*・branch.*）を変えた push は、行き先を確定できないため承認が必要です。", TierL2, DestGitHub)
+	}
+	if remote == "" {
+		// 引数なし: git と同じ順で push 先のリモートを決める。
+		for _, key := range []string{"branch." + branch + ".pushRemote", "remote.pushDefault", "branch." + branch + ".remote"} {
+			if branch == "" && strings.HasPrefix(key, "branch.") {
+				continue
+			}
+			if remote = probe(i, "git", "config", "--get", key); remote != "" {
+				break
+			}
+		}
+		if remote == "" {
+			remote = "origin"
+		}
+	}
+	// push 先は、登録したリモートなら push 用の URL 全部、そうでなければ引数（URL やパス）そのもの。
 	// 登録していない名前を今いるリポとして判定しない（git push https://… が cwd のリポで通っていた）。
-	url := probe(i, "git", "remote", "get-url", "--push", remote)
-	configured := url != ""
+	urls := strings.Fields(probe(i, "git", "remote", "get-url", "--push", "--all", remote))
+	configured := len(urls) > 0
 	if !configured {
-		url = remote
+		// 設定ファイルの url.*.pushInsteadOf は引数の URL も書き換える。判定の URL と実際の行き先がずれるので聞く。
+		if probe(i, "git", "config", "--get-regexp", `^url\..*\.pushinsteadof$`) != "" {
+			return askAt("ownership", "url.*.pushInsteadOf があり、URL を直接指定した push の行き先を確定できないため承認が必要です。", TierL2, DestGitHub)
+		}
+		if rewritten := probe(i, "git", "ls-remote", "--get-url", remote); rewritten != "" {
+			remote = rewritten
+		}
+		urls = []string{remote}
 	}
-	// URL から読めれば GitHub に聞かない（gh repo view は遅いと毎回3秒待っていた）。
-	repo := repository(url)
-	if repo == "" && configured {
-		repo = probe(i, "gh", "repo", "view", url, "--json", "nameWithOwner", "--jq", ".nameWithOwner")
+	var verdict Verdict
+	for _, url := range urls {
+		// URL から読めれば GitHub に聞かない（gh repo view は遅いと毎回3秒待っていた）。
+		repo := repository(url)
+		if repo == "" && configured {
+			repo = probe(i, "gh", "repo", "view", url, "--json", "nameWithOwner", "--jq", ".nameWithOwner")
+		}
+		verdict = ownerVerdict(i, repo, "push")
+		if verdict.Decision != "allow" {
+			return verdict
+		}
 	}
-	return ownerVerdict(i, repo, "push")
+	return verdict
 }
 
 // repository は github.com の URL（https://・ssh://・git@github.com:）から owner/name を読む。
@@ -157,6 +237,19 @@ func ownerCache(i Input) string {
 		return ""
 	}
 	return ownerCacheFile(i.stateRoot)
+}
+
+// ghFound は、判定に使う gh を見つけられるか（probe と同じ PATH で探す）。
+func ghFound(i Input) bool {
+	m := map[string]string{}
+	for k, v := range i.Env {
+		m[k] = v
+	}
+	if i.probePath != "" {
+		m["PATH"] = i.probePath
+	}
+	_, e := Resolve("gh", environment(m))
+	return e == nil
 }
 
 // githubAPI は GitHub への問い合わせ。答えを覚えるとき（ownerCache が空でない）は、手元の gh 設定の
@@ -238,6 +331,9 @@ func ownerVerdict(i Input, repo, operation string) Verdict {
 	}
 	login := githubLogin(i)
 	if login == "" {
+		if !ghFound(i) {
+			return askAt("ownership", "判定に使う gh が、ペインを開いたときの PATH に見つからないため承認が必要です。", TierL2, DestGitHub)
+		}
 		return askAt("ownership", "GitHub のログイン名を時間内に確かめられないため承認が必要です。", TierL2, DestGitHub)
 	}
 	owner, _, _ := strings.Cut(repo, "/")
@@ -277,14 +373,14 @@ func ownerVerdict(i Input, repo, operation string) Verdict {
 		}
 		return askAt("ownership", "組織 ("+owner+") への書き込み権限を GitHub で時間内に確かめられないため承認が必要です。", TierL2, DestGitHub)
 	}
-	if operation == "push" && typ != "" {
+	if typ == "" {
+		return askAt("ownership", "リポジトリ ("+repo+") の持ち主を GitHub で時間内に確かめられないため承認が必要です。", TierL2, DestGitHub)
+	}
+	if operation == "push" {
 		return result("block", "foreign-repo", "非所有リポジトリ ("+owner+") への push は禁止です。")
 	}
 	if operation == "PR 作成" {
 		return result("block", "foreign-repo", "AI による他人所有リポ ("+repo+") への PR 作成は禁止です。")
-	}
-	if typ == "" {
-		return askAt("ownership", "リポジトリ ("+repo+") の持ち主を GitHub で時間内に確かめられないため承認が必要です。", TierL2, DestGitHub)
 	}
 	return ask
 }
@@ -330,10 +426,16 @@ func normalizeGit(i Input) Input {
 			if (v == "-c" || v == "--config-env") && strings.HasPrefix(strings.ToLower(a[n+1]), "alias.") {
 				i.gitAlias = true
 			}
+			if (v == "-c" || v == "--config-env") && pushConfigKey(a[n+1]) {
+				i.gitPushConfig = true
+			}
 			n += 2
 		case strings.HasPrefix(v, "--config-env="):
 			if strings.HasPrefix(strings.ToLower(strings.TrimPrefix(v, "--config-env=")), "alias.") {
 				i.gitAlias = true
+			}
+			if pushConfigKey(strings.TrimPrefix(v, "--config-env=")) {
+				i.gitPushConfig = true
 			}
 			n++
 		case strings.HasPrefix(v, "--git-dir=") || strings.HasPrefix(v, "--work-tree=") || strings.HasPrefix(v, "--namespace="):
