@@ -50,7 +50,7 @@ func TestGuardHandoffThroughPrivateInstallTree(t *testing.T) {
 	if out, err := s.cli("server", "live-handoff", "--import-exe", next); err != nil {
 		t.Fatalf("handoff through owner-only .local and lib 0775: %v %s", err, out)
 	}
-	entry, err := os.Stat(filepath.Join(s.stateDir, "guard", "shell", "p_1", "ikesu"))
+	entry, err := os.Stat(filepath.Join(s.stateDir, s.name, "guard", "shell", "p_1", "ikesu"))
 	expected, statErr := os.Stat(next)
 	if err != nil || statErr != nil || !os.SameFile(entry, expected) {
 		t.Fatalf("guard entry did not bind new executable: %v %v", err, statErr)

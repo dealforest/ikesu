@@ -20,7 +20,7 @@ func TestDecisionGuardInvisibleCLIApproveAndReject(t *testing.T) {
 	s := start(t)
 	s.waitFor("shell", 5*time.Second, func(tx string) bool { return strings.Contains(tx, "❯") })
 	s.rpc(api.MethodPaneReportAgent, api.PaneReportAgentParams{PaneID: "p1", Source: "nodialog-test", Agent: "codex", State: "idle"}, nil)
-	marker := filepath.Join(s.stateDir, "guard", "agent-panes", "p_1.json")
+	marker := filepath.Join(s.stateDir, s.name, "guard", "agent-panes", "p_1.json")
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatal(err)
 	}

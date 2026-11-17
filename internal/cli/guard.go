@@ -55,7 +55,7 @@ func (r *runner) guardCLI(a []string) int {
 			return 1
 		}
 	}
-	root := api.StateDir()
+	root := r.guardStateRoot()
 	cwd, _ := os.Getwd()
 	launch := r.o.getenv("IKESU_GUARD_LAUNCH_CWD")
 	via := "shim"
@@ -378,4 +378,22 @@ func (r *runner) guardAwait(p api.DecisionCreateParams, timeout time.Duration) (
 	var resolved api.DecisionResult
 	e = json.Unmarshal(response.Result, &resolved)
 	return resolved.Decision, e
+}
+
+// guardStateRoot は、このセッションの guard の記録と作業フォルダの置き場所。default のセッションは
+// 状態のフォルダの直下、ほかのセッションはそのセッションのフォルダ（サーバーの guardRoot と同じ。Issue #67）。
+// --session が無ければ、ペインの中で渡される IKESU_SOCKET_PATH のセッションを使う。
+func (r *runner) guardStateRoot() string {
+	session := r.o.Session
+	if session == "" {
+		if socket := r.o.getenv("IKESU_SOCKET_PATH"); socket != "" {
+			if dir := filepath.Dir(socket); filepath.Dir(dir) == api.StateDir() {
+				session = filepath.Base(dir)
+			}
+		}
+	}
+	if session == "" || session == "default" || !api.ValidSessionName(session) {
+		return api.StateDir()
+	}
+	return api.SessionDir(session)
 }

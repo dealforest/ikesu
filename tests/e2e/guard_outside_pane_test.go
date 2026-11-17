@@ -353,7 +353,7 @@ func TestGuardExecAfterLiveHandoff(t *testing.T) {
 	}
 	cmd := exec.Command(binPath, "guard", "exec", "--", "/usr/bin/printf", "AFTER_HANDOFF")
 	cmd.Env = []string{"HOME=" + s.stateDir, "PATH=/usr/bin:/bin", "SHELL=/bin/sh", "IKESU_STATE_DIR=" + s.stateDir,
-		"IKESU_PANE_ID=p1", "IKESU_GUARD_MARKER=" + filepath.Join(s.stateDir, "guard", "agent-panes", "p_1.json"),
+		"IKESU_PANE_ID=p1", "IKESU_GUARD_MARKER=" + filepath.Join(s.stateDir, s.name, "guard", "agent-panes", "p_1.json"),
 		"IKESU_SOCKET_PATH=" + api.APISocketPath(filepath.Join(s.stateDir, s.name)), "IKESU_SOCKET_PATH_EXPLICIT=1"}
 	out, err := cmd.CombinedOutput()
 	if err != nil || string(out) != "AFTER_HANDOFF" {
@@ -373,8 +373,8 @@ func TestGuardOutsidePaneAllEntryPoints(t *testing.T) {
 	s.rpc(api.MethodPaneSplit, api.PaneSplitParams{TargetPaneID: &first, Direction: "right", Focus: false}, nil)
 	s.rpc(api.MethodPaneReportAgent, api.PaneReportAgentParams{PaneID: first, Source: "outside-entries", Agent: "claude", State: "idle"}, nil)
 	root := s.stateDir
-	marker := filepath.Join(root, "guard", "agent-panes", "p_1.json")
-	dir, bin := filepath.Join(root, "guard", "shell", "p_1"), filepath.Join(root, "guard", "bin", "p_1")
+	marker := filepath.Join(root, s.name, "guard", "agent-panes", "p_1.json")
+	dir, bin := filepath.Join(root, s.name, "guard", "shell", "p_1"), filepath.Join(root, s.name, "guard", "bin", "p_1")
 	entry := filepath.Join(dir, "ikesu")
 	tests := []struct {
 		name, command, want string
@@ -458,16 +458,16 @@ func runGuardMatchingInvalidMarker(t *testing.T, mismatch bool) {
 		t.Fatal(err)
 	}
 	quote := func(v string) string { return "'" + strings.ReplaceAll(v, "'", "'\\''") + "'" }
-	entry := filepath.Join(root, "guard", "shell", "p_1", "ikesu")
+	entry := filepath.Join(root, s.name, "guard", "shell", "p_1", "ikesu")
 	s.send("/bin/sh " + quote(script) + " " + quote(entry) + " " + quote(gate) + " " + quote(ready) + " " + quote(out) + " " + quote(status) + "\r")
 	s.waitFor("worker started", 5*time.Second, func(string) bool { _, err := os.Stat(ready); return err == nil })
 	s.rpc(api.MethodPaneReportAgent, api.PaneReportAgentParams{PaneID: "p1", Source: "corrupt-test", Agent: "claude", State: "idle"}, nil)
-	markerDir := filepath.Join(root, "guard", "agent-panes")
+	markerDir := filepath.Join(root, s.name, "guard", "agent-panes")
 	if err := os.Chmod(markerDir, 0500); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(markerDir, 0700) })
-	marker := filepath.Join(root, "guard", "agent-panes", "p_1.json")
+	marker := filepath.Join(root, s.name, "guard", "agent-panes", "p_1.json")
 	content := []byte("{")
 	want := "目印ファイルが壊れています"
 	if mismatch {
@@ -654,8 +654,8 @@ func TestGuardMatchingPaneAllEntryPoints(t *testing.T) {
 	s := start(t)
 	s.waitFor("shell", 5*time.Second, func(text string) bool { return strings.Contains(text, "❯") })
 	root := s.stateDir
-	dir := filepath.Join(root, "guard", "shell", "p_1")
-	bin := filepath.Join(root, "guard", "bin", "p_1")
+	dir := filepath.Join(root, s.name, "guard", "shell", "p_1")
+	bin := filepath.Join(root, s.name, "guard", "bin", "p_1")
 	quote := func(v string) string { return "'" + strings.ReplaceAll(v, "'", "'\\''") + "'" }
 	python := `import json,os,socket,sys
 st=socket.socket(socket.AF_UNIX); st.connect(sys.argv[3]); start=st.makefile().readline().strip(); st.close()
@@ -728,7 +728,7 @@ f=s.makefile(); r=json.loads(f.readline()); assert r['result']['match'] == (sys.
 		t.Fatal("worker did not start")
 	}
 	s.waitFor("matching entries ready", 15*time.Second, func(string) bool { _, err := os.Stat(filepath.Join(root, "missing-marker-ready")); return err == nil })
-	markerDir := filepath.Join(root, "guard", "agent-panes")
+	markerDir := filepath.Join(root, s.name, "guard", "agent-panes")
 	if err := os.Remove(filepath.Join(markerDir, "p_1.json")); err != nil {
 		t.Fatal(err)
 	}
@@ -809,7 +809,7 @@ func runGuardWireFailure(t *testing.T, exitedWriter bool) {
 	s.rpc(api.MethodPaneReportAgent, api.PaneReportAgentParams{PaneID: first, Source: "corrupt-response", Agent: "claude", State: "idle"}, nil)
 	s.rpc(api.MethodPaneClose, api.PaneTarget{PaneID: first}, nil)
 	root := s.stateDir
-	marker := filepath.Join(root, "guard", "agent-panes", "p_1.json")
+	marker := filepath.Join(root, s.name, "guard", "agent-panes", "p_1.json")
 	s.waitFor("closed marker", 3*time.Second, func(string) bool { _, err := os.Stat(marker); return os.IsNotExist(err) })
 	socket := api.APISocketPath(filepath.Join(root, s.name))
 	realSocket := socket + ".real"
@@ -914,7 +914,7 @@ func runGuardWireFailure(t *testing.T, exitedWriter bool) {
 			t.Errorf("restore isolated socket: %v", err)
 		}
 	}()
-	dir, bin := filepath.Join(root, "guard", "shell", "p_1"), filepath.Join(root, "guard", "bin", "p_1")
+	dir, bin := filepath.Join(root, s.name, "guard", "shell", "p_1"), filepath.Join(root, s.name, "guard", "bin", "p_1")
 	entry := filepath.Join(dir, "ikesu")
 	cases := []struct {
 		name, command string
@@ -1025,8 +1025,8 @@ def gate(path):
     with open(path) as f: return f.readline().strip()
 try:
     if gate(start) != 'go': sys.exit(1)
-    directory = os.path.join(root, 'guard', 'shell', 'p_1')
-    bindir = os.path.join(root, 'guard', 'bin', 'p_1')
+    directory = os.path.join(root, 'e2e', 'guard', 'shell', 'p_1')
+    bindir = os.path.join(root, 'e2e', 'guard', 'bin', 'p_1')
     entry = os.path.join(directory, 'ikesu')
     cases = [
       ('refresh', [entry,'guard','refresh'], None),
@@ -1041,7 +1041,7 @@ try:
     for name, args, extra in cases:
         env = dict(os.environ)
         env.update({'HOME':root,'PATH':'/usr/bin:/bin','SHELL':'/bin/zsh','IKESU_STATE_DIR':root,
-          'IKESU_PANE_ID':'p1','IKESU_GUARD_MARKER':os.path.join(root,'guard','agent-panes','p_1.json'),
+          'IKESU_PANE_ID':'p1','IKESU_GUARD_MARKER':os.path.join(root,'e2e','guard','agent-panes','p_1.json'),
           'IKESU_GUARD_BIN':bindir,'IKESU_GUARD_SHELL_DIR':directory,'IKESU_SOCKET_PATH':sock,'IKESU_SOCKET_PATH_EXPLICIT':'1'})
         if extra: env[extra[0]] = extra[1]
         processes.append((name, subprocess.Popen(args, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)))

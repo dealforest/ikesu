@@ -193,7 +193,7 @@ func TestRuntimeReasonFromOriginalEnvironment(t *testing.T) {
 							t.Fatal(err)
 						}
 					}
-					bashEnv := filepath.Join(root, "guard", "shell", "p_1", "bash-env")
+					bashEnv := filepath.Join(root, s.name, "guard", "shell", "p_1", "bash-env")
 					ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 					defer cancel()
 					cmd := exec.CommandContext(ctx, shell, script)
@@ -203,7 +203,7 @@ func TestRuntimeReasonFromOriginalEnvironment(t *testing.T) {
 					cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 					cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 					cmd.WaitDelay = time.Second
-					cmd.Env = []string{"HOME=" + root, "PATH=/usr/bin:/bin", "REASON_TARGET=AI_GUARD_REQUEST_REASON", "IKESU_STATE_DIR=" + root, "IKESU_SOCKET_PATH=" + api.APISocketPath(filepath.Join(s.stateDir, s.name)), "IKESU_SOCKET_PATH_EXPLICIT=1", "IKESU_CONFIG=" + filepath.Join(root, "no-config"), "IKESU_PANE_ID=p1", "IKESU_GUARD_MARKER=" + filepath.Join(root, "guard", "agent-panes", "p_1.json"), "IKESU_GUARD_ENFORCING=1", "IKESU_GUARD_EXECUTABLE=" + binPath, "IKESU_GUARD_BIN=" + filepath.Join(root, "guard", "bin", "p_1"), "BASH_ENV=" + bashEnv, "IKESU_GUARD_BASH_ENV_ORIG=" + loader, "AI_GUARD_REQUEST_REASON=" + tc.own, "IKESU_GUARD_PARENT_REASON=" + tc.parent, "IKESU_GUARD_PARENT_COMMAND=bash outer-request.sh"}
+					cmd.Env = []string{"HOME=" + root, "PATH=/usr/bin:/bin", "REASON_TARGET=AI_GUARD_REQUEST_REASON", "IKESU_STATE_DIR=" + root, "IKESU_SOCKET_PATH=" + api.APISocketPath(filepath.Join(s.stateDir, s.name)), "IKESU_SOCKET_PATH_EXPLICIT=1", "IKESU_CONFIG=" + filepath.Join(root, "no-config"), "IKESU_PANE_ID=p1", "IKESU_GUARD_MARKER=" + filepath.Join(root, s.name, "guard", "agent-panes", "p_1.json"), "IKESU_GUARD_ENFORCING=1", "IKESU_GUARD_EXECUTABLE=" + binPath, "IKESU_GUARD_BIN=" + filepath.Join(root, s.name, "guard", "bin", "p_1"), "BASH_ENV=" + bashEnv, "IKESU_GUARD_BASH_ENV_ORIG=" + loader, "AI_GUARD_REQUEST_REASON=" + tc.own, "IKESU_GUARD_PARENT_REASON=" + tc.parent, "IKESU_GUARD_PARENT_COMMAND=bash outer-request.sh"}
 					if isOuterReasonCase(tc.name) {
 						cmd.Env = append(cmd.Env, "SHELL=/bin/zsh", "AI_GUARD_REQUEST_REASON=")
 					}
@@ -269,7 +269,7 @@ func TestRuntimeReasonFromOriginalEnvironment(t *testing.T) {
 									replacement = "export IKESU_GUARD_APPROVED_COMMAND=" + shQuote(replacement) + "\nexport IKESU_GUARD_APPROVAL_OWNER=" + strconv.Itoa(cmd.Process.Pid) + "\n" + replacement
 								}
 								if tc.name == "approved-forged-file" {
-									replacement = "printf fake > " + shQuote(filepath.Join(root, "guard", "approved-invocations", "forged.json")) + "\n" + replacement
+									replacement = "printf fake > " + shQuote(filepath.Join(root, s.name, "guard", "approved-invocations", "forged.json")) + "\n" + replacement
 								}
 								if err := os.WriteFile(script, []byte(replacement+"\nprintf after > "+shQuote(after)+"\n"), 0600); err != nil {
 									t.Fatal(err)
@@ -331,7 +331,7 @@ func TestRuntimeReasonFromOriginalEnvironment(t *testing.T) {
 							s.waitRuntimeReasonState("runtime decision after outer approval", 5*time.Second, func(string) bool {
 								select {
 								case err := <-done:
-									approval, _ := os.ReadFile(filepath.Join(s.stateDir, "guard", "temp-approvals"))
+									approval, _ := os.ReadFile(filepath.Join(s.stateDir, s.name, "guard", "temp-approvals"))
 									t.Fatalf("script exited after outer approval: %v output=%s approval=%s", err, output.String(), approval)
 								default:
 								}
@@ -374,7 +374,7 @@ func TestRuntimeReasonFromOriginalEnvironment(t *testing.T) {
 						t.Fatal("unapproved other victim changed", err)
 					}
 					if tc.name == "approved-forged-file" {
-						if _, err := os.Stat(filepath.Join(root, "guard", "approved-invocations", "forged.json")); !os.IsNotExist(err) {
+						if _, err := os.Stat(filepath.Join(root, s.name, "guard", "approved-invocations", "forged.json")); !os.IsNotExist(err) {
 							t.Fatal("script forged a grant", err)
 						}
 					}
