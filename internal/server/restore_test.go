@@ -124,6 +124,9 @@ func newTestServer(t *testing.T, session string) *Server {
 	// 台帳への書き込みは別の goroutine で後から走る。TempDir を消す前に終わるのを待つ
 	// （待たないと、消している途中に書かれて「directory not empty」で落ちる。2026-11-17 mini の race で発生）。
 	t.Cleanup(s.ledgerWG.Wait)
+	// 書き込み完了の記録も、PTY への書き込みが終わった後に別の goroutine でデータベースを開く。同じく待つ
+	// （2026-11-17 mini の race で TestPendingMailSlowPTYDoesNotBlockApp が「directory not empty」で落ちた）。
+	t.Cleanup(s.mailAckWG.Wait)
 	return s
 }
 
