@@ -37,19 +37,35 @@ export async function serverAlive(ikesuBin, env = process.env) {
 // ペインの中の入れ子ではない。持ち主の設定を写し、[experimental] に allow_nested = true を足したものを、
 // この1つのクライアントにだけ渡す。写しは画面を閉じたら消す。
 // 表（[experimental] など）に key = true を1つだけ置く。前からある同じ名前の行は消す。
-function setTrue(lines, table, key) {
+function setValue(lines, table, key, value) {
   const kept = lines.filter(line => !new RegExp(`^\\s*${key}\\s*=`).test(line));
   const header = kept.findIndex(line => new RegExp(`^\\s*\\[${table}\\]\\s*(#.*)?$`).test(line));
-  if (header >= 0) kept.splice(header + 1, 0, `${key} = true`);
-  else kept.push('', `[${table}]`, `${key} = true`);
+  if (header >= 0) kept.splice(header + 1, 0, `${key} = ${value}`);
+  else kept.push('', `[${table}]`, `${key} = ${value}`);
   return kept;
+}
+const setTrue = (lines, table, key) => setValue(lines, table, key, 'true');
+
+// アプリの ≡ が送る F12 で、隠したサイドバーを出し入れする。持ち主の割り当て（無ければ既定の prefix+b）も残す。
+export const SIDEBAR_KEY = 'f12';
+function sidebarBindings(lines) {
+  const line = lines.find(l => /^\s*toggle_sidebar\s*=/.test(l));
+  const value = line ? line.replace(/^\s*toggle_sidebar\s*=\s*/, '').replace(/\s+#.*$/, '').trim() : '"prefix+b"';
+  const specs = value.startsWith('[') ? [...value.matchAll(/"([^"]*)"/g)].map(m => m[1]) : [value.replace(/^"|"$/g, '')];
+  const kept = specs.filter(spec => spec && spec !== SIDEBAR_KEY);
+  return `[${[...kept, SIDEBAR_KEY].map(spec => JSON.stringify(spec)).join(', ')}]`;
 }
 
 // スマホの画面の ikesu だけ: 入れ子を許し、メニューとダイアログを Android の画面で出す合図（ui.native_menus）を有効にする。
+// 狭い画面を広く使うため、左のサイドバーは最初から隠し（畳んだときも幅を残さない）、アプリの ≡（F12）で出す。
 export function nestedClientConfig(text) {
   let lines = String(text).split('\n');
+  const toggle = sidebarBindings(lines);
   lines = setTrue(lines, 'experimental', 'allow_nested');
   lines = setTrue(lines, 'ui', 'native_menus');
+  lines = setTrue(lines, 'ui', 'sidebar_start_collapsed');
+  lines = setValue(lines, 'ui', 'sidebar_collapsed_mode', '"hidden"');
+  lines = setValue(lines, 'keys', 'toggle_sidebar', toggle);
   return lines.join('\n') + '\n';
 }
 

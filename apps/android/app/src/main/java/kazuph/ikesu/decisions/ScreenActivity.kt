@@ -110,6 +110,8 @@ class ScreenActivity : Activity() {
         const val SOURCE = "source"
         /** A MainActivity intent to open over this screen (from a notification). */
         const val PANEL = "panel"
+        /** F12: the key the PC side binds to showing and hiding the spaces list on the phone's screen. */
+        private val SIDEBAR_KEY = "\u001b[24~".toByteArray()
         /** The app's first page is up: the decisions and settings (MainActivity) open as a panel over it. */
         @Volatile var running = false
         private const val RED = 0xFFE53935.toInt()
@@ -251,7 +253,7 @@ class ScreenActivity : Activity() {
             setOnClickListener { openPanel("settings") }
         }
         markBell()
-        status = TextView(this).apply { text = name; setOnClickListener { choosePc() }; setTextColor(GREEN); textSize = 18f; setPadding((20 * dp).toInt(), (6 * dp).toInt(), (20 * dp).toInt(), (6 * dp).toInt()) }
+        status = TextView(this).apply { text = name; setOnClickListener { choosePc() }; setTextColor(GREEN); textSize = 18f; setPadding((12 * dp).toInt(), (6 * dp).toInt(), (20 * dp).toInt(), (6 * dp).toInt()) }
 
         // The owner's Termux layout (dotfiles/.termux/termux.properties), plus ⇧, ⌘, the ikesu prefix, voice, files and the keyboard.
         val rows = listOf(
@@ -280,6 +282,12 @@ class ScreenActivity : Activity() {
             orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.BLACK)
             addView(LinearLayout(this@ScreenActivity).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                // The PC's ikesu hides its spaces list on the phone (the PC side sets this up); ≡ shows and hides it (F12).
+                addView(TextView(this@ScreenActivity).apply {
+                    text = "≡"; textSize = 22f; setTextColor(GREEN); gravity = Gravity.CENTER
+                    contentDescription = "スペース一覧"; background = keyBackground(false, dp)
+                    setOnClickListener { send(SIDEBAR_KEY) }
+                }, LinearLayout.LayoutParams((48 * dp).toInt(), (40 * dp).toInt()).apply { setMargins((8 * dp).toInt(), (2 * dp).toInt(), 0, (2 * dp).toInt()) })
                 addView(status, LinearLayout.LayoutParams(0, -2, 1f))
                 addView(bell, LinearLayout.LayoutParams(-2, (40 * dp).toInt()).apply { setMargins(0, (2 * dp).toInt(), (6 * dp).toInt(), (2 * dp).toInt()) })
                 addView(gear, LinearLayout.LayoutParams(-2, (40 * dp).toInt()).apply { setMargins(0, (2 * dp).toInt(), (8 * dp).toInt(), (2 * dp).toInt()) })

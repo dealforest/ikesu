@@ -68,3 +68,38 @@ func TestClientPreferencesRejectCorruptState(t *testing.T) {
 		}
 	}
 }
+
+// The phone's screen (a client with native_menus) starts hidden from its config every time and never writes the
+// shared file, so hiding the sidebar there does not hide it on the PC's next client.
+func TestHostAppClientKeepsViewPreferencesToItself(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("IKESU_STATE_DIR", filepath.Join(root, "state"))
+	cfg := filepath.Join(root, "config.toml")
+	t.Setenv(config.EnvVar, cfg)
+	pc, err := loadLocalSettings("shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared := endpoint.ViewPreferences{SidebarWidth: 30, SidebarManual: true}
+	if err := pc.save(shared); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg, []byte("[ui]\nnative_menus = true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	phone, err := loadLocalSettings("shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if phone.preferences != nil {
+		t.Fatalf("the phone's client loaded the shared preferences: %+v", phone.preferences)
+	}
+	hidden := endpoint.ViewPreferences{SidebarWidth: 30, SidebarCollapsed: true}
+	if err := phone.save(hidden); err != nil || !reflect.DeepEqual(phone.preferences, &hidden) {
+		t.Fatalf("in-memory save: %v %+v", err, phone.preferences)
+	}
+	stored, err := endpoint.LoadViewPreferences(pc.path)
+	if err != nil || !reflect.DeepEqual(stored, &shared) {
+		t.Fatalf("the shared file changed: %+v, %v", stored, err)
+	}
+}
