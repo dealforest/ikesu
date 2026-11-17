@@ -189,6 +189,91 @@ keybind = ctrl+shift+tab=text:\x1b[9;6u
 
 Configure ⌃Tab / ⌃⇧Tab to send the sequences in the table above. Examples for terminals other than Ghostty have not been verified yet.
 
+## Architecture
+
+ikesu is one Go binary (`cmd/ikesu`). The same binary runs as the server, as a display client, and as the CLI that agents call.
+
+```text
+ terminal ─ ikesu (client) ─┐  ikesu-client.sock
+ terminal ─ ikesu (client) ─┤
+                            ├──▶ ikesu server ──┬── PTY ── shell / claude / codex …
+ agents ─ ikesu send/run …──┘  ikesu.sock       ├── PTY ── …
+                                                └── plugins (mac panel, Slack, Android bridge)
+ the client also runs "ssh <target> ikesu __endpoint" to show an SSH machine's spaces in the same sidebar
+```
+
+### Server, clients and sessions
+
+- `ikesu` with no subcommand attaches a client to a session (`default` unless `--session`). The first client starts the server in the background. `--no-session` runs a standalone UI without a server.
+- Each session keeps its state in `~/.local/state/ikesu/<session>/` (or `$IKESU_STATE_DIR`): `ikesu.sock` for the API (one JSON request and response per line), `ikesu-client.sock` for display clients, a lock, `server.log` and `session.json`.
+- The server owns the model and the PTYs. It keeps one viewer per client (`internal/tui`), so each client has its own focus, space and sidebar. The server sends each client a diff-encoded snapshot of what to draw, and the client composes the frame and writes it to its terminal (`internal/endpoint`, `internal/render`).
+- `internal/retained` re-executes the server from a private, versioned copy of the binary, so Homebrew can replace the installed binary while the server runs.
+
+### Panes and terminal emulation
+
+- `internal/runtime` owns everything with side effects: PTYs, child processes and the terminal emulators. The emulator is `charmbracelet/x/vt`, vendored in `third_party/vt`.
+- Scrollback has a byte budget per pane (`[advanced] scrollback_limit_bytes`). Saved history is only replayed for display, never run again.
+- `internal/model` holds workspaces ("spaces"), their tabs and panes; `internal/layout` is the split tree. `internal/session` writes `session.json` atomically: spaces, tabs, splits, working directories and each pane's agent session id. The server saves it shortly after each change and restores it at start.
+
+### Live handoff (upgrading without stopping panes)
+
+`ikesu server live-handoff` starts the new binary with `server --handoff-import` and passes it the listening sockets, the lock and every PTY as open file descriptors. After checking the new server's protocol and version, the old server sends the whole state and exits; on failure it rolls back. Shells and agents keep running. `scripts/ikesu-upgrade.sh` installs a release with Homebrew, keeps a versioned copy, and hands each session over to it.
+
+### Machines over SSH
+
+`ikesu machine add <ssh-target> --label <name>` saves an SSH machine (`internal/machine`). The client runs `ssh <target> ikesu __endpoint`, which connects to the server already running there, and shows those spaces next to the local ones. `--machine <name>` forwards `agent`, `pane`, `workspace` and `worktree` commands to that machine.
+
+### Agents, messages and jobs
+
+- `internal/detect` recognises agents (Claude Code, Codex, Gemini and about 20 more) from the process and the screen, using the TOML manifests in `internal/detect/manifests`, and marks each pane idle, working or blocked. The sidebar and the terminal title show this.
+- `internal/dispatch` keeps one SQLite database (`ikesu.db`, WAL) per session for messages, jobs, the pane-to-agent-session ledger and decisions.
+- `ikesu send` / `ikesu inbox` deliver durable messages: the server types the message into the target pane and records the delivery.
+- `ikesu run` starts a background job with its own log and sends one completion notice to the caller. `ikesu log` and `ikesu run list` read the database directly, so they work without the server.
+
+### Decisions (an agent waiting for a person)
+
+- A decision is created from three places: a question screen that ikesu reads in a Claude Code or Codex pane (`internal/screenprompt`, `[decisions] screen_prompts`), an explicit `ikesu decision ask`, or a command that the guard wants a person to approve.
+- `ikesu decision watch` streams new and resolved decisions; `ikesu decision answer` answers one. An answer to a question screen is typed back into the pane.
+- Answering front ends are plugins that watch decisions: the macOS panel (`apps/mac-dialog-decisions`), Slack (`apps/slack-decisions`) and the Android app (`apps/android`).
+
+### Guard
+
+`internal/guard` checks the commands that agents run before they run. It hooks agent shells (generated startup files, PATH shims, a Claude Code hook), parses shell, git, GitHub, SQL and HTTP commands without running them, and allows, blocks, or asks. An ask becomes a decision with a tier: L1 local only, L2 a known development destination, L3 production, irreversible or unknown. Verdicts go to an audit log (`ikesu guard log`). Settings are under `[guard]`.
+
+### Plugins
+
+A plugin is a directory with `ikesu-plugin.toml` (id, version, events such as `decision.created`, actions). `ikesu plugin link <dir>` or `ikesu plugin install <owner>/<repo>[/subdir]` registers it in `~/.config/ikesu/plugins.json`. The server runs the plugin's command for each event with `IKESU_PLUGIN_*`, `IKESU_SOCKET_PATH` and `IKESU_BIN_PATH` set, and the plugin talks back through the CLI.
+
+### The phone app (Android)
+
+```text
+ phone app ⇄ wss ⇄ relay (your Cloudflare Worker, one Durable Object per room) ⇄ wss ⇄ bridge (Node, on the PC) ⇄ ikesu
+          └──────────── Noise IK, end to end: the relay only passes ciphertext ────────────┘
+```
+
+- The relay (`apps/relay`) checks an HMAC tag made with `RELAY_KEY`, joins one bridge and up to 4 phones per room, and enforces size and rate limits. It holds no Noise keys.
+- The bridge (`apps/android/bridge`) runs as an `ikesu run` job, started by the `kazuph.android` plugin. It watches decisions and sends the phone only the titles until the phone proves a person is there.
+- Pairing: `bridge/main.mjs pair` shows a QR code (valid 5 minutes); the phone and the PC show the same 6 digits derived from the handshake. The phone's keys go into `devices.json` with permissions (notify, answer, screen, input).
+- To answer or to use the PC's screen, the phone signs the handshake with a key in the Android Keystore that needs a face or fingerprint. That opens a 10-minute window that each action extends. A heartbeat every 5 seconds lets the bridge drop old key input.
+- The PC's screen: the bridge starts a nested `ikesu` client in a PTY at the phone's size, with a copy of your config that hides the sidebar (F12 shows it) and turns on `native_menus`. With `native_menus`, ikesu announces its menus and dialogs as `OSC 7767` escape sequences, and the app shows them as native Android lists and dialogs. Key input, taps (SGR mouse) and files go back the same way.
+- Details: `apps/android/PROTOCOL.md`.
+
+### Code map
+
+| Path | Role |
+|---|---|
+| `cmd/ikesu` | entry point and subcommand dispatch |
+| `internal/server` | the session server: clients, persistence, handoff, jobs, mail, decisions, plugin events |
+| `internal/client`, `internal/endpoint` | the display client, SSH endpoints and the snapshot transport |
+| `internal/tui`, `internal/render` | the UI loop, per-client viewers, and drawing (sidebar, tabs, dialogs, koi pond) |
+| `internal/runtime` | PTYs, processes, terminal emulation, scrollback |
+| `internal/model`, `internal/layout`, `internal/session` | spaces, tabs, split trees, `session.json` |
+| `internal/detect`, `internal/screenprompt` | agent status and question screens |
+| `internal/dispatch` | the SQLite store for messages, jobs and decisions |
+| `internal/guard` | command checks for agents |
+| `internal/plugin`, `internal/machine`, `internal/config` | plugins, SSH machines, `config.toml` |
+| `apps/` | the macOS panel, Slack, the Android app and bridge, the relay |
+
 ## License
 
 [MIT](LICENSE)

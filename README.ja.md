@@ -191,6 +191,91 @@ keybind = ctrl+shift+tab=text:\x1b[9;6u
 
 上の表の文字列を ⌃Tab / ⌃⇧Tab で送る設定にしてください。Ghostty 以外の端末の設定例はまだ検証していません。
 
+## しくみ（アーキテクチャ）
+
+ikesu は Go の実行ファイル1つ（`cmd/ikesu`）です。同じファイルが、サーバー、画面を出すクライアント、エージェントが呼ぶ CLI の3つの役をします。
+
+```text
+ 端末 ─ ikesu (client) ─┐  ikesu-client.sock
+ 端末 ─ ikesu (client) ─┤
+                        ├──▶ ikesu server ──┬── PTY ── shell / claude / codex …
+ agent ─ ikesu send …  ─┘  ikesu.sock       ├── PTY ── …
+                                            └── plugins (Mac パネル・Slack・Android bridge)
+ クライアントは「ssh <接続先> ikesu __endpoint」も動かし、SSH のマシンのスペースを同じサイドバーに出す
+```
+
+### サーバー・クライアント・セッション
+
+- サブコマンドなしの `ikesu` は、セッション（`--session` が無ければ `default`）にクライアントとしてつなぎます。サーバーが動いていなければ、裏で起動します。`--no-session` はサーバーなしで画面だけ動かします。
+- セッションごとの状態は `~/.local/state/ikesu/<セッション>/`（または `$IKESU_STATE_DIR`）に置きます。API 用の `ikesu.sock`（1行に1つの JSON の要求と返事）、クライアント用の `ikesu-client.sock`、ロック、`server.log`、`session.json` です。
+- モデルと PTY はサーバーが持ちます。サーバーはクライアントごとに表示役（viewer、`internal/tui`）を持つので、クライアントごとにフォーカス・スペース・サイドバーが別になります。サーバーは描く内容の差分をクライアントへ送り、クライアントが画面を組み立てて端末に書きます（`internal/endpoint`、`internal/render`）。
+- `internal/retained` は、サーバーを版ごとの私用の写しから起動し直します。動いている間に Homebrew が実行ファイルを入れ替えても困らないためです。
+
+### ペインと端末の再現
+
+- `internal/runtime` が、PTY・子プロセス・端末の再現（エミュレーター）など、外に影響する処理を全部持ちます。エミュレーターは `charmbracelet/x/vt` で、`third_party/vt` に同梱しています。
+- スクロールバックはペインごとにバイト数の上限があります（`[advanced] scrollback_limit_bytes`）。保存した履歴は表示に使うだけで、実行し直しません。
+- `internal/model` がスペース（workspace）・タブ・ペインを、`internal/layout` が分割の木を持ちます。`internal/session` は `session.json` を壊れない書き方で保存します。中身はスペース・タブ・分割・作業フォルダ・ペインごとのエージェントのセッション ID です。サーバーは変化の少し後に保存し、起動時に読み戻します。
+
+### 動かしたままの入れ替え（live handoff）
+
+`ikesu server live-handoff` は、新しい実行ファイルを `server --handoff-import` で起動し、待ち受けのソケット・ロック・すべての PTY を開いたままのファイル記述子として渡します。新しいサーバーのプロトコルと版を確かめてから、古いサーバーが状態を全部渡して終わります。失敗したら元に戻します。シェルとエージェントは止まりません。`scripts/ikesu-upgrade.sh` は Homebrew で新しいリリースを入れ、版ごとの写しを残し、セッションごとに入れ替えます。
+
+### SSH のマシン
+
+`ikesu machine add <SSH の接続先> --label <名前>` でマシンを登録します（`internal/machine`）。クライアントは `ssh <接続先> ikesu __endpoint` を動かして、向こうで動いているサーバーにつなぎ、そのスペースを手元のスペースと並べて出します。`--machine <名前>` を付けると、`agent`・`pane`・`workspace`・`worktree` のコマンドをそのマシンで実行します。
+
+### エージェント・メッセージ・ジョブ
+
+- `internal/detect` は、プロセスと画面から、エージェント（Claude Code・Codex・Gemini ほか約20種）を見分けます。見分け方は `internal/detect/manifests` の TOML に書いてあり、ペインごとに待ち・作業中・止まり（人の判断待ち）を判定して、サイドバーと端末のタイトルに出します。
+- `internal/dispatch` は、セッションごとに SQLite のデータベース（`ikesu.db`、WAL）を1つ持ち、メッセージ・ジョブ・ペインとエージェントのセッションの対応・判断待ちを記録します。
+- `ikesu send` / `ikesu inbox` は消えないメッセージです。サーバーが宛先のペインに文字を打ち込み、届けたことを記録します。
+- `ikesu run` は裏でジョブを動かし、ジョブごとのログを残して、終わったら呼んだ側へ知らせを1通送ります。`ikesu log` と `ikesu run list` はデータベースを直接読むので、サーバーがなくても使えます。
+
+### 判断待ち（エージェントが人を待つ）
+
+- 判断待ちは3か所からできます。Claude Code や Codex のペインに出た質問の画面を ikesu が読んだとき（`internal/screenprompt`、`[decisions] screen_prompts`）、`ikesu decision ask` を呼んだとき、ガードが人の承認を求めたときです。
+- `ikesu decision watch` で新しい判断待ちと片付いたものを受け取り、`ikesu decision answer` で答えます。質問の画面への答えは、そのペインに打ち込みます。
+- 答える窓口は、判断待ちを見張るプラグインです。Mac のパネル（`apps/mac-dialog-decisions`）、Slack（`apps/slack-decisions`）、Android のアプリ（`apps/android`）があります。
+
+### ガード
+
+`internal/guard` は、エージェントが実行するコマンドを、実行の前に確かめます。エージェントのシェルにつなぎ（生成した起動ファイル・PATH の差し込み・Claude Code のフック）、シェル・git・GitHub・SQL・HTTP のコマンドを実行せずに読んで、許可・拒否・人に聞くを決めます。人に聞くときは判断待ちになり、段階が付きます（L1 手元だけ、L2 知っている開発用の宛先、L3 本番・戻せない・知らない宛先）。判定は監査の記録に残ります（`ikesu guard log`）。設定は `[guard]` です。
+
+### プラグイン
+
+プラグインは `ikesu-plugin.toml`（ID・版・`decision.created` などのイベント・アクション）を置いたフォルダです。`ikesu plugin link <フォルダ>` か `ikesu plugin install <owner>/<repo>[/サブフォルダ]` で `~/.config/ikesu/plugins.json` に登録します。サーバーはイベントのたびに、`IKESU_PLUGIN_*`・`IKESU_SOCKET_PATH`・`IKESU_BIN_PATH` を渡してプラグインのコマンドを動かします。プラグインは CLI で ikesu とやり取りします。
+
+### スマホのアプリ（Android）
+
+```text
+ アプリ ⇄ wss ⇄ 中継（自分の Cloudflare Worker、部屋ごとに Durable Object 1つ）⇄ wss ⇄ bridge（PC の Node）⇄ ikesu
+       └──────────── Noise IK で端から端まで暗号化。中継は暗号文を渡すだけ ────────────┘
+```
+
+- 中継（`apps/relay`）は、`RELAY_KEY` で作った HMAC の証明を照合し、部屋ごとに bridge 1本とスマホ4台までをつなぎ、大きさと回数の上限を守らせます。Noise の鍵は持ちません。
+- bridge（`apps/android/bridge`）は `kazuph.android` プラグインが `ikesu run` のジョブとして起動します。判断待ちを見張り、スマホには、人がいると確かめるまで題名だけを送ります。
+- 登録: `bridge/main.mjs pair` が QR を出し（5分有効）、握手から作った同じ6桁がスマホと PC に出ます。スマホの鍵は権限（notify・answer・screen・input）と一緒に `devices.json` に入ります。
+- 答えるときや PC の画面を使うときは、スマホが Android Keystore の鍵（顔・指紋が要る）で握手に署名します。これで10分の操作の時間が開き、操作のたびに延びます。5秒ごとの心拍で、古いキー入力を bridge が捨てます。
+- PC の画面: bridge は、スマホの大きさの PTY の中で入れ子の `ikesu` クライアントを動かします。設定の写しでサイドバーを隠し（F12 で出す）、`native_menus` を有効にします。`native_menus` の ikesu はメニューとダイアログを `OSC 7767` のエスケープシーケンスで知らせ、アプリはそれを Android の一覧とダイアログで出します。キー入力・タップ（SGR のマウス）・ファイルも同じ道で戻ります。
+- 詳しくは `apps/android/PROTOCOL.md`。
+
+### コードの地図
+
+| 場所 | 役目 |
+|---|---|
+| `cmd/ikesu` | 入口とサブコマンドの振り分け |
+| `internal/server` | セッションのサーバー（クライアント・保存・入れ替え・ジョブ・メッセージ・判断待ち・プラグインのイベント） |
+| `internal/client`、`internal/endpoint` | 画面のクライアント、SSH の接続口、差分の送り方 |
+| `internal/tui`、`internal/render` | 画面のループ、クライアントごとの表示役、描画（サイドバー・タブ・ダイアログ・錦鯉の池） |
+| `internal/runtime` | PTY・プロセス・端末の再現・スクロールバック |
+| `internal/model`、`internal/layout`、`internal/session` | スペース・タブ・分割の木・`session.json` |
+| `internal/detect`、`internal/screenprompt` | エージェントの状態と質問の画面 |
+| `internal/dispatch` | メッセージ・ジョブ・判断待ちの SQLite |
+| `internal/guard` | エージェントのコマンドの確認 |
+| `internal/plugin`、`internal/machine`、`internal/config` | プラグイン・SSH のマシン・`config.toml` |
+| `apps/` | Mac のパネル・Slack・Android のアプリと bridge・中継 |
+
 ## ライセンス
 
 [MIT](LICENSE)
