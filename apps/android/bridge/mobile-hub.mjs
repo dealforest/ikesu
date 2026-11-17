@@ -14,10 +14,11 @@ const ONLY = (object, keys) => object && typeof object === 'object' && !Array.is
 const HANDSHAKE_WINDOW_MS = 60_000;
 const HANDSHAKE_FAILURES_PER_WINDOW = 10;
 const FAILURE_IDS_KEPT = 256;
+const MAX_SESSIONS = 16;
 
 class Session {
   constructor(hub, key, role, id) {
-    Object.assign(this, { hub, key, role, id, closed: false, ready: false, operating: false, beatN: 0, device: null, sentVideos: new Set(), assembler: new Assembler() });
+    Object.assign(this, { hub, key, role, id, closed: false, ready: false, operating: false, beatN: 0, device: null, sentVideos: new Set(), assembler: new Assembler(), chunkBeats: new Map() });
     this.noise = new NoiseResponder({ staticKey: hub.noiseKey, room: hub.roomBytes, now: hub.now });
     this.handshakeTimer = setTimeout(() => this.close(), hub.handshakeMs); this.handshakeTimer.unref?.();
   }
@@ -28,7 +29,8 @@ class Session {
     clearTimeout(this.handshakeTimer); this.stopOperating(false); this.closeScreen(false);
     if (this.slot) this.hub.pairing?.release(this.slot);
     if (this.candidate) this.hub.pairing?.dropCandidate(this.candidate);
-    this.hub.sessions.delete(this.key);
+    // A newer connection under the same id (see onOpen) stays registered.
+    if (this.hub.sessions.get(this.key) === this) this.hub.sessions.delete(this.key);
     if (notifyRelay) this.hub.transport.closeConn(this.key);
   }
   send(value) {
@@ -45,11 +47,14 @@ class Session {
       const plain = this.noise.decrypt(buffer);
       // 分割したメッセージは、顔・指紋で開いた後の回答（画像つき）だけが使う。開く前は溜めさせない。
       if (plain[0] === 0x01 && !(this.role === 'app' && this.operating)) { this.close(); return; }
-      // 分割の最初の1通が届いたときの心拍を覚える。大きなファイルは届き終えるまでに心拍が進むので、送り始めの時点で比べる。
-      const wasIdle = this.assembler.parts.size === 0;
+      // 分割したメッセージごとに、最初の1通が届いたときの心拍を覚える。ファイルと回答の画像は届き終えるまでに心拍が進むので、
+      // それだけは送り始めの時点で比べる（キー入力は届き終えた時点で比べる。中継が途中で止めた古い入力を打たないため）。
+      const chunkId = plain[0] === 0x01 && plain.length >= 6 ? plain.readUInt32BE(1) : null;
+      if (chunkId !== null && !this.chunkBeats.has(chunkId)) this.chunkBeats.set(chunkId, this.beatN);
       message = this.assembler.push(plain);
-      if (message === undefined && wasIdle) this.chunkBeat = this.beatN;
-      this.messageBeat = plain[0] === 0x01 ? (this.chunkBeat ?? this.beatN) : this.beatN;
+      this.messageBeat = this.beatN;
+      this.startBeat = this.beatN;
+      if (chunkId !== null && message !== undefined) { this.startBeat = this.chunkBeats.get(chunkId); this.chunkBeats.delete(chunkId); }
     } catch { this.close(); return; }
     if (message === undefined) return;
     try { await (this.role === 'pair' ? this.onPair(message) : this.onApp(message)); }
@@ -141,10 +146,10 @@ class Session {
     // アプリはつなぎ直し、新しい握手ハッシュに顔・指紋で署名し直す。
     if (was && notify) { this.send({ type: 'operate_expired' }); this.close(); }
   }
-  fresh(message) {
+  fresh(message, fromStart = false) {
     if (message.beat === undefined) return true;
     // まだ送っていない番号の心拍は受けない。
-    const at = this.messageBeat ?? this.beatN;
+    const at = (fromStart ? this.startBeat : this.messageBeat) ?? this.beatN;
     return Number.isInteger(message.beat) && message.beat <= this.beatN && at - message.beat < 2;
   }
   // ---- 画面（PROTOCOL.md 4章）。見るには screen、打つには input の権限と新しい心拍が要る ----
@@ -161,10 +166,15 @@ class Session {
       if (!ONLY(message, ['type', 'cols', 'rows']) || !validSize(message.cols, message.rows)) { this.close(); return; }
       if (!this.can('screen')) { deny('permission denied'); return; }
       this.closeScreen(true);
-      const ticket = this.screenTicket = (this.screenTicket ?? 0) + 1;
-      if (!await this.hub.serverAlive()) { deny('ikesu のサーバーにつながりません'); return; }
-      // 待っている間に次の screen_open が来たら、こちらは開かない（PTY を2つ作らない）。
-      if (!this.operating || this.closed || ticket !== this.screenTicket) return;
+      // サーバーの確認は1本ずつ。待っている間に届いた screen_open は、最後の大きさだけを覚えて、確認の後に使う
+      // （要求の数だけ確認のプロセスを起こさない。PTY も2つ作らない）。
+      if (this.screenChecking) { this.screenWanted = message; return; }
+      this.screenChecking = true;
+      let alive;
+      try { alive = await this.hub.checkServer(); } finally { this.screenChecking = false; }
+      if (this.screenWanted) { message = this.screenWanted; this.screenWanted = null; }
+      if (!alive) { deny('ikesu のサーバーにつながりません'); return; }
+      if (!this.operating || this.closed || !this.can('screen')) return;
       this.closeScreen(true);
       const id = this.hub.nextScreenId++;
       try {
@@ -196,7 +206,7 @@ class Session {
       if (!ONLY(message, ['type', 'screen', 'beat', 'name', 'data']) || typeof message.name !== 'string' || typeof message.data !== 'string' ||
           message.data.length > Math.ceil(MAX_FILE_BYTES / 3) * 4 + 4) { this.close(); return; }
       if (!this.can('input')) { deny('permission denied'); return; }
-      if (!Number.isInteger(message.beat) || !this.fresh(message)) { deny('stale beat'); return; }
+      if (!Number.isInteger(message.beat) || !this.fresh(message, true)) { deny('stale beat'); return; }
       if (!screen || screen.id !== message.screen) return;
       const bytes = Buffer.from(message.data, 'base64');
       if (bytes.length > MAX_FILE_BYTES) { deny('ファイルが大きすぎます'); return; }
@@ -210,6 +220,7 @@ class Session {
     }
     if (type === 'screen_resize') {
       if (!ONLY(message, ['type', 'screen', 'cols', 'rows']) || !validSize(message.cols, message.rows)) { this.close(); return; }
+      if (!this.can('screen')) { deny('permission denied'); return; }
       if (screen && screen.id === message.screen) { this.touch(); screen.resize(message.cols, message.rows); }
       return;
     }
@@ -239,7 +250,7 @@ class Session {
     if (type !== 'answer' && type !== 'later') { this.close(); return; }
     if (!this.operating) { this.send({ type: 'error', sequence: message?.sequence, message: 'operate required' }); return; }
     if (!this.can('answer')) { this.send({ type: 'error', sequence: message?.sequence, message: 'permission denied' }); return; }
-    if (!this.fresh(message)) { this.send({ type: 'error', sequence: message.sequence, message: 'stale beat' }); return; }
+    if (!this.fresh(message, true)) { this.send({ type: 'error', sequence: message.sequence, message: 'stale beat' }); return; }
     const { beat, ...body } = message;
     this.touch();
     try {
@@ -269,7 +280,10 @@ export class MobileHub {
     for (const session of [...this.sessions.values()]) {
       if (session.role !== 'app') continue;
       const current = this.devices.find(device => device.device === session.device?.device);
-      if (!current || current.noise_pub !== session.device.noise_pub || current.operate_pub !== session.device.operate_pub) session.close();
+      // A changed key or a changed set of permissions ends the connection: the app connects and signs again under the new
+      // permissions, and a screen opened under the old ones does not stay open.
+      const samePermissions = current && JSON.stringify([...current.permissions].sort()) === JSON.stringify([...session.device.permissions].sort());
+      if (!current || current.noise_pub !== session.device.noise_pub || current.operate_pub !== session.device.operate_pub || !samePermissions) session.close();
       else session.device = current;
     }
   }
@@ -288,8 +302,19 @@ export class MobileHub {
     if (list.length) this.failures.set(key, list); else this.failures.delete(key);
     return list.length > HANDSHAKE_FAILURES_PER_WINDOW;
   }
+  /** One check of the ikesu server at a time for the whole bridge: connections made again and again share it, so a
+   *  device cannot start a check process per connection. Each connection still looks at its own state afterwards. */
+  checkServer() {
+    if (!this.serverCheck) this.serverCheck = Promise.resolve().then(() => this.serverAlive()).finally(() => { this.serverCheck = null; });
+    return this.serverCheck;
+  }
   onOpen(key, role, id) {
     if (this.tooManyFailures(id)) { this.transport.closeConn(key); return; }
+    // The same id opened again: end the old connection first, so its screen and timers do not live on unseen
+    // (a revoke or a reset only reaches the sessions in this map).
+    this.sessions.get(key)?.close(false, false);
+    // The relay allows 4 connections; a relay that sends more is not honoured past this many at once.
+    if (this.sessions.size >= MAX_SESSIONS) { this.log('同時の接続が多すぎるため断りました'); this.transport.closeConn(key); return; }
     this.sessions.set(key, new Session(this, key, role, id));
   }
   onData(key, buffer) { void this.sessions.get(key)?.onData(buffer); }

@@ -280,13 +280,14 @@ test('顔・指紋で開く前の分割メッセージは、溜めずに接続�
 });
 
 test('beat を付けた answer: 2つ以上古いものは実行せず stale beat を返す。新しいものと beat なしは通る', async t => {
-  const env = await setup(t, { idleMs: 60000, beatMs: 20 });
+  // 100ms: 20ms では、ほかの試験と同時に流すと、送る間に心拍が2つ進んで新しい回答まで stale になることがあった。
+  const env = await setup(t, { idleMs: 60000, beatMs: 100 });
   const { app, paired } = await pairDevice(env);
   const a = await connectApp(env, paired, app);
   await a.handshake();
   a.sendJson(a.operateMessage());
   await a.recv(m => m.type === 'operate_ok');
-  const latest = (await a.recv(m => m.type === 'beat' && m.n >= 5)).n;
+  const latest = (await a.recv(m => m.type === 'beat' && m.n >= 3)).n;
   a.sendJson({ type: 'answer', id: 'd1', options: ['yes'], text: '', images: [], sequence: 'old', beat: 0 });
   assert.deepEqual(await a.recv(m => m.sequence === 'old'), { type: 'error', sequence: 'old', message: 'stale beat' });
   assert.equal(env.calls.answer.length, 0);
@@ -613,4 +614,104 @@ test('画面: 届き終えるまでに心拍が進む大きなファイルも、
   assert.equal((await a.recv(m => m.type === 'screen_file_saved' || m.type === 'error')).type, 'screen_file_saved');
   assert.deepEqual(saved, [200 * 1024]);
   assert.equal(fake.screens[0].written.map(b => b.toString()).join(''), "\x1b[200~'/tmp/x/big.bin' \x1b[201~");
+});
+
+// ---- セキュリティ監査（2026-11-17）で見つかった弱点の試験 ----
+
+async function openedScreen(t, overrides = {}) {
+  const fake = fakeScreens();
+  const env = await setup(t, { idleMs: 60000, beatMs: 1000, serverAlive: fake.serverAlive, openScreen: fake.openScreen, ...overrides });
+  const pairedDevice = await pairDevice(env);
+  const a = await connectApp(env, pairedDevice.paired, pairedDevice.app);
+  await a.handshake();
+  a.sendJson(a.operateMessage());
+  await a.recv(m => m.type === 'operate_ok');
+  a.sendJson({ type: 'screen_open', cols: 40, rows: 20 });
+  const opened = await a.recv(m => m.type === 'screen_opened');
+  return { env, fake, a, opened, ...pairedDevice };
+}
+
+test('監査: 中継が同じ接続 ID で open し直すと、前の接続と画面を閉じてから新しい接続を受ける', async t => {
+  const { env, fake } = await openedScreen(t);
+  const [key, old] = [...env.hub.sessions.entries()].find(([, s]) => s.role === 'app');
+  env.hub.onOpen(key, 'app', old.id);
+  assert.ok(old.closed);
+  assert.ok(fake.screens[0].closed);
+  const fresh = env.hub.sessions.get(key);
+  assert.notEqual(fresh, old);
+  // 前の接続の close が、新しい接続を一覧から消さない。
+  old.close(false, false);
+  assert.equal(env.hub.sessions.get(key), fresh);
+  env.hub.onReset();
+  assert.ok(fresh.closed);
+});
+
+test('監査: 同時の接続は16本まで。それを超える open は Noise の状態を作らずに閉じる', async t => {
+  const env = await setup(t);
+  const closed = [];
+  env.hub.transport = { ...env.hub.transport, closeConn: key => closed.push(key), sendData: () => {} };
+  for (let i = 0; i < 20; i++) env.hub.onOpen(`k${i}`, 'app', `id${i}`);
+  assert.ok(env.hub.sessions.size <= 16);
+  assert.ok(closed.length >= 4);
+  env.hub.onReset();
+});
+
+test('監査: 分けて届くキー入力は、届き終えた時点の心拍で比べる（中継が途中で止めた古い入力を打たない）', async t => {
+  const { a, opened, fake } = await openedScreen(t, { beatMs: 50 });
+  const beat = (await a.recv(m => m.type === 'beat')).n;
+  const parts = encodeMessage({ type: 'screen_input', screen: opened.screen, beat, data: Buffer.alloc(48 * 1024, 0x61).toString('base64') }, () => 11);
+  assert.ok(parts.length > 1);
+  a.conn.send(Buffer.from(a.tx.encrypt(parts[0])));
+  await a.recv(m => m.type === 'beat' && m.n >= beat + 3);
+  for (const part of parts.slice(1)) a.conn.send(Buffer.from(a.tx.encrypt(part)));
+  assert.equal((await a.recv(m => m.type === 'error')).message, 'stale beat');
+  assert.equal(fake.screens[0].written.length, 0);
+});
+
+test('監査: 端末の権限が変わったら接続を切り、開いていた画面も閉じる。screen の権限が無い resize は断る', async t => {
+  const { env, fake, a, device } = await openedScreen(t);
+  const devices = await loadDevices(env.configDir);
+  await writeJson(path.join(env.configDir, 'devices.json'), { devices: devices.map(d => d.device === device.device ? { ...d, permissions: d.permissions.filter(p => p !== 'screen') } : d) });
+  await until(() => a.conn.closed, 3000);
+  assert.ok(fake.screens[0].closed);
+});
+
+test('監査: 確認中に screen_open が続けて届いても、サーバーの確認は1本だけで、最後の大きさで開く', async t => {
+  let checks = 0;
+  const fake = fakeScreens();
+  const env = await setup(t, { idleMs: 60000, beatMs: 1000, openScreen: fake.openScreen,
+    serverAlive: () => { checks++; return new Promise(r => setTimeout(() => r(true), 40)); } });
+  const { app, paired } = await pairDevice(env);
+  const a = await connectApp(env, paired, app);
+  await a.handshake();
+  a.sendJson(a.operateMessage());
+  await a.recv(m => m.type === 'operate_ok');
+  for (const cols of [40, 41, 42, 43, 44]) a.sendJson({ type: 'screen_open', cols, rows: 20 });
+  const opened = await a.recv(m => m.type === 'screen_opened');
+  await sleep(100);
+  assert.equal(checks, 1);
+  assert.equal(opened.cols, 44);
+  assert.equal(fake.screens.filter(screen => !screen.closed).length, 1);
+});
+
+test('監査: 接続を作り直しても、サーバーの確認は bridge 全体で1本ずつ', async t => {
+  let checks = 0, answer;
+  const fake = fakeScreens();
+  // 確認は試験が終わるまで返さない（接続を作り直す間に終わってしまわないように）。
+  const env = await setup(t, { idleMs: 60000, beatMs: 1000, openScreen: fake.openScreen,
+    serverAlive: () => { checks++; return new Promise(r => { answer = r; }); } });
+  const { app, paired } = await pairDevice(env);
+  const apps = [];
+  for (let i = 0; i < 3; i++) {
+    const a = await connectApp(env, paired, app);
+    await a.handshake();
+    a.sendJson(a.operateMessage());
+    await a.recv(m => m.type === 'operate_ok');
+    a.sendJson({ type: 'screen_open', cols: 40, rows: 20 });
+    apps.push(a);
+  }
+  await sleep(50);
+  assert.equal(checks, 1);
+  answer(true);
+  await apps[2].recv(m => m.type === 'screen_opened');
 });

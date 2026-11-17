@@ -24,10 +24,11 @@ const until = async (check, ms = 5000) => {
 test('a relay that answers pings keeps one connection', async () => {
   const { server, connections, relay } = await relayServer({ autoPong: true });
   const logs = [];
-  const client = new RelayClient({ relay, onOpen() {}, onData() {}, onClose() {}, log: m => logs.push(m), pingMs: 40, minDelay: 20 });
+  // 150ms: the other test files run at the same time, and a busy machine can take over 40ms to answer a local ping.
+  const client = new RelayClient({ relay, onOpen() {}, onData() {}, onClose() {}, log: m => logs.push(m), pingMs: 150, minDelay: 20 });
   client.start();
   try {
-    await new Promise(r => setTimeout(r, 400));
+    await new Promise(r => setTimeout(r, 650));
     assert.equal(connections.length, 1);
     assert.ok(!logs.some(m => m.includes('pong')), logs.join('\n'));
   } finally { client.stop(); server.close(); }

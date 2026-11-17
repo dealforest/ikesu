@@ -234,7 +234,7 @@ class ScreenActivity : Activity() {
         if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
         startForegroundService(Intent(this, DecisionService::class.java))
-        source = intent.getStringExtra(SOURCE)
+        source = askedSource(intent)
         source = pickSource()
         val name = target()?.name ?: "PC"
         val dp = resources.displayMetrics.density
@@ -325,16 +325,32 @@ class ScreenActivity : Activity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent); setIntent(intent)
-        intent.getStringExtra(SOURCE)?.let { asked -> if (asked != source) { dropScreen(); view.clear(); source = asked; refresh() } }
+        askedSource(intent)?.let { asked -> if (asked != source) { dropScreen(); view.clear(); source = asked; refresh() } }
         receivePanelRequest(intent)
     }
 
-    /** A notification's decision opens as a panel over this screen. */
+    /** The PC asked for by [intent]. This screen is the launcher, so any app can start it: extras it cannot read
+     *  (another type, a broken parcel) are ignored instead of ending the app. */
+    private fun askedSource(intent: Intent): String? = runCatching { intent.getStringExtra(SOURCE) }.getOrNull()
+
+    /** A notification's decision opens as a panel over this screen. Only the known values are carried over to a new
+     *  intent of our own: never the received one, and never anything another app put in it. */
     private fun receivePanelRequest(intent: Intent) {
         // getParcelableExtra(name, class) needs Android 13; the app runs from Android 12.
-        @Suppress("DEPRECATION") val panel = intent.getParcelableExtra<Intent>(PANEL) ?: return
-        intent.removeExtra(PANEL)
-        startActivity(panel.setClass(this, MainActivity::class.java))
+        @Suppress("DEPRECATION") val panel = runCatching { intent.getParcelableExtra<android.os.Parcelable>(PANEL) }.getOrNull() as? Intent
+        runCatching { intent.removeExtra(PANEL) }
+        if (panel == null) return
+        val request = runCatching {
+            Intent(this, MainActivity::class.java).apply {
+                panel.getStringExtra("decision")?.let { putExtra("decision", it) }
+                if (panel.getBooleanExtra("list", false)) putExtra("list", true)
+                if (panel.getBooleanExtra("settings", false)) putExtra("settings", true)
+                // The debug-only text size (TextScale.fromIntent) also survives the trip, within its range.
+                if ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0 && panel.hasExtra("text_scale"))
+                    putExtra("text_scale", TextScale.clamp(panel.getFloatExtra("text_scale", 1f)))
+            }
+        }.getOrNull() ?: return
+        startActivity(request)
     }
 
     private var resumed = false
