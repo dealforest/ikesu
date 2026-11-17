@@ -9,10 +9,11 @@ require (
 	github.com/charmbracelet/x/vt v0.0.0-20261004011457-ad85c59fdf4e
 	github.com/creack/pty v1.1.24
 	github.com/ncruces/go-sqlite3 v0.35.6
+	github.com/rivo/uniseg v0.4.7
 	golang.org/x/sync v0.23.0
 	golang.org/x/sys v0.48.0
-	mvdan.cc/sh/v3 v3.10.0
 	golang.org/x/term v0.46.0
+	mvdan.cc/sh/v3 v3.10.0
 )
 
 require (
@@ -28,11 +29,11 @@ require (
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/ncruces/go-sqlite3-wasm/v6 v6.3.35304 // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect
-	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/xo/terminfo v1.0.0 // indirect
 )
 
 replace github.com/charmbracelet/ultraviolet => ./third_party/ultraviolet
 
 replace github.com/charmbracelet/x/vt => ./third_party/vt
+
 replace github.com/charmbracelet/x/ansi => ./third_party/ansi

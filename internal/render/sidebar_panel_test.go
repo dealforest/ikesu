@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/kazuph/ikesu/internal/model"
 )
 
@@ -58,5 +59,20 @@ func TestSidebarPanelLeavesHalfForSpaces(t *testing.T) {
 	panel := &SidebarPanel{Sections: []SidebarPanelSection{{Key: "plugins", Title: "プラグイン", Lines: lines}}}
 	if got := SidebarPanelRows(panel, 20); got != 10 {
 		t.Fatalf("rows = %d, want half of 20", got)
+	}
+}
+
+// 結合文字と ZWJ の絵文字は、書記素ごとに1つのセルへまとめて描く。
+func TestPanelTextKeepsGraphemeClusters(t *testing.T) {
+	f := NewFrame(20, 1)
+	drawANSIText(f, 0, 0, 20, "が👩‍💻x", uv.Style{})
+	if c := f.Cell(0, 0); c == nil || c.Content != "が" {
+		t.Fatalf("combining mark dropped: %+v", c)
+	}
+	if c := f.Cell(2, 0); c == nil || c.Content != "👩‍💻" {
+		t.Fatalf("zwj emoji split: %+v", c)
+	}
+	if c := f.Cell(4, 0); c == nil || c.Content != "x" {
+		t.Fatalf("width after emoji: %+v", c)
 	}
 }

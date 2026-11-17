@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
@@ -65,10 +66,24 @@ type Runner struct {
 	// Columns, when set, is passed to scripts as IKESU_SIDEBAR_COLUMNS so they can fit the sidebar.
 	Columns func() int
 
-	mu    sync.Mutex
-	items map[string]*Item
-	next  map[string]time.Time
-	every map[string]time.Duration
+	mu      sync.Mutex
+	running map[string]bool
+	items   map[string]*Item
+	next    map[string]time.Time
+	every   map[string]time.Duration
+}
+
+// maxOutput is how much of a script's output is kept; the rest is read and dropped
+// so a script printing without end cannot fill the server's memory.
+const maxOutput = 64 << 10
+
+type cappedBuffer struct{ buf bytes.Buffer }
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	if room := maxOutput - c.buf.Len(); room > 0 {
+		c.buf.Write(p[:min(len(p), room)])
+	}
+	return len(p), nil
 }
 
 // Dir is ~/.config/ikesu/plugins/sidebar next to the config file.
@@ -99,8 +114,9 @@ func (r *Runner) Run(ctx context.Context) {
 			r.scan(now)
 			lastScan = now
 		}
+		// 1本ずつ別に動かす。遅いスクリプトがほかのプラグインや再走査を待たせない。
 		for _, file := range r.due(now) {
-			r.runOne(ctx, file)
+			go r.runOne(ctx, file)
 		}
 		select {
 		case <-ctx.Done():
@@ -153,9 +169,13 @@ func (r *Runner) due(now time.Time) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var out []string
+	if r.running == nil {
+		r.running = map[string]bool{}
+	}
 	for file, at := range r.next {
-		if !now.Before(at) {
+		if !now.Before(at) && !r.running[file] {
 			out = append(out, file)
+			r.running[file] = true
 			r.next[file] = now.Add(r.every[file])
 		}
 	}
@@ -163,7 +183,22 @@ func (r *Runner) due(now time.Time) []string {
 	return out
 }
 
+// RerunAll runs every plugin again at the next tick (the sidebar's width changed).
+func (r *Runner) RerunAll() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now()
+	for file := range r.next {
+		r.next[file] = now
+	}
+}
+
 func (r *Runner) runOne(ctx context.Context, file string) {
+	defer func() {
+		r.mu.Lock()
+		delete(r.running, file)
+		r.mu.Unlock()
+	}()
 	ctx, cancel := context.WithTimeout(ctx, RunTimeout)
 	defer cancel()
 	cmd := childenv.CommandContextGroup(ctx, filepath.Join(r.Dir, file))
@@ -174,8 +209,14 @@ func (r *Runner) runOne(ctx context.Context, file string) {
 			cmd.Env = append(cmd.Env, "IKESU_SIDEBAR_COLUMNS="+strconv.Itoa(n))
 		}
 	}
-	out, err := cmd.Output()
-	lines, errText := Lines(out), ""
+	var stdout cappedBuffer
+	cmd.Stdout = &stdout
+	err := cmd.Run()
+	// 終わった後も、スクリプトが残した子（バックグラウンドのプロセス）をグループごと止める。
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	lines, errText := Lines(stdout.buf.Bytes()), ""
 	if err != nil {
 		errText = err.Error()
 		if ctx.Err() == context.DeadlineExceeded {

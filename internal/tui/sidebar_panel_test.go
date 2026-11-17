@@ -55,3 +55,27 @@ func TestSidebarPanelHiddenWithoutPlugins(t *testing.T) {
 		t.Fatalf("empty panel shown: %+v rows=%d", p, a.st.SidebarPanelRows)
 	}
 }
+
+// パネルの行数は画面（ビューアー）ごとに覚え、切り替えても混ざらない。
+func TestSidebarPanelRowsFollowEachViewer(t *testing.T) {
+	s := model.New(t.TempDir(), 120, 40)
+	s.SidebarPanelRows = 5
+	d := captureDisplay(s)
+	s.SidebarPanelRows = 0
+	d.apply(s)
+	if s.SidebarPanelRows != 5 {
+		t.Fatalf("panel rows not restored: %d", s.SidebarPanelRows)
+	}
+}
+
+// サイドバーを閉じて起動しても、最初の実行の前に開いたときの幅が決まっている。
+func TestSidebarPanelWidthKnownBeforeFirstRun(t *testing.T) {
+	a := NewApp(model.New(t.TempDir(), 120, 40), runtime.NewSupervisor(), &bytes.Buffer{}, "")
+	a.st.SidebarVisible = false
+	done := make(chan struct{})
+	defer close(done)
+	a.startSidebarPanel(done)
+	if got := a.panel.columns.Load(); got <= 0 || got != int64(a.st.ExpandedSidebarWidth()-2) {
+		t.Fatalf("columns = %d", got)
+	}
+}

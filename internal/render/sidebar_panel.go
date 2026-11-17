@@ -4,12 +4,12 @@ import (
 	"image/color"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/kazuph/ikesu/internal/layout"
 	"github.com/kazuph/ikesu/internal/model"
+	"github.com/rivo/uniseg"
 )
 
 // SidebarPanel is the block at the bottom of the left sidebar, above the
@@ -127,16 +127,25 @@ func drawANSIText(f *Frame, x, y, limit int, text string, base uv.Style) {
 			i += end + 1
 			continue
 		}
-		r, size := utf8.DecodeRuneInString(text[i:])
-		w := ansi.StringWidth(string(r))
-		if x+w > limit {
+		// 書記素クラスタ（結合文字・ZWJ の絵文字）を1つのセルにまとめて描く。
+		next := len(text)
+		if esc := strings.IndexByte(text[i:], 0x1b); esc >= 0 {
+			next = i + esc
+		}
+		cluster, _, _, _ := uniseg.FirstGraphemeClusterInString(text[i:next], -1)
+		if cluster == "" {
+			i++
+			continue
+		}
+		w := ansi.StringWidth(cluster)
+		if x+max(w, 1) > limit {
 			break
 		}
 		if w > 0 {
-			f.Set(x, y, string(r), style)
+			f.Set(x, y, cluster, style)
+			x += w
 		}
-		x += w
-		i += size
+		i += len(cluster)
 	}
 }
 

@@ -4,6 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -64,6 +67,59 @@ func TestRunnerRunsExecutableScripts(t *testing.T) {
 		case <-changed:
 		case <-deadline:
 			t.Fatalf("plugins did not run: %+v", r.Items())
+		}
+	}
+}
+
+// 出力が多くても保持は上限まで、遅いスクリプトはほかを待たせず、残した子は止める。
+func TestRunnerBoundsOutputParallelAndReapsChildren(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("a-slow.1h.sh", "#!/bin/sh\nsleep 30\n")
+	write("b-slow.1h.sh", "#!/bin/sh\nsleep 30\n")
+	write("c-flood.1h.sh", "#!/bin/sh\nyes 0123456789 | head -c 20000000\n")
+	write("d-bg.1h.sh", "#!/bin/sh\nsleep 300 >/dev/null 2>&1 &\necho $! > "+pidFile+"\necho bg\n")
+	changed := make(chan struct{}, 64)
+	r := &Runner{Dir: dir, OnChange: func() { changed <- struct{}{} }}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.Run(ctx)
+	deadline := time.After(8 * time.Second) // 遅い2本（10秒で時間切れ）より先に、ほかの2本が終わる
+	for {
+		items := r.Items()
+		done := map[string]Item{}
+		for _, it := range items {
+			if it.Ran {
+				done[it.File] = it
+			}
+		}
+		if f, ok := done["c-flood.1h.sh"]; ok {
+			if b, ok := done["d-bg.1h.sh"]; ok {
+				if len(f.Lines) > maxLines || len(b.Lines) != 1 || b.Lines[0] != "bg" {
+					t.Fatalf("flood=%d lines, bg=%q", len(f.Lines), b.Lines)
+				}
+				data, err := os.ReadFile(pidFile)
+				if err != nil {
+					t.Fatal(err)
+				}
+				pid, _ := strconv.Atoi(strings.TrimSpace(string(data)))
+				for end := time.Now().Add(2 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+					if syscall.Kill(pid, 0) != nil {
+						return
+					}
+				}
+				t.Fatalf("background child %d still running", pid)
+			}
+		}
+		select {
+		case <-changed:
+		case <-deadline:
+			t.Fatalf("fast plugins waited for slow ones: %+v", items)
 		}
 	}
 }

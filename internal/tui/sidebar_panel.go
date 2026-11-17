@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/kazuph/ikesu/internal/config"
 	"github.com/kazuph/ikesu/internal/render"
@@ -18,7 +19,13 @@ type sidebarPanelState struct {
 	plugins   []sidebarplugin.Item
 	collapsed map[string]bool // by plugin file name
 	columns   atomic.Int64    // the sidebar's content width, passed to scripts
+	runner    *sidebarplugin.Runner
+	rerunAt   time.Time // the last re-run for a width change
 }
+
+// widthRerunGap keeps viewers of different widths (a PC and the phone) from
+// re-running the plugins on every frame.
+const widthRerunGap = 30 * time.Second
 
 // startSidebarPanel starts running the sidebar plugins until done closes. It
 // runs once per App.
@@ -31,6 +38,8 @@ func (a *App) startSidebarPanel(done <-chan struct{}) {
 	}
 	a.panel.started = true
 	panel := a.panel
+	// 最初の実行の前に幅を決める（サイドバーを閉じて起動しても、開いたときの幅を渡す）。
+	panel.columns.Store(int64(max(0, a.st.ExpandedSidebarWidth()-2)))
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { <-done; cancel() }()
 	runner := &sidebarplugin.Runner{Dir: sidebarplugin.Dir(config.Path()), Columns: func() int { return int(panel.columns.Load()) }}
@@ -38,6 +47,7 @@ func (a *App) startSidebarPanel(done <-chan struct{}) {
 		items := runner.Items()
 		a.Do(func() { panel.plugins = items; a.dirty = true })
 	}
+	panel.runner = runner
 	go runner.Run(ctx)
 }
 
@@ -70,11 +80,17 @@ func (a *App) sidebarPanel() *render.SidebarPanel {
 func (a *App) layoutSidebarPanel() *render.SidebarPanel {
 	p := a.sidebarPanel()
 	a.st.SidebarPanelRows = 0
+	if a.panel != nil {
+		// 幅はサイドバーを開いたときの幅。変わったら、新しい幅で全部のプラグインを実行し直す。
+		if cols := int64(max(0, a.st.ExpandedSidebarWidth()-2)); a.panel.columns.Swap(cols) != cols && a.panel.runner != nil && time.Since(a.panel.rerunAt) >= widthRerunGap {
+			a.panel.rerunAt = time.Now()
+			a.panel.runner.RerunAll()
+		}
+	}
 	if p == nil || !a.st.SidebarVisible {
 		return p
 	}
 	area := a.st.SidebarArea()
-	a.panel.columns.Store(int64(max(0, area.W-2)))
 	a.st.SidebarPanelRows = render.SidebarPanelRows(p, max(0, area.H-5))
 	return p
 }
