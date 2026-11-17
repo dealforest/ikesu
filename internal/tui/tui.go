@@ -25,6 +25,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -943,6 +944,10 @@ func Run(in *os.File, out *os.File, versions ...string) (int, error) {
 	a.SetRestartHook(func() { a.standaloneRestart = true; a.exec(model.CmdQuit{}) })
 	a.SetRestoreHook(a.restoreLocalAgents)
 	a.localRestore = true
+	// --no-session の単体起動は、本番の default と guard の作業フォルダを取り合わないよう、別のフォルダを使う（Issue #67）。
+	if a.guardRoot == "" {
+		a.guardRoot = filepath.Join(api.StateDir(), "no-session")
+	}
 	if cfg, err := config.Load(); err == nil {
 		a.SetUIFlags(cfg.ShowTabBar(), cfg.HideTabBarWhenSingleTab(), cfg.PaneBorders())
 		a.SetSidebarConfig(cfg, true)

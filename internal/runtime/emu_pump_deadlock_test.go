@@ -528,15 +528,18 @@ func TestWheelIsDroppedWhileInputIsBackedUp(t *testing.T) {
 	for i := 0; i < 20000; i++ {
 		p.SendMouse(uv.MouseWheelEvent{X: 1, Y: 1, Button: uv.MouseWheelDown})
 	}
-	// PTY の受け口（数十KB）を超えた分は、上限（4KB）を少し超えたところで止まる。
+	// PTY が受け取れない分は、上限（4KB）を1イベント分だけ超えたところで止まる。
 	queued := p.writer.backlog()
-	if queued >= 64<<10 {
-		t.Fatalf("wheel events piled up: %d bytes queued", queued)
+	if queued < mouseBacklogLimit || queued > mouseBacklogLimit+64 {
+		t.Fatalf("wheel backlog = %d bytes, want just over %d", queued, mouseBacklogLimit)
 	}
-	if queued > 0 {
-		p.SendMouse(uv.MouseClickEvent{X: 1, Y: 1, Button: uv.MouseLeft})
-		if p.writer.backlog() <= queued {
-			t.Fatal("click was dropped")
-		}
+	p.SendMouse(uv.MouseMotionEvent{X: 2, Y: 2})
+	if p.writer.backlog() != queued {
+		t.Fatal("motion was queued while input was backed up")
+	}
+	p.SendMouse(uv.MouseClickEvent{X: 1, Y: 1, Button: uv.MouseLeft})
+	p.SendMouse(uv.MouseReleaseEvent{X: 1, Y: 1, Button: uv.MouseLeft})
+	if p.writer.backlog() <= queued {
+		t.Fatal("click and release were dropped")
 	}
 }

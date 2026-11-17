@@ -73,7 +73,7 @@ test('real SSH saved machine, pane operation, remote run, ask and guard answers'
  const final=JSON.parse(await ssh(['decision','get',decision.decision.decision_id]));assert.equal(final.result.decision.answer.option_id,'yes');
  await until(async()=>assert.ok(lines.some(x=>x.event==='resolved'&&x.decision?.decision_id===decision.decision.decision_id)));
  await run(['--machine','mini-proof','pane','report-agent',pane,'--source','live-ssh-test','--agent','codex','--state','idle']);
- const marker=remoteRoot+'/state/guard/agent-panes/p_'+pane.slice(1)+'.json';
+ const marker=remoteRoot+'/state/proof/guard/agent-panes/p_'+pane.slice(1)+'.json';
  const guardWords=['env','IKESU_PANE_ID='+pane,'IKESU_GUARD_MARKER='+marker,'AI_GUARD_REQUEST_REASON=テスト SSH guard',remoteRoot+'/ikesu','--session','proof','guard','exec','--','/bin/echo','deploy-proof-approve'];
  guard=spawn('ssh',[target,guardWords.map(quote).join(' ')]);guard.stdout.on('data',b=>guardOutput+=b);guard.stderr.on('data',b=>guardErr+=b);
  await until(async()=>assert.ok(lines.some(x=>x.event==='created'&&x.decision?.kind==='command_guard')));
@@ -133,7 +133,7 @@ test('real SSH saved machine, pane operation, remote run, ask and guard answers'
    transcript.push({nativePanel:owner,decision:record.decision.decision_id,requestOutput,spec});
   }
   if(process.env.IKESU_LIVE_TEST_NATIVE_GUARD_ONLY==='1') {
-   const nativeGuard=spawn('ssh',[target,`cd /tmp && ${['env','IKESU_PANE_ID='+pane,'IKESU_GUARD_MARKER='+remoteRoot+'/state/guard/agent-panes/p_'+pane.slice(1)+'.json','AI_GUARD_REQUEST_REASON=テスト mini guard パネル',remoteRoot+'/ikesu','--session','proof','guard','exec','--','/bin/echo','deploy-native-proof'].map(quote).join(' ')}`]);
+   const nativeGuard=spawn('ssh',[target,`cd /tmp && ${['env','IKESU_PANE_ID='+pane,'IKESU_GUARD_MARKER='+remoteRoot+'/state/proof/guard/agent-panes/p_'+pane.slice(1)+'.json','AI_GUARD_REQUEST_REASON=テスト mini guard パネル',remoteRoot+'/ikesu','--session','proof','guard','exec','--','/bin/echo','deploy-native-proof'].map(quote).join(' ')}`]);
    nativeRequests.push(nativeGuard);let output='',error='';nativeGuard.stdout.on('data',b=>output+=b);nativeGuard.stderr.on('data',b=>error+=b);
    let specPath,spec;
    await until(async()=>{

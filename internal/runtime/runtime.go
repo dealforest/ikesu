@@ -625,12 +625,16 @@ func (p *Pane) BracketedPasteMode() bool {
 
 // SendMouse encodes a mouse event in the mode the app negotiated and feeds it
 // to the PTY through the emulator's response channel.
+// InputBackedUp は、アプリが読んでいない入力が溜まっていて、ホイールのような捨ててよい入力を
+// 送らないほうがよいか。
+func (p *Pane) InputBackedUp() bool { return p.writer.backlog() >= mouseBacklogLimit }
+
 func (p *Pane) SendMouse(m uv.MouseEvent) {
 	switch m.(type) {
 	case uv.MouseWheelEvent, uv.MouseMotionEvent:
 		// アプリが入力を読んでいないときは、ホイールと移動を溜めずに捨てる。読めるようになった後に
 		// 溜まった分がまとめて届いて画面が暴れるのを防ぐ。クリックと離しは捨てない。
-		if p.writer.backlog() >= mouseBacklogLimit {
+		if p.InputBackedUp() {
 			return
 		}
 	}
