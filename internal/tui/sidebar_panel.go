@@ -21,6 +21,7 @@ type sidebarPanelState struct {
 	columns   atomic.Int64    // the sidebar's content width, passed to scripts
 	runner    *sidebarplugin.Runner
 	rerunAt   time.Time // the last re-run for a width change
+	rerunDue  bool      // a width change waits for widthRerunGap to pass
 }
 
 // widthRerunGap keeps viewers of different widths (a PC and the phone) from
@@ -43,9 +44,9 @@ func (a *App) startSidebarPanel(done <-chan struct{}) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { <-done; cancel() }()
 	runner := &sidebarplugin.Runner{Dir: sidebarplugin.Dir(config.Path()), Columns: func() int { return int(panel.columns.Load()) }}
+	// 結果は画面に反映する時点で読む。通知が前後しても、古い結果で新しい結果を上書きしない。
 	runner.OnChange = func() {
-		items := runner.Items()
-		a.Do(func() { panel.plugins = items; a.dirty = true })
+		a.Do(func() { panel.plugins = runner.Items(); a.dirty = true })
 	}
 	panel.runner = runner
 	go runner.Run(ctx)
@@ -82,7 +83,12 @@ func (a *App) layoutSidebarPanel() *render.SidebarPanel {
 	a.st.SidebarPanelRows = 0
 	if a.panel != nil {
 		// 幅はサイドバーを開いたときの幅。変わったら、新しい幅で全部のプラグインを実行し直す。
-		if cols := int64(max(0, a.st.ExpandedSidebarWidth()-2)); a.panel.columns.Swap(cols) != cols && a.panel.runner != nil && time.Since(a.panel.rerunAt) >= widthRerunGap {
+		if cols := int64(max(0, a.st.ExpandedSidebarWidth()-2)); a.panel.columns.Swap(cols) != cols {
+			a.panel.rerunDue = true
+		}
+		// 30秒より短い間に幅が続けて変わっても、最後の幅で必ず1回は実行し直す。
+		if a.panel.rerunDue && a.panel.runner != nil && time.Since(a.panel.rerunAt) >= widthRerunGap {
+			a.panel.rerunDue = false
 			a.panel.rerunAt = time.Now()
 			a.panel.runner.RerunAll()
 		}

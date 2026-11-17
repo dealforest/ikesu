@@ -123,3 +123,16 @@ func TestRunnerBoundsOutputParallelAndReapsChildren(t *testing.T) {
 		}
 	}
 }
+
+func TestCappedBufferKeepsOnlyTheLimit(t *testing.T) {
+	var c cappedBuffer
+	chunk := make([]byte, 40<<10)
+	for i := 0; i < 5; i++ {
+		if n, err := c.Write(chunk); n != len(chunk) || err != nil {
+			t.Fatalf("write = %d %v", n, err)
+		}
+	}
+	if c.buf.Len() != maxOutput {
+		t.Fatalf("kept %d bytes, want %d", c.buf.Len(), maxOutput)
+	}
+}

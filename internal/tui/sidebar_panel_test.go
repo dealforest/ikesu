@@ -79,3 +79,21 @@ func TestSidebarPanelWidthKnownBeforeFirstRun(t *testing.T) {
 		t.Fatalf("columns = %d", got)
 	}
 }
+
+// 幅が続けて変わっても、間隔を空けたあと最後の幅で実行し直す。
+func TestSidebarPanelRerunsForLatestWidth(t *testing.T) {
+	a := NewApp(model.New(t.TempDir(), 120, 40), runtime.NewSupervisor(), &bytes.Buffer{}, "")
+	a.panel = &sidebarPanelState{runner: &sidebarplugin.Runner{}}
+	a.layoutSidebarPanel() // 最初の幅で1回
+	first := a.panel.rerunAt
+	a.st.SidebarSize += 4
+	a.layoutSidebarPanel() // 30秒以内の変更は保留
+	if !a.panel.rerunAt.Equal(first) || !a.panel.rerunDue {
+		t.Fatalf("width change inside the gap was not held: due=%v", a.panel.rerunDue)
+	}
+	a.panel.rerunAt = a.panel.rerunAt.Add(-widthRerunGap)
+	a.layoutSidebarPanel() // 幅は変わらないまま、間隔が過ぎたら実行する
+	if a.panel.rerunDue || a.panel.rerunAt.Equal(first.Add(-widthRerunGap)) {
+		t.Fatal("held width change was never run")
+	}
+}
