@@ -75,7 +75,9 @@ function writeClientConfig(env) {
   try { text = fs.readFileSync(source, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ikesu-screen-'));
   const file = path.join(dir, 'config.toml');
-  fs.writeFileSync(file, nestedClientConfig(text), { mode: 0o600, flag: 'wx' });
+  // 書いている途中で失敗したら、作ったフォルダごと消してから失敗を返す（写しの一部を残さない）。
+  try { fs.writeFileSync(file, nestedClientConfig(text), { mode: 0o600, flag: 'wx' }); }
+  catch (error) { fs.rmSync(dir, { recursive: true, force: true }); throw error; }
   return { file, dir };
 }
 

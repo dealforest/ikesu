@@ -345,6 +345,9 @@ class ScreenActivity : Activity() {
                 panel.getStringExtra("decision")?.let { putExtra("decision", it) }
                 if (panel.getBooleanExtra("list", false)) putExtra("list", true)
                 if (panel.getBooleanExtra("settings", false)) putExtra("settings", true)
+                // The debug-only text size (TextScale.fromIntent) also survives the trip, within its range.
+                if ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0 && panel.hasExtra("text_scale"))
+                    putExtra("text_scale", TextScale.clamp(panel.getFloatExtra("text_scale", 1f)))
             }
         }.getOrNull() ?: return
         startActivity(request)

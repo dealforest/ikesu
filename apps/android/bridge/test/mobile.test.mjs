@@ -280,13 +280,14 @@ test('顔・指紋で開く前の分割メッセージは、溜めずに接続�
 });
 
 test('beat を付けた answer: 2つ以上古いものは実行せず stale beat を返す。新しいものと beat なしは通る', async t => {
-  const env = await setup(t, { idleMs: 60000, beatMs: 20 });
+  // 100ms: 20ms では、ほかの試験と同時に流すと、送る間に心拍が2つ進んで新しい回答まで stale になることがあった。
+  const env = await setup(t, { idleMs: 60000, beatMs: 100 });
   const { app, paired } = await pairDevice(env);
   const a = await connectApp(env, paired, app);
   await a.handshake();
   a.sendJson(a.operateMessage());
   await a.recv(m => m.type === 'operate_ok');
-  const latest = (await a.recv(m => m.type === 'beat' && m.n >= 5)).n;
+  const latest = (await a.recv(m => m.type === 'beat' && m.n >= 3)).n;
   a.sendJson({ type: 'answer', id: 'd1', options: ['yes'], text: '', images: [], sequence: 'old', beat: 0 });
   assert.deepEqual(await a.recv(m => m.sequence === 'old'), { type: 'error', sequence: 'old', message: 'stale beat' });
   assert.equal(env.calls.answer.length, 0);
@@ -691,4 +692,26 @@ test('監査: 確認中に screen_open が続けて届いても、サーバー�
   assert.equal(checks, 1);
   assert.equal(opened.cols, 44);
   assert.equal(fake.screens.filter(screen => !screen.closed).length, 1);
+});
+
+test('監査: 接続を作り直しても、サーバーの確認は bridge 全体で1本ずつ', async t => {
+  let checks = 0, answer;
+  const fake = fakeScreens();
+  // 確認は試験が終わるまで返さない（接続を作り直す間に終わってしまわないように）。
+  const env = await setup(t, { idleMs: 60000, beatMs: 1000, openScreen: fake.openScreen,
+    serverAlive: () => { checks++; return new Promise(r => { answer = r; }); } });
+  const { app, paired } = await pairDevice(env);
+  const apps = [];
+  for (let i = 0; i < 3; i++) {
+    const a = await connectApp(env, paired, app);
+    await a.handshake();
+    a.sendJson(a.operateMessage());
+    await a.recv(m => m.type === 'operate_ok');
+    a.sendJson({ type: 'screen_open', cols: 40, rows: 20 });
+    apps.push(a);
+  }
+  await sleep(50);
+  assert.equal(checks, 1);
+  answer(true);
+  await apps[2].recv(m => m.type === 'screen_opened');
 });

@@ -171,7 +171,7 @@ class Session {
       if (this.screenChecking) { this.screenWanted = message; return; }
       this.screenChecking = true;
       let alive;
-      try { alive = await this.hub.serverAlive(); } finally { this.screenChecking = false; }
+      try { alive = await this.hub.checkServer(); } finally { this.screenChecking = false; }
       if (this.screenWanted) { message = this.screenWanted; this.screenWanted = null; }
       if (!alive) { deny('ikesu のサーバーにつながりません'); return; }
       if (!this.operating || this.closed || !this.can('screen')) return;
@@ -301,6 +301,12 @@ export class MobileHub {
     const list = (this.failures.get(key) ?? []).filter(time => time > limit);
     if (list.length) this.failures.set(key, list); else this.failures.delete(key);
     return list.length > HANDSHAKE_FAILURES_PER_WINDOW;
+  }
+  /** One check of the ikesu server at a time for the whole bridge: connections made again and again share it, so a
+   *  device cannot start a check process per connection. Each connection still looks at its own state afterwards. */
+  checkServer() {
+    if (!this.serverCheck) this.serverCheck = Promise.resolve().then(() => this.serverAlive()).finally(() => { this.serverCheck = null; });
+    return this.serverCheck;
   }
   onOpen(key, role, id) {
     if (this.tooManyFailures(id)) { this.transport.closeConn(key); return; }
