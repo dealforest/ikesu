@@ -658,6 +658,7 @@ func runEndpointWithClock(session, version string, peer endpoint.Peer, clock gra
 		s.app.SetNavKey('o')
 	}
 	s.app.SetUIFlags(s.cfg.ShowTabBar(), s.cfg.HideTabBarWhenSingleTab(), s.cfg.PaneBorders())
+	s.app.SetGuardRoot(s.guardRoot())
 	s.app.SetSidebarConfig(s.cfg, true)
 	s.app.SetPluginHost(s.ensurePlugins, func() plugin.Context { return s.pluginContext("", nil) })
 	s.app.SetKeybinds(s.cfg.CopyKeys(), s.cfg.SplitVerticalKeys(), s.cfg.SplitHorizontalKeys())

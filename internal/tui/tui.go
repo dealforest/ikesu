@@ -159,6 +159,7 @@ type appJob struct {
 // through Do/PushInput/Resize so all state changes stay on the loop
 // goroutine.
 type App struct {
+	guardRoot         string // ペインの guard の作業フォルダの置き場所（空なら状態のフォルダの直下）
 	loopTiming        *loopTiming
 	koiClock          render.KoiAnimation
 	koiLocalActive    bool

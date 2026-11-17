@@ -282,6 +282,22 @@ func (p *Pane) ShellPID() int {
 // ShellIdentity is recorded when the pane is spawned and retained on handoff.
 func (p *Pane) ShellIdentity() (int, string) { return p.ShellPID(), p.shellStart }
 
+// GuardMarkerPath と GuardRoot は、このペインの guard の目印ファイルと状態のフォルダ（guard が無ければ空）。
+// セッションごとにフォルダが違い、引き継いだ古いペインは前の場所のままなので、ペインから読む。
+func (p *Pane) GuardMarkerPath() string {
+	if p == nil || p.guard == nil {
+		return ""
+	}
+	return p.guard.MarkerPath
+}
+
+func (p *Pane) GuardRoot() string {
+	if p == nil || p.guard == nil {
+		return ""
+	}
+	return p.guard.Root
+}
+
 func (p *Pane) killProcess() {
 	if p.cmd != nil && p.cmd.Process != nil {
 		_ = unix.Kill(-p.cmd.Process.Pid, unix.SIGHUP)

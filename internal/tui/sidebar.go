@@ -9,10 +9,17 @@ import (
 	"strings"
 )
 
+// SetGuardRoot は、このサーバーのペインの guard の作業フォルダを置く場所。セッションごとに分ける（Issue #67）。
+func (a *App) SetGuardRoot(root string) { a.guardRoot = root }
+
 func (a *App) SetSidebarConfig(c config.Config, startup bool) {
 	a.sup.SetGraphics(c.Experimental.KittyGraphics)
 	a.sup.SetShell(c.Terminal.DefaultShell, c.Terminal.ShellMode)
-	a.sup.SetGuard(c.Guard, api.StateDir())
+	root := a.guardRoot
+	if root == "" {
+		root = api.StateDir()
+	}
+	a.sup.SetGuard(c.Guard, root)
 	a.sup.SetScrollbackBytes(c)
 	a.setSidebarConfig(c, startup)
 }

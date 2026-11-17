@@ -129,7 +129,10 @@ func (s *Server) guardIdentity(req *api.Request) api.Response {
 		}
 	}
 	if match {
-		marker := filepath.Join(api.StateDir(), "guard", "agent-panes", "p_"+strconv.Itoa(n)+".json")
+		marker := s.sup.Get(n).GuardMarkerPath()
+		if marker == "" {
+			marker = filepath.Join(s.guardRoot(), "guard", "agent-panes", "p_"+strconv.Itoa(n)+".json")
+		}
 		if _, err := os.Lstat(marker); os.IsNotExist(err) {
 			match = false
 		} else if err != nil {
@@ -139,4 +142,14 @@ func (s *Server) guardIdentity(req *api.Request) api.Response {
 	policy := api.MarshalParams(s.cfg.Guard)
 	digest := sha256.Sum256(policy)
 	return api.Success(req.ID, api.GuardIdentityResult{Type: "guard_identity", Match: match, Policy: policy, PolicyDigest: hex.EncodeToString(digest[:])})
+}
+
+// guardRoot は、このサーバーが新しいペインの guard の作業フォルダを置く場所。default のセッションは
+// 今までどおり状態のフォルダの直下（動いているペインと同じ場所）、ほかのセッションはそのセッションの
+// フォルダの下にする。試験用のセッションが本番の p_N のフォルダを作り直し合わないため（Issue #67）。
+func (s *Server) guardRoot() string {
+	if s.session == "" || s.session == "default" || s.dir == "" {
+		return api.StateDir()
+	}
+	return s.dir
 }
