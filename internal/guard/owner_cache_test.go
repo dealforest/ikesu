@@ -26,6 +26,7 @@ esac
 [ -e "` + bin + `/down" ] && exit 1
 case "$*" in
 *"repo view"*) exit 1;;
+*"--hostname github.com /user"*|"api /user --jq .login") echo kazuph; exit 0;;
 *victim*".owner.type"*) echo User;;
 *".owner.type"*) echo Organization;;
 *".permissions.push"*) case "$*" in *denied*) echo false;; *) echo true;; esac;;
@@ -120,6 +121,10 @@ func TestOwnerVerdictDoesNotRememberDeniedOrPersonal(t *testing.T) {
 // 行の中で GH_CONFIG_DIR を差し替えて手元の設定の名前を偽っても、他人のリポへの push や PR は通らない。
 func TestOwnerVerdictLocalConfigCannotSpoofLogin(t *testing.T) {
 	_, i, _ := ownerFixture(t, "git@github.com:victim/repo.git")
+	// 本物の名前を先に覚えた状態でも、偽の名前は使わない。
+	if v := ownerVerdict(i, "kazuph/ikesu", "push"); v.Decision != "allow" {
+		t.Fatalf("own repo: %+v", v)
+	}
 	fake := t.TempDir()
 	if e := os.WriteFile(filepath.Join(fake, "login"), []byte("victim\n"), 0o600); e != nil {
 		t.Fatal(e)

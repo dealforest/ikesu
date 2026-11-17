@@ -125,6 +125,15 @@ func ownerCache(i Input) string {
 	return ownerCacheFile(i.stateRoot)
 }
 
+// githubAPI は GitHub への問い合わせ。答えを覚えるとき（ownerCache が空でない）は、手元の gh 設定の
+// 既定ホストが差し替えられても github.com に聞くよう、ホストを固定する。
+func githubAPI(i Input, endpoint, jq string) string {
+	if ownerCache(i) != "" {
+		return probe(i, "gh", "api", "--hostname", "github.com", endpoint, "--jq", jq)
+	}
+	return probe(i, "gh", "api", endpoint, "--jq", jq)
+}
+
 // githubLogin は gh のログイン名。手元の gh の設定の値は、24時間以内に GitHub（gh api /user）で
 // 確かめた名前と同じときだけ使う（ネットに出ない）。手元の設定は GH_CONFIG_DIR などで差し替えられるので、
 // 確かめていない名前は使わず GitHub に聞き、答えを覚える。
@@ -135,7 +144,7 @@ func githubLogin(i Input) string {
 			return local
 		}
 	}
-	login := probe(i, "gh", "api", "/user", "--jq", ".login")
+	login := githubAPI(i, "/user", ".login")
 	if cache != "" && githubName.MatchString(login) {
 		_ = WriteApproval(cache, "login:github.com:"+login, time.Now().Add(ownerCacheDuration))
 	}
@@ -170,16 +179,16 @@ func ownerVerdict(i Input, repo, operation string) Verdict {
 		}
 		return result("allow", "organization", "組織への書き込み権限あり")
 	}
-	typ := probe(i, "gh", "api", "repos/"+repo, "--jq", ".owner.type")
+	typ := githubAPI(i, "repos/"+repo, ".owner.type")
 	if typ == "Organization" {
-		p := probe(i, "gh", "api", "repos/"+repo, "--jq", ".permissions.push")
+		p := githubAPI(i, "repos/"+repo, ".permissions.push")
 		if p == "true" {
 			return allowed()
 		}
 		if p == "false" {
 			return result("block", "organization-denied", "組織 ("+owner+") への "+operation+" 権限がないため禁止です。")
 		}
-		p = probe(i, "gh", "api", "repos/"+repo+"/collaborators/"+login+"/permission", "--jq", ".permission")
+		p = githubAPI(i, "repos/"+repo+"/collaborators/"+login+"/permission", ".permission")
 		if has([]string{"admin", "maintain", "write"}, p) {
 			return allowed()
 		}
