@@ -261,7 +261,7 @@ class ScreenActivity : Activity() {
                 ExtraKey("^T", ScreenKey.Bytes(byteArrayOf(20))),
                 ExtraKey("貼付", ScreenKey.Action { pasteClipboard() }), ExtraKey("📎", ScreenKey.Action { pickFile() }),
                 ExtraKey("🎤", ScreenKey.Action { toggleVoice() })),
-            listOf(ExtraKey("ESC", ScreenKey.Code(KeyEvent.KEYCODE_ESCAPE)), ExtraKey("|", ScreenKey.Text("|"), "PGUP", ScreenKey.Code(KeyEvent.KEYCODE_PAGE_UP)),
+            listOf(ExtraKey("ESC", ScreenKey.Code(KeyEvent.KEYCODE_ESCAPE), "exit", ScreenKey.Bytes("exit\r".toByteArray())), ExtraKey("|", ScreenKey.Text("|"), "PGUP", ScreenKey.Code(KeyEvent.KEYCODE_PAGE_UP)),
                 ExtraKey("$", ScreenKey.Text("$"), "PGDN", ScreenKey.Code(KeyEvent.KEYCODE_PAGE_DOWN)), ExtraKey("/", ScreenKey.Text("/"), "clear", ScreenKey.Text("/clear")),
                 ExtraKey("#", ScreenKey.Text("#")), ExtraKey("↑", ScreenKey.Code(KeyEvent.KEYCODE_DPAD_UP), "new", ScreenKey.Bytes(byteArrayOf(20))),
                 ExtraKey("@", ScreenKey.Text("@")), ExtraKey("\\", ScreenKey.Text("\\")), ExtraKey("BKSP", ScreenKey.Code(KeyEvent.KEYCODE_DEL))),
