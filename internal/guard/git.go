@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/kazuph/ikesu/internal/childenv"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -103,12 +104,59 @@ func repository(s string) string {
 	}
 	return ""
 }
+
+// 組織の push 権限を GitHub で確かめた結果を覚える長さと置き場所。GitHub の応答が遅い
+// （probe の3秒を超える）ときに、確認済みのリポジトリへの push で毎回聞かないため
+// （2026-11-17、gh api /user が 3.7秒・gh repo view が 10秒かかり、組織のブランチの push で
+// ownership の確認が出た）。置き場所は guard の状態のフォルダの下で、AI が書こうとすると
+// guard-boundary の確認（L3）になる。覚えるのは「権限あり」だけで、断られた結果は覚えない。
+const ownerCacheDuration = 24 * time.Hour
+
+func ownerCacheFile(root string) string { return filepath.Join(root, "guard", "owner-cache") }
+
+var githubName = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$`)
+var githubRepo = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$`)
+
+// ownerCache は覚えた結果のファイル。github.com 以外（GH_HOST）を見る判定と、状態のフォルダが無い判定では覚えない。
+func ownerCache(i Input) string {
+	if i.stateRoot == "" || (i.Env["GH_HOST"] != "" && i.Env["GH_HOST"] != "github.com") {
+		return ""
+	}
+	return ownerCacheFile(i.stateRoot)
+}
+
+// githubAPI は GitHub への問い合わせ。答えを覚えるとき（ownerCache が空でない）は、手元の gh 設定の
+// 既定ホストが差し替えられても github.com に聞くよう、ホストを固定する。
+func githubAPI(i Input, endpoint, jq string) string {
+	if ownerCache(i) != "" {
+		return probe(i, "gh", "api", "--hostname", "github.com", endpoint, "--jq", jq)
+	}
+	return probe(i, "gh", "api", endpoint, "--jq", jq)
+}
+
+// githubLogin は gh のログイン名。手元の gh の設定の値は、24時間以内に GitHub（gh api /user）で
+// 確かめた名前と同じときだけ使う（ネットに出ない）。手元の設定は GH_CONFIG_DIR などで差し替えられるので、
+// 確かめていない名前は使わず GitHub に聞き、答えを覚える。
+func githubLogin(i Input) string {
+	cache := ownerCache(i)
+	if cache != "" {
+		if local := probe(i, "gh", "config", "get", "-h", "github.com", "user"); githubName.MatchString(local) && validApproval(cache, "login:github.com:"+local, time.Now()) {
+			return local
+		}
+	}
+	login := githubAPI(i, "/user", ".login")
+	if cache != "" && githubName.MatchString(login) {
+		_ = WriteApproval(cache, "login:github.com:"+login, time.Now().Add(ownerCacheDuration))
+	}
+	return login
+}
+
 func ownerVerdict(i Input, repo, operation string) Verdict {
 	ask := askAt("ownership", "リモート・所有者を確認できないため承認が必要です。", TierL2, DestGitHub)
 	if !strings.Contains(repo, "/") {
 		return ask
 	}
-	login := probe(i, "gh", "api", "/user", "--jq", ".login")
+	login := githubLogin(i)
 	if login == "" {
 		return ask
 	}
@@ -116,18 +164,33 @@ func ownerVerdict(i Input, repo, operation string) Verdict {
 	if owner == login {
 		return result("allow", "owner", "所有リポジトリ")
 	}
-	typ := probe(i, "gh", "api", "repos/"+repo, "--jq", ".owner.type")
+	cache, key := ownerCache(i), "write:github.com:"+login+":"+strings.ToLower(repo)
+	if !githubRepo.MatchString(repo) {
+		cache = ""
+	}
+	if cache != "" {
+		if validApproval(cache, key, time.Now()) {
+			return result("allow", "organization", "組織への書き込み権限あり（24時間以内に確認済み）")
+		}
+	}
+	allowed := func() Verdict {
+		if cache != "" {
+			_ = WriteApproval(cache, key, time.Now().Add(ownerCacheDuration))
+		}
+		return result("allow", "organization", "組織への書き込み権限あり")
+	}
+	typ := githubAPI(i, "repos/"+repo, ".owner.type")
 	if typ == "Organization" {
-		p := probe(i, "gh", "api", "repos/"+repo, "--jq", ".permissions.push")
+		p := githubAPI(i, "repos/"+repo, ".permissions.push")
 		if p == "true" {
-			return result("allow", "organization", "組織への書き込み権限あり")
+			return allowed()
 		}
 		if p == "false" {
 			return result("block", "organization-denied", "組織 ("+owner+") への "+operation+" 権限がないため禁止です。")
 		}
-		p = probe(i, "gh", "api", "repos/"+repo+"/collaborators/"+login+"/permission", "--jq", ".permission")
+		p = githubAPI(i, "repos/"+repo+"/collaborators/"+login+"/permission", ".permission")
 		if has([]string{"admin", "maintain", "write"}, p) {
-			return result("allow", "organization", "組織への書き込み権限あり")
+			return allowed()
 		}
 		if has([]string{"read", "triage"}, p) {
 			return result("block", "organization-denied", "組織 ("+owner+") への "+operation+" 権限がないため禁止です。")

@@ -53,6 +53,7 @@ type Input struct {
 	shellPID             string
 	shellArrays          map[string]map[int]string
 	probePrivate         bool
+	stateRoot            string // guard の状態のフォルダ。所有の確認の結果を覚えるのに使う（空なら覚えない）
 	gitOptions           []string
 	gitStripped          []string
 	gitDirUnknown        bool

@@ -149,6 +149,7 @@ func authorize(c Config, root string, i Input, via string, errOut io.Writer, awa
 		return true
 	}
 	i.LaunchCwd = m.Cwd
+	i.stateRoot = root
 	v := Evaluate(c, i)
 	if override != nil {
 		v = evaluateVerdict(c, i, *override)

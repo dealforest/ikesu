@@ -37,6 +37,7 @@ func AuthorizeLine(c Config, root string, i Input, line string, errOut io.Writer
 		return true
 	}
 	i.LaunchCwd = m.Cwd
+	i.stateRoot = root
 	callerEnv := i.Env
 	snapshot := i.shellVariables
 	arrays := i.shellArrays
