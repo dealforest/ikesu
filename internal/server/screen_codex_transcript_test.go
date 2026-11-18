@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kazuph/ikesu/internal/api"
+	"github.com/kazuph/ikesu/internal/config"
 	"github.com/kazuph/ikesu/internal/screenprompt"
 	"github.com/kazuph/ikesu/internal/session"
 	"github.com/kazuph/ikesu/internal/teststate"
@@ -37,6 +38,279 @@ func TestCodexQuestionMatchesUniquePendingCall(t *testing.T) {
 	if _, ok := chooseCodexQuestion(p, []session.CodexQuestion{second}); ok {
 		t.Fatal("wrong question index matched")
 	}
+}
+
+func TestCodexQuestionMatchesFullBody(t *testing.T) {
+	label := "Question 1/1"
+	full := "どちらを選びますか？\n\n経緯と根拠です。\n\n推奨と理由です。"
+	body := full + "\n\nauto-resolves in m s\n\n" + lateCodexQuestionBody
+	description := "説明"
+	p := &screenprompt.Prompt{CodexQuestion: true, Params: api.DecisionCreateParams{Title: "どちらを選びますか？", Body: &body, QuestionLabel: &label, Options: []api.DecisionOption{{ID: "1", Label: "選択", Description: &description}}}}
+	q := session.CodexQuestion{SessionID: "s", CallID: "c", ID: "q", Total: 1, Question: full, State: session.CodexPending, Options: []session.CodexQuestionOption{{Label: "選択", Description: "説明"}}}
+	if _, ok := chooseCodexQuestion(p, []session.CodexQuestion{q}); !ok {
+		t.Fatal("full question body did not match")
+	}
+	other := q
+	other.Question = "どちらを選びますか？\n\n別の経緯です。"
+	if _, ok := chooseCodexQuestion(p, []session.CodexQuestion{other}); ok {
+		t.Fatal("different question with identical options matched")
+	}
+	other.Question = p.Params.Title
+	if _, ok := chooseCodexQuestion(p, []session.CodexQuestion{other}); ok {
+		t.Fatal("question heading alone matched a multi-paragraph question")
+	}
+	q.State = session.CodexAnswered
+	d := api.Decision{Title: p.Params.Title, Body: p.Params.Body, QuestionLabel: &label, Options: p.Params.Options}
+	if _, ok := restoredCodexMatch(d, []session.CodexQuestion{q}, `["s","c","q"]`); !ok {
+		t.Fatal("restored answered question did not match body")
+	}
+}
+
+func TestCodexLongScreenQuestionMatchesRecordedAnswer(t *testing.T) {
+	text := "どちらを選びますか？\n\n経緯を確認した結果、最初の画面に表示される質問は複数の段落から構成されています。根拠を読んで選択してください。\n\n推奨する選択とその理由をここに記載します。"
+	lines := []string{"Question 1/1 (1 unanswered)"}
+	lines = append(lines, strings.Split(text, "\n")...)
+	lines = append(lines, "› 1. 一つ目", "     一つ目の説明", "  2. 二つ目", "     二つ目の説明", "  3. 三つ目", "     三つ目の説明", "  4. None of the above", "  auto-resolves in 1:23", "  tab to add notes · enter to submit answer")
+	p := screenprompt.Parse("codex", lines)
+	if p == nil || p.Params.Body == nil || p.Params.Title == text {
+		t.Fatalf("question was not split into title and body: %+v", p)
+	}
+	q := session.CodexQuestion{SessionID: "s", CallID: "c", ID: "q", Total: 1, Question: text, State: session.CodexPending, Options: []session.CodexQuestionOption{{Label: "一つ目", Description: "一つ目の説明"}, {Label: "二つ目", Description: "二つ目の説明"}, {Label: "三つ目", Description: "三つ目の説明"}}}
+	if _, ok := chooseCodexQuestion(p, []session.CodexQuestion{q}); !ok {
+		t.Fatalf("full parsed question did not match transcript: title=%q body=%q options=%+v", p.Params.Title, *p.Params.Body, p.Params.Options)
+	}
+}
+
+func TestRecordedCodexResultResolvesOriginalDecision(t *testing.T) {
+	for _, tc := range []struct {
+		name, answers, want string
+	}{
+		{"answered_elsewhere", `["None of the above","user_note: 回答"]`, "cancelled"},
+		{"empty_timeout", `[]`, "pending"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			teststate.Lock(t)
+			s, _, input := codexQuestionTerminal(t, "codex-question")
+			scanScreen(s)
+			d := screenRecord(t, s)
+			path := filepath.Join(t.TempDir(), "rollout.jsonl")
+			output, _ := json.Marshal(map[string]any{"type": "response_item", "payload": map[string]any{"type": "function_call_output", "call_id": "c", "output": `{"answers":{"q":{"answers":` + tc.answers + `}}}`}})
+			raw := `{"type":"session_meta","payload":{"id":"s"}}` + "\n" +
+				`{"timestamp":"2026-11-05T01:03:23Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"c","arguments":"{\"questions\":[{\"id\":\"q\",\"question\":\"Report format?\",\"options\":[{\"label\":\"Plain text\",\"description\":\"Use plain text.\"},{\"label\":\"JSON\",\"description\":\"Use JSON.\"}]}]}"}}` + "\n" + string(output) + "\n"
+			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+			questions, err := session.ReadCodexQuestions(path, "s")
+			if err != nil || len(questions) != 1 {
+				t.Fatalf("questions=%+v err=%v", questions, err)
+			}
+			s.app.Do(func() {
+				w := s.screenPrompts.watches[1]
+				w.codex = &codexBinding{path: path, question: questions[0], identity: `["s","c","q"]`}
+				s.screenPrompts.verifying = map[string]*lateCodexQuestion{d.DecisionID: {pid: 1, w: w}}
+				delete(s.screenPrompts.watches, 1)
+			})
+			waitPromptCondition(t, func() bool {
+				var done bool
+				s.app.Do(func() { s.scanVerifyingCodexQuestions(); done = s.screenPrompts.verifying[d.DecisionID] == nil })
+				return done
+			})
+			got, err := s.store.Decision(d.DecisionID)
+			if err != nil || got.Status != tc.want {
+				t.Fatalf("decision=%+v err=%v", got, err)
+			}
+			s.app.Do(func() {
+				if (s.screenPrompts.late[d.DecisionID] != nil) != (tc.name == "empty_timeout") {
+					t.Error("incorrect late transition")
+				}
+			})
+			if keys, err := os.ReadFile(input); err != nil || len(keys) != 0 {
+				t.Fatalf("unexpected terminal input %q %v", keys, err)
+			}
+		})
+	}
+}
+
+func TestAcceptedCodexAnswerRecoversOnlyConfirmedEmptyResult(t *testing.T) {
+	for _, tc := range []struct {
+		name, answers, want string
+		text                bool
+	}{
+		{"empty", `[]`, "pending", false},
+		{"answered", `["Plain text"]`, "delivered", false},
+		{"different", `["JSON"]`, "failed", false},
+		{"pending", "", "pending", false},
+		{"text", `["free answer"]`, "delivered", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			teststate.Lock(t)
+			fixture := "codex-question"
+			if tc.text {
+				fixture = "codex-question-notes"
+			}
+			s, _, _ := codexQuestionTerminal(t, fixture)
+			scanScreen(s)
+			d := screenRecord(t, s)
+			path := filepath.Join(t.TempDir(), "rollout.jsonl")
+			raw := `{"type":"session_meta","payload":{"id":"s"}}` + "\n" +
+				`{"timestamp":"2026-11-05T01:03:23Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"c","arguments":"{\"questions\":[{\"id\":\"q\",\"question\":\"Report format?\",\"options\":[{\"label\":\"Plain text\",\"description\":\"Use plain text.\"},{\"label\":\"JSON\",\"description\":\"Use JSON.\"}]}]}"}}` + "\n"
+			if tc.answers != "" {
+				out, _ := json.Marshal(map[string]any{"type": "response_item", "payload": map[string]any{"type": "function_call_output", "call_id": "c", "output": `{"answers":{"q":{"answers":` + tc.answers + `}}}`}})
+				raw += string(out) + "\n"
+			}
+			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+			questions, err := session.ReadCodexQuestions(path, "s")
+			if err != nil || len(questions) != 1 {
+				t.Fatalf("questions=%+v err=%v", questions, err)
+			}
+			var w *screenPromptWatch
+			s.app.Do(func() {
+				w = s.screenPrompts.watches[1]
+				w.codex = &codexBinding{path: path, question: questions[0], identity: `["s","c","q"]`}
+				if err := s.store.BindScreenQuestion(d.DecisionID, "p1", w.codex.identity); err != nil {
+					t.Fatal(err)
+				}
+				choice := d.Options[0].ID
+				answer := api.DecisionAnswerParams{DecisionID: d.DecisionID, OptionID: &choice}
+				if tc.text {
+					answer.OptionID = nil
+					text := "free answer"
+					answer.Text = &text
+				}
+				resp := s.decisionRequest(&api.Request{ID: "answer", Method: api.MethodDecisionAnswer, Params: api.MarshalParams(answer)})
+				if resp.Err != nil {
+					t.Fatal(resp.Err)
+				}
+				var result api.DecisionResult
+				if err := json.Unmarshal(resp.Result, &result); err != nil || result.Decision.Delivery == nil || result.Decision.Delivery.Status != "pending" {
+					t.Fatalf("initial result=%+v err=%v", result, err)
+				}
+				s.scanVerifyingCodexQuestions()
+				if s.screenPrompts.late[d.DecisionID] != nil {
+					t.Error("recovered while normal input was in flight")
+				}
+			})
+			waitPromptCondition(t, func() bool { var done bool; s.app.Do(func() { done = w.deliveryFinished }); return done })
+			waitPromptCondition(t, func() bool {
+				var done bool
+				s.app.Do(func() {
+					s.scanVerifyingCodexQuestions()
+					if tc.name == "pending" {
+						done = w.codexStateResult == nil
+					} else {
+						done = s.screenPrompts.verifying[d.DecisionID] == nil
+					}
+				})
+				return done
+			})
+			s.app.Do(func() {
+				got := s.withLateDelivery(d)
+				wantText := "Plain text"
+				if tc.text {
+					wantText = "free answer"
+				}
+				if got.Delivery == nil || got.Delivery.Status != tc.want || !strings.Contains(got.Delivery.Text, wantText) {
+					t.Fatalf("delivery=%+v", got.Delivery)
+				}
+				if tc.name == "different" && (s.screenPrompts.late[d.DecisionID].sent || got.Delivery.Reason == "") {
+					t.Fatal("different answer was sent or missing reason")
+				}
+			})
+		})
+	}
+}
+
+func TestCodexRecordedTextMustMatch(t *testing.T) {
+	text := "入力した回答"
+	d := api.Decision{Answer: &api.DecisionAnswer{Text: &text}}
+	bound := session.CodexQuestion{SessionID: "s", CallID: "c", ID: "q"}
+	q := bound
+	q.Answers = []string{text}
+	if !codexAnswerMatches(d, bound, []session.CodexQuestion{q}) {
+		t.Fatal("exact text did not match")
+	}
+	q.Answers = []string{"別の回答"}
+	if codexAnswerMatches(d, bound, []session.CodexQuestion{q}) {
+		t.Fatal("different text matched")
+	}
+}
+
+func TestDisableScreenPromptsFinishesVerifyingDelivery(t *testing.T) {
+	teststate.Lock(t)
+	s, _, _ := codexQuestionTerminal(t, "codex-question")
+	scanScreen(s)
+	d := screenRecord(t, s)
+	s.app.Do(func() {
+		w := s.screenPrompts.watches[1]
+		w.resolved = true
+		s.screenPrompts.verifying = map[string]*lateCodexQuestion{d.DecisionID: {pid: 1, w: w, recoveryText: "answer", delivery: &api.DecisionDelivery{Status: "pending", Text: "answer"}}}
+		c := config.Config{}
+		disabled := false
+		c.Decisions.ScreenPrompts = &disabled
+		s.screenPromptConfig(c)
+		got := s.withLateDelivery(d)
+		if got.Delivery == nil || got.Delivery.Status != "failed" || got.Delivery.Reason == "" {
+			t.Fatalf("delivery=%+v", got.Delivery)
+		}
+	})
+}
+
+func TestPendingRecoveryFailsWhenOriginalProcessChanges(t *testing.T) {
+	teststate.Lock(t)
+	s, pane, input := codexQuestionTerminal(t, "codex-question")
+	scanScreen(s)
+	d := screenRecord(t, s)
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	if err := os.WriteFile(path, []byte("{\"type\":\"session_meta\",\"payload\":{\"id\":\"s\"}}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	group := pane.ForegroundJob().ProcessGroupID
+	if group == 0 {
+		t.Fatal("foreground process group unavailable")
+	}
+	s.app.Do(func() {
+		w := s.screenPrompts.watches[1]
+		w.codex = &codexBinding{path: path, question: session.CodexQuestion{SessionID: "s", CallID: "c", ID: "q"}}
+		w.codexAnchorGroup, w.deliveryFinished, w.resolved = group+1, true, true
+		s.screenPrompts.verifying = map[string]*lateCodexQuestion{d.DecisionID: {pid: 1, w: w, recoveryText: "answer", delivery: &api.DecisionDelivery{Status: "pending", Text: "answer"}}}
+	})
+	waitPromptCondition(t, func() bool {
+		var done bool
+		s.app.Do(func() { s.scanVerifyingCodexQuestions(); done = s.screenPrompts.verifying[d.DecisionID] == nil })
+		return done
+	})
+	s.app.Do(func() {
+		got := s.withLateDelivery(d)
+		if got.Delivery == nil || got.Delivery.Status != "failed" {
+			t.Fatalf("delivery=%+v", got.Delivery)
+		}
+	})
+	if keys, err := os.ReadFile(input); err != nil || len(keys) != 0 {
+		t.Fatalf("unexpected terminal input: %q %v", keys, err)
+	}
+}
+
+func TestAcceptedUnboundCodexAnswerIsNotRecovered(t *testing.T) {
+	teststate.Lock(t)
+	s, _, _ := codexQuestionTerminal(t, "codex-question")
+	scanScreen(s)
+	d := screenRecord(t, s)
+	var w *screenPromptWatch
+	s.app.Do(func() {
+		w = s.screenPrompts.watches[1]
+		w.codex = &codexBinding{identity: `["s","c","q"]`}
+		choice := d.Options[0].ID
+		resp := s.decisionRequest(&api.Request{ID: "answer", Method: api.MethodDecisionAnswer, Params: api.MarshalParams(api.DecisionAnswerParams{DecisionID: d.DecisionID, OptionID: &choice})})
+		if resp.Err != nil {
+			t.Fatal(resp.Err)
+		}
+		if s.screenPrompts.verifying[d.DecisionID] != nil || s.screenPrompts.late[d.DecisionID] != nil {
+			t.Fatal("unbound answer entered recovery")
+		}
+	})
+	waitPromptCondition(t, func() bool { var done bool; s.app.Do(func() { done = w.deliveryFinished }); return done })
 }
 
 func TestLateAnswerRemainsAnsweredWhileDeliveryIsPending(t *testing.T) {
@@ -231,6 +505,14 @@ func TestRestoredCodexMatchRequiresUniqueEmptyResult(t *testing.T) {
 	q := session.CodexQuestion{SessionID: "s", CallID: "c", ID: "q", Index: 0, Total: 1, Question: "色は？", Options: []session.CodexQuestionOption{{Label: "青"}}, State: session.CodexEmpty}
 	if _, ok := restoredCodexMatch(d, []session.CodexQuestion{q}, `["s","c","q"]`); !ok {
 		t.Fatal("recorded empty question not restored")
+	}
+	answered := q
+	answered.State = session.CodexAnswered
+	if got, ok := restoredCodexMatch(d, []session.CodexQuestion{answered}, `["s","c","q"]`); !ok || got.State != session.CodexAnswered {
+		t.Fatal("recorded answered question not restored")
+	}
+	if _, ok := restoredCodexMatch(d, []session.CodexQuestion{answered}, `["other","c","q"]`); ok {
+		t.Fatal("answered question from another session accepted")
 	}
 	for _, state := range []session.CodexAnswerState{session.CodexPending, session.CodexAnswered} {
 		other := q

@@ -16,6 +16,7 @@ import (
 )
 
 var codexQuestionPosition = regexp.MustCompile(`Question\s+(\d+)/(\d+)`)
+var codexCountdownSuffix = regexp.MustCompile(`\n\nauto-resolves in(?: [hms :.]+)?$`)
 
 const lateCodexQuestionBody = "Codex は空の答えで先に進みました。答えると会話で届けます"
 
@@ -26,13 +27,14 @@ type codexBinding struct {
 }
 
 type lateCodexQuestion struct {
-	pid      int
-	w        *screenPromptWatch
-	delivery *api.DecisionDelivery
-	checking bool
-	sent     bool
-	offset   int64
-	fileInfo os.FileInfo
+	pid          int
+	w            *screenPromptWatch
+	delivery     *api.DecisionDelivery
+	checking     bool
+	sent         bool
+	offset       int64
+	fileInfo     os.FileInfo
+	recoveryText string
 }
 
 type codexStateResult struct {
@@ -41,17 +43,73 @@ type codexStateResult struct {
 	questions []session.CodexQuestion
 }
 
+const codexSessionChanged session.CodexAnswerState = "session_changed"
+
 func codexQuestionScan(binding codexBinding, prompt *screenprompt.Prompt, questions []session.CodexQuestion) codexStateResult {
 	next, ok := chooseCodexQuestion(prompt, questions)
 	return codexStateResult{state: boundCodexState(binding.question, questions), nextCall: ok && next.CallID != binding.question.CallID, questions: questions}
 }
 
 func (s *Server) withLateDelivery(d api.Decision) api.Decision {
-	if late := s.screenPrompts.late[d.DecisionID]; late != nil && late.delivery != nil {
+	late := s.screenPrompts.late[d.DecisionID]
+	if late == nil {
+		late = s.screenPrompts.verifying[d.DecisionID]
+	}
+	if late != nil && late.delivery != nil {
 		copy := *late.delivery
 		d.Delivery = &copy
 	}
 	return d
+}
+
+func (s *Server) finishVerifyingDelivery(id string, old *lateCodexQuestion, reason string) {
+	if s.screenPrompts.late == nil {
+		s.screenPrompts.late = map[string]*lateCodexQuestion{}
+	}
+	s.screenPrompts.late[id] = old
+	delete(s.screenPrompts.verifying, id)
+	if reason != "" {
+		s.setLateDelivery(id, "failed", reason)
+	}
+	s.pushDecisionProjection()
+}
+
+func codexAnswerMatches(d api.Decision, bound session.CodexQuestion, questions []session.CodexQuestion) bool {
+	if d.Answer == nil {
+		return false
+	}
+	var want []string
+	if d.Answer.Text != nil {
+		want = []string{*d.Answer.Text}
+	} else if d.Answer.OptionID != nil {
+		for _, option := range d.Options {
+			if option.ID == *d.Answer.OptionID {
+				want = []string{option.Label}
+				break
+			}
+		}
+	}
+	if len(want) == 0 {
+		return false
+	}
+	for _, q := range questions {
+		if q.SessionID != bound.SessionID || q.CallID != bound.CallID || q.ID != bound.ID {
+			continue
+		}
+		if d.Answer.Text != nil && len(q.Answers) == 2 && q.Answers[0] == "None of the above" && q.Answers[1] == "user_note: "+*d.Answer.Text {
+			return true
+		}
+		if len(q.Answers) != len(want) {
+			return false
+		}
+		for i := range want {
+			if q.Answers[i] != want[i] {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func lateCodexAnswerText(d api.Decision, answer api.DecisionAnswer) (string, error) {
@@ -198,7 +256,7 @@ func boundCodexState(bound session.CodexQuestion, questions []session.CodexQuest
 	return state
 }
 
-func pollBoundCodexState(w *screenPromptWatch) (session.CodexAnswerState, bool, bool, []session.CodexQuestion) {
+func pollBoundCodexState(w *screenPromptWatch, pane *runtime.Pane) (session.CodexAnswerState, bool, bool, []session.CodexQuestion) {
 	if w.codex == nil {
 		return "", true, false, nil
 	}
@@ -207,14 +265,39 @@ func pollBoundCodexState(w *screenPromptWatch) (session.CodexAnswerState, bool, 
 		w.codexStateResult = result
 		binding := *w.codex
 		prompt := *w.prompt
+		anchorGroup, anchorStart := w.codexAnchorGroup, w.codexAnchorStart
 		prompt.Params.Options = append(prompt.Params.Options[:0:0], w.prompt.Params.Options...)
 		go func() {
 			questions, err := session.ReadCodexQuestions(binding.path, binding.question.SessionID)
-			if err != nil {
-				result <- codexStateResult{}
+			scan := codexStateResult{}
+			if err == nil {
+				scan = codexQuestionScan(binding, &prompt, questions)
+			}
+			if scan.state == session.CodexEmpty || scan.state == session.CodexAnswered {
+				result <- scan
 				return
 			}
-			result <- codexQuestionScan(binding, &prompt, questions)
+			if pane != nil {
+				job := pane.ForegroundJob()
+				started, ok := session.ProcessStart(job)
+				if anchorGroup != 0 && (job.ProcessGroupID != 0 && job.ProcessGroupID != anchorGroup || ok && !started.Equal(anchorStart)) {
+					result <- codexStateResult{state: codexSessionChanged}
+					return
+				}
+				agent := foregroundAgent(pane)
+				if agent != "" && agent != "codex" {
+					result <- codexStateResult{state: codexSessionChanged}
+					return
+				}
+				if agent == "codex" {
+					path, id, err := session.OpenCodexRollout(pane.ForegroundJob())
+					if err == nil && (path != binding.path || id != binding.question.SessionID) {
+						result <- codexStateResult{state: codexSessionChanged}
+						return
+					}
+				}
+			}
+			result <- scan
 		}()
 		return "", false, false, nil
 	}
@@ -229,26 +312,61 @@ func pollBoundCodexState(w *screenPromptWatch) (session.CodexAnswerState, bool, 
 
 func (s *Server) scanVerifyingCodexQuestions() {
 	for id, old := range s.screenPrompts.verifying {
+		if old.recoveryText != "" && !old.w.deliveryFinished {
+			continue
+		}
 		pane := s.sup.Get(old.pid)
-		if pane == nil || pane.Snapshot().Dead {
+		if (pane == nil || pane.Snapshot().Dead) && old.delivery == nil {
 			s.cancelScreenPrompt(old.w)
 			delete(s.screenPrompts.verifying, id)
 			continue
 		}
-		state, ready, _, questions := pollBoundCodexState(old.w)
+		if old.w.codex == nil {
+			if old.w.codexAnchorPath != "" {
+				s.waitCodexBinding(old.pid, old.w)
+			}
+			continue
+		}
+		var current *runtime.Pane
+		if old.delivery != nil {
+			current = pane
+		}
+		state, ready, _, questions := pollBoundCodexState(old.w, current)
 		if !ready {
+			continue
+		}
+		if old.delivery != nil && (pane == nil || pane.Snapshot().Dead) && state != session.CodexEmpty && state != session.CodexAnswered {
+			s.finishVerifyingDelivery(id, old, "ペインが閉じました")
 			continue
 		}
 		if state == session.CodexEmpty || state == session.CodexAnswered {
 			s.retainOtherEmptyCodexQuestions(old.pid, old.w, questions)
 		}
 		switch state {
+		case codexSessionChanged:
+			s.finishVerifyingDelivery(id, old, "元の Codex セッションが変わりました")
 		case session.CodexEmpty:
+			if old.recoveryText != "" {
+				s.finishVerifyingDelivery(id, old, "")
+				continue
+			}
 			if s.retainLateCodexQuestion(old.pid, old.w) {
 				delete(s.screenPrompts.verifying, id)
 			}
 		case session.CodexAnswered:
-			s.closeCodexAnsweredElsewhere(old.w)
+			if old.delivery != nil {
+				d, err := s.store.Decision(id)
+				if err == nil && old.w.deliveryErr == nil && codexAnswerMatches(d, old.w.codex.question, questions) {
+					s.finishVerifyingDelivery(id, old, "")
+					s.setLateDelivery(id, "delivered", "")
+				} else {
+					s.finishVerifyingDelivery(id, old, "Codex には別の回答が記録されたか、送信を確認できませんでした")
+				}
+				continue
+			}
+			if old.recoveryText == "" {
+				s.closeCodexAnsweredElsewhere(old.w)
+			}
 			delete(s.screenPrompts.verifying, id)
 		}
 	}
@@ -406,7 +524,7 @@ func chooseCodexQuestion(p *screenprompt.Prompt, questions []session.CodexQuesti
 	}
 	matched := false
 	for _, q := range questions {
-		if q.State != session.CodexPending || q.Index+1 != index || q.Total != total || compactQuestion(p.Params.Title) != compactQuestion(q.Question) || len(p.Params.Options) != len(q.Options) {
+		if q.State != session.CodexPending || q.Index+1 != index || q.Total != total || !matchesCodexQuestionText(p.Params, q.Question) || len(p.Params.Options) != len(q.Options) {
 			continue
 		}
 		same := true
@@ -425,4 +543,17 @@ func chooseCodexQuestion(p *screenprompt.Prompt, questions []session.CodexQuesti
 		found, matched = q, true
 	}
 	return found, matched
+}
+
+func matchesCodexQuestionText(p api.DecisionCreateParams, question string) bool {
+	if p.Body == nil {
+		return compactQuestion(p.Title) == compactQuestion(question)
+	}
+	body := strings.TrimSpace(*p.Body)
+	body = strings.TrimSpace(strings.TrimSuffix(body, "\n\n"+lateCodexQuestionBody))
+	body = strings.TrimSpace(codexCountdownSuffix.ReplaceAllString(body, ""))
+	if strings.HasPrefix(body, p.Title+"\n\n") || body == p.Title {
+		return compactQuestion(body) == compactQuestion(question)
+	}
+	return compactQuestion(p.Title) == compactQuestion(question)
 }

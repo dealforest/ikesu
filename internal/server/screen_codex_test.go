@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kazuph/ikesu/internal/api"
 	"github.com/kazuph/ikesu/internal/runtime"
 	"github.com/kazuph/ikesu/internal/screenprompt"
 	"github.com/kazuph/ikesu/internal/session"
@@ -88,5 +89,47 @@ func TestCodexReconciliationKeepsLateAnswerBeforeRestore(t *testing.T) {
 	got, err := s.store.Decision(late.DecisionID)
 	if err != nil || got.Status != "pending" {
 		t.Fatalf("unrestored late answer lost: %+v %v", got, err)
+	}
+}
+
+func TestUnboundCodexQuestionRemainsPendingWhenScreenChanges(t *testing.T) {
+	teststate.Lock(t)
+	s, pane, input := codexQuestionTerminal(t, "codex-question")
+	scanScreen(s)
+	old := screenRecord(t, s)
+	paintScreen(pane, screenDialog(t, "codex-question-last"))
+	scanScreen(s)
+	s.app.Do(func() {
+		previous := s.screenPrompts.verifying[old.DecisionID]
+		if previous == nil {
+			t.Error("unbound question was not retained for transcript verification")
+			return
+		}
+		if previous.w.codexAnchorPath != "" {
+			t.Fatal("fixture unexpectedly has a session anchor")
+		}
+		if current := s.screenPrompts.watches[1]; current == nil || current.decisionID == old.DecisionID {
+			t.Error("new question did not get a separate watch")
+		}
+		choice := old.Options[0].ID
+		response := s.decisionRequest(&api.Request{ID: "answer", Method: api.MethodDecisionAnswer, Params: api.MarshalParams(api.DecisionAnswerParams{DecisionID: old.DecisionID, OptionID: &choice})})
+		if response.Err == nil || response.Err.Code != api.ErrDecisionStale {
+			t.Errorf("unverified original answer accepted: %+v", response.Err)
+		}
+	})
+	for i := 0; i < 3; i++ {
+		scanScreen(s)
+	}
+	s.app.Do(func() {
+		if previous := s.screenPrompts.verifying[old.DecisionID]; previous == nil || previous.w.codexResult != nil {
+			t.Error("unanchored old question started another transcript scan")
+		}
+	})
+	got, err := s.store.Decision(old.DecisionID)
+	if err != nil || got.Status != "pending" {
+		t.Fatalf("original decision changed: %+v %v", got, err)
+	}
+	if keys, err := os.ReadFile(input); err != nil || len(keys) != 0 {
+		t.Fatalf("observation wrote PTY input: %q %v", keys, err)
 	}
 }

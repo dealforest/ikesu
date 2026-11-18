@@ -7,6 +7,25 @@ import { buildDialogSpec, decisionKey, decisionIdOf } from "./spec.mjs";
 const ANSWER_RETRY_MS = 15_000;
 const ANSWER_RETRY_LIMIT = 120;
 
+function answerErrorCode(result) {
+  for (const output of [result.stderr, result.stdout]) {
+    for (const line of (output || "").split("\n")) {
+      try {
+        const code = JSON.parse(line)?.error?.code;
+        if (code) return code;
+      } catch {}
+    }
+  }
+}
+
+const uncertainAnswerErrors = new Set([
+  "decision_already_resolved",
+  "decision_stale",
+  "screen_prompt_input_failed",
+  "server_not_running",
+  "server_stopping",
+]);
+
 export class MacDialogDecisionsDaemon {
   constructor({
     config,
@@ -479,6 +498,8 @@ export class MacDialogDecisionsDaemon {
     entry.draft = {option_ids: optionIds, text, ...(attachments.length ? {attachments} : {})};
     this.notify();
     const did = entry.decision.decision_id;
+    const isCodexQuestion = entry.decision.kind === "agent_prompt" &&
+      entry.decision.origin?.agent === "codex" && entry.decision.origin.reason === "screen_prompt";
     const args = ["decision", "answer", did, ...optionIds, "--responder", RESPONDER, "--machine", entry.machineId];
     let answerText = text;
     this.log(`回答を送信: ${did} option=${optionIds.join(",") || "-"}${text ? " +text" : ""}`);
@@ -499,15 +520,22 @@ export class MacDialogDecisionsDaemon {
     }
     catch (error) { result = {code: 1, stderr: error.message}; }
     const detail = [result.stdout, result.stderr].filter(Boolean).join("\n").trim() || "unknown";
-    if (result.code === 0 || /decision_already_resolved/.test(detail)) { this.settleAnswer(entry); return true; }
+    if (result.code === 0 || (!isCodexQuestion && /decision_already_resolved/.test(detail))) {
+      this.settleAnswer(entry);
+      return true;
+    }
     if (entry.resolved || this.entries.get(entry.key) !== entry || this.stopped) {
       if (this.rich && entry.resolvedStatus && attachments.length) await this.rich.resolve(entry.machineId, did, entry.resolvedStatus, entry.resolvedAt).catch(error => this.log(`添付の整理に失敗: ${error.message}`));
       return false;
     }
     entry.answerPending = false;
     this.log(`回答の送信に失敗 (${did}): ${detail}`);
-    if (/https:\/\/login\.tailscale\.com\//.test(detail)) {
+    const needsLookup = isCodexQuestion && (entry.machineDown ||
+      uncertainAnswerErrors.has(answerErrorCode(result)) ||
+      result.interrupted || result.code === 255);
+    if (needsLookup || /https:\/\/login\.tailscale\.com\//.test(detail)) {
       entry.retry ??= {optionIds, text, attachments, attempts: 0, deadline: Date.now() + ANSWER_RETRY_MS * ANSWER_RETRY_LIMIT};
+      entry.retry.needsLookup ||= needsLookup;
       entry.retry.attempts++;
       this._closeDialog(entry);
       this.scheduleAnswerRetry(entry);
@@ -537,10 +565,33 @@ export class MacDialogDecisionsDaemon {
       return;
     }
     clearTimeout(entry.answerRetryTimer);
-    entry.answerRetryTimer = setTimeout(() => {
+    entry.answerRetryTimer = setTimeout(async () => {
       entry.answerRetryTimer = null;
       if (entry.resolved || this.stopped || this.entries.get(entry.key) !== entry) return;
       if (!this.isActive(entry)) { this.scheduleAnswerRetry(entry); return; }
+      if (retry.needsLookup) {
+        const epoch = this.machineEpochs.get(entry.machineId);
+        try {
+          const decision = await this.getDecision(entry.machineId, entry.decision.decision_id);
+          if (entry.retry !== retry) return;
+          if (!this.isActive(entry) || this.machineEpochs.get(entry.machineId) !== epoch) {
+            this.scheduleAnswerRetry(entry);
+            return;
+          }
+          if (decisionIdOf(decision) !== entry.decision.decision_id) throw Error("decision lookup returned a different ID");
+          if (["answered", "cancelled", "expired"].includes(decision.status)) {
+            this.onResolved(entry.machineId, decision);
+            return;
+          }
+          if (decision.status !== "pending") throw Error(`unknown saved decision status: ${decision.status}`);
+          entry.decision = decision;
+        } catch (error) {
+          this.log(`回答の再送前に判断待ちを確認できませんでした (${entry.decision.decision_id}): ${error.message}`);
+          retry.attempts++;
+          this.scheduleAnswerRetry(entry);
+          return;
+        }
+      }
       void this.submitAnswer(entry, retry);
     }, this.config.answerRetryMs ?? ANSWER_RETRY_MS);
     entry.answerRetryTimer.unref?.();

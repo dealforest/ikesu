@@ -46,6 +46,9 @@ func TestCodexQuestionsDistinguishesMissingAndAnswered(t *testing.T) {
 	if len(questions) != 2 || questions[0].ID != "a" || questions[0].State != CodexAnswered || questions[1].ID != "b" || questions[1].State != CodexEmpty {
 		t.Fatalf("question states: %+v", questions)
 	}
+	if len(questions[0].Answers) != 2 || questions[0].Answers[0] != "青" || questions[0].Answers[1] != "user_note: 濃い青" {
+		t.Fatalf("recorded answer lost: %+v", questions[0].Answers)
+	}
 }
 
 func TestCodexQuestionsRejectsIncompleteAndForeignSession(t *testing.T) {

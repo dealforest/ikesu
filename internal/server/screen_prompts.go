@@ -55,6 +55,8 @@ type screenPromptWatch struct {
 	preview             *screenPreviewScan
 	previews            map[string]*string
 	delivery            <-chan error
+	deliveryFinished    bool
+	deliveryErr         error
 	answerInputSequence uint64
 	editingText         bool
 }
@@ -204,6 +206,11 @@ func (s *Server) screenPromptConfig(c config.Config) {
 		return
 	}
 	s.stopScreenPromptTimer()
+	for id, old := range s.screenPrompts.verifying {
+		if old.delivery != nil {
+			s.finishVerifyingDelivery(id, old, "画面の質問の検出が無効になりました")
+		}
+	}
 	s.screenPrompts.verifying = nil
 	s.screenPrompts.claudeRestore = nil
 	s.screenPrompts.claudeRestoreCaches = nil
@@ -304,7 +311,7 @@ func (s *Server) scanScreenPrompts() {
 			}
 			continue
 		}
-		if w != nil && w.codex != nil && w.decisionID != "" && !w.resolved && p != nil && p.Signature() != w.signature {
+		if w != nil && w.prompt != nil && w.prompt.CodexQuestion && w.decisionID != "" && !w.resolved && p != nil && p.Signature() != w.signature {
 			if s.screenPrompts.verifying == nil {
 				s.screenPrompts.verifying = map[string]*lateCodexQuestion{}
 			}
@@ -313,7 +320,7 @@ func (s *Server) scanScreenPrompts() {
 			w = nil
 		}
 		if w != nil && w.codex != nil && w.decisionID != "" && !w.resolved {
-			state, ready, nextCall, questions := pollBoundCodexState(w)
+			state, ready, nextCall, questions := pollBoundCodexState(w, nil)
 			if !ready && p == nil {
 				continue
 			}

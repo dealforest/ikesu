@@ -36,6 +36,7 @@ type CodexQuestion struct {
 	Question  string
 	Options   []CodexQuestionOption
 	State     CodexAnswerState
+	Answers   []string
 }
 
 // OpenCodexRollout requires one JSONL file held open by the foreground job.
@@ -264,6 +265,7 @@ func ReadCodexQuestions(path, sessionID string) ([]CodexQuestion, error) {
 				if json.Unmarshal(raw, &entry) != nil || entry.Answers == nil {
 					return nil, fmt.Errorf("invalid answer for %s", questions[i].ID)
 				}
+				questions[i].Answers = append([]string(nil), (*entry.Answers)...)
 				for _, answer := range *entry.Answers {
 					if answer != "" {
 						questions[i].State = CodexAnswered

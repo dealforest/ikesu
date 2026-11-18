@@ -132,6 +132,21 @@ func (s *Server) startScreenAnswer(pid int, w *screenPromptWatch, answer api.Dec
 	result := make(chan error, 1)
 	w.delivery = result
 	w.resolved = true
+	if w.prompt.CodexQuestion && w.codex != nil && w.codex.identity != "" && s.store != nil {
+		identity, err := s.store.ScreenQuestionIdentity(w.decisionID)
+		if err == nil && identity == w.codex.identity {
+			d, err := s.store.Decision(w.decisionID)
+			if err == nil {
+				if text, err := lateCodexAnswerText(d, answer); err == nil {
+					if s.screenPrompts.verifying == nil {
+						s.screenPrompts.verifying = map[string]*lateCodexQuestion{}
+					}
+					s.screenPrompts.verifying[w.decisionID] = &lateCodexQuestion{pid: pid, w: w, recoveryText: text, delivery: &api.DecisionDelivery{Status: "pending", Text: text}}
+				}
+			}
+		}
+	}
+	recovering := s.screenPrompts.verifying[w.decisionID] != nil && s.screenPrompts.verifying[w.decisionID].delivery != nil
 	s.beginScreenFlowAnswer(pid, w.prompt)
 	prompt := w.prompt
 	signature := w.signature
@@ -139,8 +154,13 @@ func (s *Server) startScreenAnswer(pid int, w *screenPromptWatch, answer api.Dec
 	w.editingText = (prompt.Params.MultiSelect || prompt.CodexQuestion || prompt.Params.Origin != nil && prompt.Params.Origin.Tool != "") && answer.Text != nil
 	go func() {
 		err := s.deliverScreenAnswer(pid, signature, prompt, answer, recorded)
-		s.app.Do(func() { w.editingText = false; s.finishScreenFlowAnswer(pid, prompt, err) })
-		if err != nil {
+		s.app.Do(func() {
+			w.editingText = false
+			w.deliveryFinished = true
+			w.deliveryErr = err
+			s.finishScreenFlowAnswer(pid, prompt, err)
+		})
+		if err != nil && !recovering {
 			message := fmt.Sprintf("screen prompt input failed: decision=%s pane=%s: %v", w.decisionID, fmtPaneID(pid), err)
 			fmt.Fprintln(os.Stderr, "ikesu: "+message)
 			s.app.Do(func() {
