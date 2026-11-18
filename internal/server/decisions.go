@@ -298,10 +298,11 @@ func (s *Server) decisionRequest(req *api.Request) api.Response {
 			d = s.withLateDelivery(d)
 			s.scheduleScreenPrompts()
 		}
-		s.decisionChanged("decision_resolved", d)
 		if watch != nil {
 			s.startScreenAnswer(pid, watch, *d.Answer)
+			d = s.withLateDelivery(d)
 		}
+		s.decisionChanged("decision_resolved", d)
 		_ = s.expireDecisions(store)
 		return decisionResult(req.ID, d)
 	case api.MethodDecisionReach:

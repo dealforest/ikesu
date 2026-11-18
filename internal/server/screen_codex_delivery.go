@@ -19,7 +19,9 @@ func (s *Server) setLateDelivery(id, status, reason string) {
 		return
 	}
 	late.delivery.Status, late.delivery.Reason = status, reason
-
+	if status == "failed" && late.recoveryText != "" {
+		s.app.ShowToast("画面への回答送信に失敗", reason, "info", late.pid)
+	}
 }
 
 func (s *Server) lateDeliveryHasOtherDecision(pid int) bool {

@@ -50,7 +50,7 @@ func (s *Server) restoreLateCodexQuestions() {
 }
 
 func restoredCodexMatch(d api.Decision, questions []session.CodexQuestion, identity string) (session.CodexQuestion, bool) {
-	prompt := &screenprompt.Prompt{CodexQuestion: true, Params: api.DecisionCreateParams{Title: d.Title, Options: d.Options, QuestionLabel: d.QuestionLabel}}
+	prompt := &screenprompt.Prompt{CodexQuestion: true, Params: api.DecisionCreateParams{Title: d.Title, Body: d.Body, Options: d.Options, QuestionLabel: d.QuestionLabel}}
 	matches := []session.CodexQuestion{}
 	for _, q := range questions {
 		if identity == "" {
@@ -72,7 +72,7 @@ func restoredCodexMatch(d api.Decision, questions []session.CodexQuestion, ident
 			matches = append(matches, q)
 		}
 	}
-	if len(matches) != 1 || (matches[0].State != session.CodexEmpty && !(identity == "" && matches[0].State == session.CodexAnswered)) {
+	if len(matches) != 1 || (matches[0].State != session.CodexEmpty && matches[0].State != session.CodexAnswered) {
 		return session.CodexQuestion{}, false
 	}
 	return matches[0], true

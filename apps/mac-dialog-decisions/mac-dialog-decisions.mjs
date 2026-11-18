@@ -124,6 +124,7 @@ function execFileText(file, args, options = {}) {
         resolve({
           code:
             error && typeof error.code === "number" ? error.code : error ? 1 : 0,
+          interrupted: Boolean(error?.signal),
           stdout: String(stdout || ""),
           stderr: String(stderr || (error ? error.message : "")),
         });
