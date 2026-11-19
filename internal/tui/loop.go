@@ -211,6 +211,13 @@ func (a *App) detectPane(pid int, visible bool, now time.Time) {
 	a.observeBlocker(pid, agentID, d, now)
 	a.clearStaleReport(pid, agentID, d, now)
 	trackerChanged := tr.Update(d, agentID, sn.Dead, now)
+	if rep := a.reported[pid]; agentID == "codex" && rep.agent == agentID && rep.state == "idle" &&
+		tr.State == detect.Working && d.VisibleWorking {
+		inputAt, _ := p.IdleActivity()
+		if trackerChanged || inputAt.After(rep.at) {
+			delete(a.reported, pid)
+		}
+	}
 	if trackerChanged || before != a.glyph(pid).Key {
 		a.dirty = true
 		if a.availHook != nil {

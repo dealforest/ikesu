@@ -9,8 +9,32 @@ import (
 
 	"github.com/charmbracelet/x/vt"
 	"github.com/kazuph/ikesu/internal/render"
+	"github.com/kazuph/ikesu/internal/status"
 	"github.com/kazuph/ikesu/internal/teststate"
 )
+
+func TestCodexSidebarShowsWorkAfterIdleReport(t *testing.T) {
+	teststate.Lock(t)
+	a := specRuntimeApp(t)
+	if err := a.StartInitialPane(); err != nil {
+		t.Fatal(err)
+	}
+	p := a.sup.Get(1)
+	p.SetAgent("codex")
+	now := time.Now()
+	a.detectPane(1, false, now)
+	a.SetReported(1, "codex", "idle")
+	p.WithEmu(func(e *vt.Emulator) { e.Write([]byte("\x1b]0;⠋ Codex\x07")) })
+	a.detectPane(1, false, now.Add(status.StartupGrace))
+	assertReportedBlockerRender(t, a, "working")
+
+	a.SetReported(1, "codex", "idle")
+	a.detectPane(1, false, now.Add(status.StartupGrace))
+	assertReportedBlockerRender(t, a, "idle")
+	p.RecordKeyInput()
+	a.detectPane(1, false, now.Add(status.StartupGrace))
+	assertReportedBlockerRender(t, a, "working")
+}
 
 // Terminal bytes exercise the actual detector; live Claude acceptance is separate.
 func TestReportedWorkingVisibleQuestionAndRecovery(t *testing.T) {
