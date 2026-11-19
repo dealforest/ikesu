@@ -1001,6 +1001,13 @@ func (s *Server) attach(conn net.Conn) {
 		}
 		s.sendDecisionProjection(c)
 		c.viewer = s.app.NewViewer(&viewerSink{s: s, c: c}, hello.Cols, hello.Rows, func(reason string) { s.detachClient(c, reason) })
+		if endpoint.Allows(available, 1, hello.Methods, endpoint.OpenLinkMessage) &&
+			endpoint.Allows(available, 1, s.endpointPeer.Methods, endpoint.OpenLinkMessage) {
+			c.viewer.SetLinkOpener(func(url string) error {
+				c.post(clientMsg{Type: endpoint.OpenLinkMessage, Data: url})
+				return nil
+			})
+		}
 		c.viewer.RestoreSelection(s.app, hello.Selection)
 		c.viewer.SetContinuousSidebarRows(endpoint.Allows(available, 1, hello.Methods, "sidebar_continuous"))
 		if hello.Visible != nil && !*hello.Visible {

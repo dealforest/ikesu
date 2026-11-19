@@ -20,6 +20,17 @@ func (a *App) writeClipboard(text string) error {
 			return nil
 		}
 	}
+	return a.writeOSC52(text)
+}
+
+func (a *App) writeLinkClipboard(text string) error {
+	if a.viewerContext != nil {
+		return a.writeOSC52(text)
+	}
+	return a.writeClipboard(text)
+}
+
+func (a *App) writeOSC52(text string) error {
 	_, err := fmt.Fprintf(a.out, "\x1b]52;c;%s\a", base64.StdEncoding.EncodeToString([]byte(text)))
 	return err
 }

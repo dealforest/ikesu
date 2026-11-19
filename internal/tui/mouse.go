@@ -106,8 +106,8 @@ func (a *App) click(m uv.Mouse) {
 			pid = pr.ID
 		}
 		if pid >= 0 {
-			a.exec(model.CmdFocusPane{Pane: pid})
 			a.openPaneMenu(m.X, m.Y, pid)
+			a.exec(model.CmdFocusPane{Pane: pid})
 		}
 		return
 	}
@@ -152,8 +152,8 @@ func (a *App) click(m uv.Mouse) {
 				a.forwardTo(pr.ID, uv.MouseClickEvent(m))
 				return
 			}
-			a.exec(model.CmdFocusPane{Pane: pr.ID})
 			a.openPaneMenu(m.X, m.Y, pr.ID)
+			a.exec(model.CmdFocusPane{Pane: pr.ID})
 		}
 		return
 	}

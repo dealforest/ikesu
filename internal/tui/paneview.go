@@ -20,20 +20,9 @@ func (a *App) paneGrid(p *runtime.Pane, off, h, w int) [][]uv.Cell {
 	p.WithEmu(func(e *vt.Emulator) {
 		sb := e.ScrollbackLen()
 		eh := e.Height()
-		if off > sb {
-			off = sb
-		}
-		if off < 0 {
-			off = 0
-		}
-		end := sb + eh - 1 - off
-		// A different viewer can grow the shared PTY without producing output.
-		// Do not crop away its quiet prompt above this viewer's bottom window.
-		if a.viewerContext != nil && off == 0 && h < eh && e.CursorPosition().Y < eh-h {
-			end = sb + max(h-1, e.CursorPosition().Y)
-		}
+		top := runtime.PaneViewportTop(e, off, h, a.viewerContext != nil)
 		for r := 0; r < h; r++ {
-			i := end - h + 1 + r
+			i := top + r
 			row := make([]uv.Cell, w)
 			if vt.ExperimentalFlatScreen && i >= sb && i-sb < eh {
 				e.CopyScreenRow(row, 0, i-sb)

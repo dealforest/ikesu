@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/kazuph/ikesu/internal/machine"
+	"github.com/kazuph/ikesu/internal/weblink"
 	"io"
 	"net"
 	"strings"
@@ -406,6 +407,12 @@ func (m *machineClient) event(event endpointEvent) (pumpResult, bool) {
 				// being written into the terminal over the panes.
 				go m.post(m.ctx, endpointEvent{formUpdate: func() { m.notify("notification: " + err.Error()) }})
 			})
+		}
+	case endpoint.OpenLinkMessage:
+		if event.id == m.active && (m.settings.config == nil || !m.settings.config.UI.NativeMenus) {
+			if err := weblink.Open(message.Data); err != nil {
+				m.notify("open link: " + err.Error())
+			}
 		}
 	case "output":
 		if data, err := base64.StdEncoding.DecodeString(message.Data); err == nil {
