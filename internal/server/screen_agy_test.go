@@ -212,7 +212,6 @@ func TestAgyWriteInPTY(t *testing.T) {
 			case <-time.After(4 * time.Second):
 				t.Fatal("delivery timed out")
 			}
-			b, _ := os.ReadFile(input)
 			want := "\x1b[B\x1b[B\r"
 			if !tc.fail {
 				if tc.bracketed {
@@ -220,7 +219,14 @@ func TestAgyWriteInPTY(t *testing.T) {
 				} else {
 					want += text + "\r"
 				}
+				// The server enqueues Enter before returning; the PTY reader
+				// can record it after the response arrives.
+				waitPromptCondition(t, func() bool {
+					b, _ := os.ReadFile(input)
+					return len(b) >= len(want)
+				})
 			}
+			b, _ := os.ReadFile(input)
 			if string(b) != want {
 				t.Fatalf("input %q, want %q", b, want)
 			}
