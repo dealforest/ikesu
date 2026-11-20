@@ -3,6 +3,8 @@ package endpoint
 
 import "fmt"
 
+const OpenLinkMessage = "open_link"
+
 const ProtocolVersion = 1
 const Generation = 5
 const InputReceiptGeneration = 5
@@ -36,7 +38,7 @@ func HasGraphicsPatches(peer Peer) bool {
 
 func Current() Peer {
 	peer := Peer{Protocol: ProtocolVersion, Generation: Generation, MinGeneration: MinGeneration,
-		Methods: []string{"client_view", "input", "paste", "resize", "rendered", "preferences_error", "config_result", "visibility", "workspace_select", "workspace_select_generation", "workspace_menu", "oyagoi_view", "oyagoi_check", "view_config", "machine_menu", "decision_answer", "sidebar_panel", "sidebar_continuous", "input_receipt", "idle_panes", "idle_delete"}}
+		Methods: []string{"client_view", "input", "paste", "resize", "rendered", "preferences_error", "config_result", "visibility", "workspace_select", "workspace_select_generation", "workspace_menu", "oyagoi_view", "oyagoi_check", "view_config", "machine_menu", "decision_answer", "sidebar_panel", "sidebar_continuous", "input_receipt", "idle_panes", "idle_delete", OpenLinkMessage}}
 	if ExperimentalFlatDiff {
 		peer.SurfaceCodecs = []string{FlatDiffCodec}
 	}

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/kazuph/ikesu/internal/childenv"
+	"github.com/kazuph/ikesu/internal/weblink"
 	"io"
 	"net"
 	"os"
@@ -422,6 +423,12 @@ func pump(conn net.Conn, in, out *os.File, leave func(), settings *localSettings
 		case "notify":
 			if m.Notification != nil && settings.config != nil {
 				deliverDesktop(*m.Notification, *settings.config, settings.session, "", nil)
+			}
+		case endpoint.OpenLinkMessage:
+			if settings.config == nil || !settings.config.UI.NativeMenus {
+				if err := weblink.Open(m.Data); err != nil {
+					fmt.Fprintln(os.Stderr, "ikesu: open link:", err)
+				}
 			}
 		case "output":
 			if data, err := base64.StdEncoding.DecodeString(m.Data); err == nil {

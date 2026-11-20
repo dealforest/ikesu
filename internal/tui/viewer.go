@@ -100,6 +100,10 @@ func (a *App) NewViewer(out io.Writer, cols, rows int, detach func(string)) *Vie
 	return v
 }
 
+func (v *Viewer) SetLinkOpener(open func(string) error) {
+	v.app.openLink = open
+}
+
 func (v *Viewer) with(a *App, fn func(*App)) {
 	previous := a.selection()
 	wasViewer := a.viewerActive

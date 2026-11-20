@@ -21,6 +21,7 @@ import (
 	"github.com/kazuph/ikesu/internal/runtime"
 	"github.com/kazuph/ikesu/internal/session"
 	"github.com/kazuph/ikesu/internal/status"
+	"github.com/kazuph/ikesu/internal/weblink"
 	"golang.org/x/term"
 	"io"
 	"os"
@@ -103,6 +104,7 @@ type uiMenu struct {
 	m             render.Menu
 	kind          menuKind
 	pane          int // target pane (menuPane)
+	link          string
 	ws            int // target workspace (menuWorkspace, menuTab)
 	wsID          int
 	wsGeneration  string
@@ -257,6 +259,7 @@ type App struct {
 	postExecHook        func(cmd model.Command, prev *model.StateSnap) // after every state-changing command
 	exitedHook          func(pid int)                                  // pane process exited; server emits pane.exited
 	outHook             func(pid int)                                  // pane output changed; server emits pane.output_changed
+	openLink            func(string) error
 	clipboardHook       func(pid int, data string, transferred bool)
 	worktreeHook        func(string, WorktreeOutcome, bool)
 	configWarning       string
@@ -922,6 +925,9 @@ func Run(in *os.File, out *os.File, versions ...string) (int, error) {
 		sup.SetGraphicsVersion(versions[0])
 	}
 	a := NewApp(st, sup, out, cwd)
+	if os.Getenv("SSH_CONNECTION") == "" && os.Getenv("SSH_CLIENT") == "" && os.Getenv("SSH_TTY") == "" {
+		a.openLink = weblink.Open
+	}
 	// The optional second startup value is the outer terminal session name.
 	if len(versions) > 1 {
 		a.windowTitleSession = versions[1]

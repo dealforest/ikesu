@@ -26,8 +26,12 @@ func (a *App) openPaneMenu(x, y, pid int) {
 		{Label: "Split vertical"},
 		{Label: "Split horizontal"},
 		{Separator: true},
-		{Label: "Rename pane"},
 	}
+	link := a.paneMenuLinkAt(x, y, pid)
+	if link != "" {
+		items = append(items, render.MenuItem{Label: "Copy Link"}, render.MenuItem{Label: "Open Link", Disabled: a.openLink == nil}, render.MenuItem{Separator: true})
+	}
+	items = append(items, render.MenuItem{Label: "Rename pane"})
 	if a.st.PaneLabels[model.PaneID(pid)] != "" {
 		items = append(items, render.MenuItem{Label: "Clear pane name"})
 	}
@@ -67,6 +71,7 @@ func (a *App) openPaneMenu(x, y, pid int) {
 	a.menu = &uiMenu{justOpened: true,
 		kind: menuPane,
 		pane: pid,
+		link: link,
 		m: render.Menu{
 			X: x, Y: y, Hover: -1, Sel: 0,
 			Items: items,
@@ -322,6 +327,17 @@ func (a *App) activateMenu(i int) {
 			a.exec(model.CmdSplitFocused{Dir: layout.Vertical})
 		case "Split horizontal":
 			a.exec(model.CmdSplitFocused{Dir: layout.Horizontal})
+
+		case "Copy Link":
+			if err := a.writeLinkClipboard(m.link); err != nil {
+				a.ShowToast("copy link", err.Error(), "error", -1)
+			} else {
+				a.copiedText(m.link)
+			}
+		case "Open Link":
+			if err := a.openLink(m.link); err != nil {
+				a.ShowToast("open link", err.Error(), "error", -1)
+			}
 		case "Rename pane":
 			a.openRenamePaneDialog(pid)
 		case "Clear pane name":
