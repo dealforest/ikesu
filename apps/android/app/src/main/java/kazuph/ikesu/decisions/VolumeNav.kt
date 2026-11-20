@@ -44,6 +44,25 @@ class VolumeNav(private val up: () -> Unit, private val down: () -> Unit, privat
     }
 }
 
+internal object ScreenVolumeKeys {
+    enum class Action { SPACES, PREVIOUS, NEXT, VOLUME_UP, DOWN, VOICE, DECISIONS, NOTHING }
+
+    fun action(key: Int, held: Boolean, spacesOpen: Boolean?): Action = when (key) {
+        VolumeNav.UP -> when {
+            held -> if (spacesOpen == null) Action.VOICE else Action.SPACES
+            spacesOpen == true -> Action.PREVIOUS
+            spacesOpen == false -> Action.VOICE
+            else -> Action.VOLUME_UP
+        }
+        VolumeNav.DOWN -> when {
+            held -> if (spacesOpen == true) Action.NOTHING else Action.DECISIONS
+            spacesOpen == true -> Action.NEXT
+            else -> Action.DOWN
+        }
+        else -> Action.NOTHING
+    }
+}
+
 /** One stop of the cursor on the detail screen. */
 enum class Slot { OPTION, COMMENT, LATER, ANSWER }
 

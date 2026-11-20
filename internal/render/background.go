@@ -76,9 +76,9 @@ func applyPersistentBackground(f *Frame, in Input, tabs []layout.Rect) {
 			// Tab chips keep their semantic fill, including the selected accent.
 			// The rest of the strip still uses the common background.
 			tab := false
-			if len(tabs) > 0 && y == tabs[0].Y {
+			if len(tabs) > 0 {
 				for _, r := range tabs {
-					if x >= r.X && x < r.X+r.W {
+					if x >= r.X && x < r.X+r.W && y >= r.Y && y < r.Y+r.H {
 						tab = true
 						break
 					}

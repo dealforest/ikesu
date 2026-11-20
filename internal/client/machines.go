@@ -133,6 +133,7 @@ type machineClient struct {
 	sidebar           render.MachineSidebar
 	frames            render.Encoder
 	nativeMenu        render.NativeMenuSignal
+	nativePanes       render.NativePaneSignal
 	composer          render.Composer
 	outputFence       render.OutputFence
 	paintQueued       bool

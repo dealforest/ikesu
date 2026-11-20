@@ -87,6 +87,7 @@ type AppState struct {
 	Cols, Rows                                          int // outer terminal size in cells
 	// UI flags from [ui] config (SPEC G1): the tab bar defaults on,
 	// pane frames default on, single-tab hiding defaults off.
+	PhoneTabRows            bool // viewer-local NativeMenus presentation
 	ShowTabBar              bool
 	HideTabBarWhenSingleTab bool
 	PaneBorders             bool

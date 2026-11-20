@@ -26,6 +26,7 @@ func (a *App) SetSidebarConfig(c config.Config, startup bool) {
 
 func (a *App) setSidebarConfig(c config.Config, startup bool) {
 	a.sidebarConfig = c
+	a.st.PhoneTabRows = c.UI.NativeMenus
 	if enabled := c.UI.Toast.Clipboard.Enabled; enabled != nil && !*enabled {
 		a.copied = ""
 	}

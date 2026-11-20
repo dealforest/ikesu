@@ -61,6 +61,9 @@ func mobileRows(s *model.AppState, menu []MenuItem, hq int, generation *string) 
 	if ws := s.ActiveWorkspace(); ws != nil {
 		for i := range ws.Tabs {
 			rows = append(rows, SidebarRow{Kind: RowMobileTab, Line: i})
+			if s.PhoneTabRows {
+				rows = append(rows, SidebarRow{Kind: RowMobileTab, Line: i, Continuation: true})
+			}
 		}
 	}
 	rows = append(rows, SidebarRow{Kind: RowMobileMenu})
@@ -302,6 +305,9 @@ func drawMobile(f *Frame, in Input, out *Output) {
 			f.Fill(1, y, max(0, s.Cols-1), 1, " ", style)
 			f.Text(1, y, truncate(label, max(0, s.Cols-1)), style, s.Cols)
 		case RowMobileTab:
+			if row.Continuation {
+				break
+			}
 			if in.ServerUI {
 				f.Text(1, y, "  ", uv.Style{Fg: f.Palette.Text, Bg: bg, Attrs: uv.AttrBold}, s.Cols)
 			}

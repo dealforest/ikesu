@@ -177,3 +177,22 @@ class ReviewFixesTest {
     @Test fun percentEncoded() = assertEquals(listOf("https://x.com/a%E3%81%82"), urls("https://x.com/a%E3%81%82"))
     @Test fun markdownBold() = assertEquals(listOf("https://x.com/a"), urls("**https://x.com/a**"))
 }
+
+class ScreenVolumeKeysTest {
+    @Test fun screenAndSpacesUseSeparateActions() {
+        fun action(key: Int, held: Boolean, open: Boolean?) =
+            ScreenVolumeKeys.action(key, held, open)
+        val up = VolumeNav.UP
+        val down = VolumeNav.DOWN
+        assertEquals(ScreenVolumeKeys.Action.VOICE, action(up, false, false))
+        assertEquals(ScreenVolumeKeys.Action.PREVIOUS, action(up, false, true))
+        assertEquals(ScreenVolumeKeys.Action.NEXT, action(down, false, true))
+        assertEquals(ScreenVolumeKeys.Action.SPACES, action(up, true, true))
+        assertEquals(ScreenVolumeKeys.Action.SPACES, action(up, true, false))
+        assertEquals(ScreenVolumeKeys.Action.DOWN, action(down, false, false))
+        assertEquals(ScreenVolumeKeys.Action.DECISIONS, action(down, true, false))
+        assertEquals(ScreenVolumeKeys.Action.NOTHING, action(down, true, true))
+        assertEquals(ScreenVolumeKeys.Action.VOLUME_UP, action(up, false, null))
+        assertEquals(ScreenVolumeKeys.Action.VOICE, action(up, true, null))
+    }
+}

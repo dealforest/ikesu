@@ -47,7 +47,7 @@ data class ExtraKey(val label: String, val main: ScreenKey, val popupLabel: Stri
 /** What a key does. Modifiers wait for the next key; the others send bytes right away. */
 sealed class ScreenKey {
     data class Text(val text: String) : ScreenKey()
-    data class Code(val keyCode: Int) : ScreenKey()
+    data class Code(val keyCode: Int, val modifiers: Int = 0) : ScreenKey()
     data class Modifier(val bit: Int) : ScreenKey()
     data class Bytes(val bytes: ByteArray) : ScreenKey()
     data class Action(val run: () -> Unit) : ScreenKey()
@@ -77,7 +77,18 @@ object KeyBytes {
         return out
     }
 
+    fun fromMetaState(metaState: Int): Int {
+        var mods = 0
+        if (metaState and KeyEvent.META_SHIFT_ON != 0) mods = mods or SHIFT
+        if (metaState and KeyEvent.META_ALT_ON != 0) mods = mods or ALT
+        if (metaState and KeyEvent.META_CTRL_ON != 0) mods = mods or CTRL
+        if (metaState and KeyEvent.META_META_ON != 0) mods = mods or SUPER
+        return mods
+    }
+
     fun code(keyCode: Int, mods: Int, cursorApp: Boolean): ByteArray? {
+        // Legacy TAB and Ctrl+TAB share 0x09, so preserve Ctrl using CSI-u.
+        if (keyCode == KeyEvent.KEYCODE_TAB && mods and CTRL != 0) return "\u001b[9;${1 + mods}u".toByteArray()
         var termuxMods = 0
         if (mods and SHIFT != 0) termuxMods = termuxMods or KeyHandler.KEYMOD_SHIFT
         if (mods and ALT != 0) termuxMods = termuxMods or KeyHandler.KEYMOD_ALT
@@ -112,6 +123,8 @@ class ScreenActivity : Activity() {
         const val PANEL = "panel"
         /** F12: the key the PC side binds to showing and hiding the spaces list on the phone's screen. */
         private val SIDEBAR_KEY = "\u001b[24~".toByteArray()
+        private val PREVIOUS_SPACE_KEY = "\u001b[20~".toByteArray()
+        private val NEXT_SPACE_KEY = "\u001b[21~".toByteArray()
         /** The app's first page is up: the decisions and settings (MainActivity) open as a panel over it. */
         @Volatile var running = false
         private const val RED = 0xFFE53935.toInt()
@@ -177,7 +190,7 @@ class ScreenActivity : Activity() {
     private fun dropScreen() {
         closeNative(); choosing = null; answeredInput = null; view.removeCallbacks(choiceTimeout)
         if (screenId >= 0) target()?.send(JSONObject().put("type", "screen_close").put("screen", screenId))
-        screenId = -1; opening = false; wanted = null
+        screenId = -1; opening = false; wanted = null; paneLayout = null
     }
 
     private fun choosePc() {
@@ -213,6 +226,7 @@ class ScreenActivity : Activity() {
     private var picking = false
     /** ikesu's menus and dialogs, shown as Android lists and dialogs (its ui.native_menus signal). */
     private var scanner = NativeUiScanner()
+    private var paneLayout: TerminalPaneLayout? = null
     private var native: AlertDialog? = null
     private var nativeShown: String? = null
     /** A menu row being chosen one step at a time (see MenuKeys.step), found again by its words in each new signal. */
@@ -265,7 +279,7 @@ class ScreenActivity : Activity() {
                 ExtraKey("$", ScreenKey.Text("$"), "PGDN", ScreenKey.Code(KeyEvent.KEYCODE_PAGE_DOWN)), ExtraKey("/", ScreenKey.Text("/"), "clear", ScreenKey.Text("/clear")),
                 ExtraKey("#", ScreenKey.Text("#")), ExtraKey("↑", ScreenKey.Code(KeyEvent.KEYCODE_DPAD_UP), "new", ScreenKey.Bytes(byteArrayOf(20))),
                 ExtraKey("@", ScreenKey.Text("@")), ExtraKey("\\", ScreenKey.Text("\\")), ExtraKey("BKSP", ScreenKey.Code(KeyEvent.KEYCODE_DEL))),
-            listOf(ExtraKey("TAB", ScreenKey.Code(KeyEvent.KEYCODE_TAB), "S-TAB", ScreenKey.Bytes("\u001b[Z".toByteArray())),
+            listOf(ExtraKey("TAB", ScreenKey.Code(KeyEvent.KEYCODE_TAB), "S-TAB", ScreenKey.Code(KeyEvent.KEYCODE_TAB, KeyBytes.SHIFT)),
                 ExtraKey("CTRL", ScreenKey.Modifier(KeyBytes.CTRL), "^C", ScreenKey.Bytes(byteArrayOf(3))), ExtraKey("ALT", ScreenKey.Modifier(KeyBytes.ALT)),
                 ExtraKey("!", ScreenKey.Text("!")), ExtraKey("←", ScreenKey.Code(KeyEvent.KEYCODE_DPAD_LEFT), "prev", ScreenKey.Bytes(byteArrayOf(16))),
                 ExtraKey("↓", ScreenKey.Code(KeyEvent.KEYCODE_DPAD_DOWN)), ExtraKey("→", ScreenKey.Code(KeyEvent.KEYCODE_DPAD_RIGHT), "next", ScreenKey.Bytes(byteArrayOf(14))),
@@ -365,21 +379,43 @@ class ScreenActivity : Activity() {
     }
     override fun onPause() { resumed = false; super.onPause() }
 
-    /** Volume keys, as on the decisions: down = Enter, down held = the decisions (or, while recording, stop and type
-     *  it), up held = start or stop recording. A short up press still raises the volume. While recording, a short down
-     *  press also stops and types it; down presses while it becomes text press Enter once after it is typed. */
     private val voiceDown = VoiceDownKey()
     private val volume = VolumeNav(
-        up = { getSystemService(android.media.AudioManager::class.java).adjustSuggestedStreamVolume(android.media.AudioManager.ADJUST_RAISE, android.media.AudioManager.USE_DEFAULT_STREAM_TYPE, android.media.AudioManager.FLAG_SHOW_UI) },
-        down = {
-            when (voiceDown.press(voice.recording, transcribing)) {
+        up = { runVolumeAction(VolumeNav.UP, held = false) },
+        down = { runVolumeAction(VolumeNav.DOWN, held = false) },
+        confirm = { runVolumeAction(VolumeNav.DOWN, held = true) },
+        back = { runVolumeAction(VolumeNav.UP, held = true) })
+
+    private fun runVolumeAction(key: Int, held: Boolean) {
+        val action = ScreenVolumeKeys.action(key, held, paneLayout?.spacesOpen)
+        when (action) {
+            ScreenVolumeKeys.Action.SPACES -> send(SIDEBAR_KEY)
+            ScreenVolumeKeys.Action.PREVIOUS -> send(PREVIOUS_SPACE_KEY)
+            ScreenVolumeKeys.Action.NEXT -> send(NEXT_SPACE_KEY)
+            ScreenVolumeKeys.Action.VOLUME_UP -> getSystemService(android.media.AudioManager::class.java)
+                .adjustSuggestedStreamVolume(android.media.AudioManager.ADJUST_RAISE,
+                    android.media.AudioManager.USE_DEFAULT_STREAM_TYPE, android.media.AudioManager.FLAG_SHOW_UI)
+            ScreenVolumeKeys.Action.DOWN -> when (voiceDown.press(voice.recording, transcribing)) {
                 VoiceDownKey.Action.STOP_RECORDING -> toggleVoice()
                 VoiceDownKey.Action.ENTER -> send(byteArrayOf(13))
                 VoiceDownKey.Action.NOTHING -> {}
             }
-        },
-        confirm = { if (voice.recording) toggleVoice() else openPanel("list") },
-        back = { toggleVoice() })
+            ScreenVolumeKeys.Action.VOICE -> toggleVoice()
+            ScreenVolumeKeys.Action.DECISIONS -> if (voice.recording) toggleVoice() else openPanel("list")
+            ScreenVolumeKeys.Action.NOTHING -> {}
+        }
+    }
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // A physical Ctrl+Tab is for the PC even if the local text input has focus.
+        if (screenId >= 0 && event.keyCode == KeyEvent.KEYCODE_TAB && event.isCtrlPressed) {
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                KeyBytes.code(event.keyCode, KeyBytes.fromMetaState(event.metaState), false)?.let { send(it) }
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (volume.keyDown(keyCode, event.repeatCount == 0)) { event.startTracking(); return true }
         return super.onKeyDown(keyCode, event)
@@ -503,7 +539,7 @@ class ScreenActivity : Activity() {
         when (key) {
             is ScreenKey.Modifier -> { mods = mods xor key.bit; markModifiers() }
             is ScreenKey.Text -> sendKeyBytes(KeyBytes.text(key.text, takeMods()))
-            is ScreenKey.Code -> KeyBytes.code(key.keyCode, takeMods(), view.emulator?.isCursorKeysApplicationMode == true)?.let { send(it) }
+            is ScreenKey.Code -> KeyBytes.code(key.keyCode, takeMods() or key.modifiers, view.emulator?.isCursorKeysApplicationMode == true)?.let { send(it) }
             is ScreenKey.Bytes -> { takeMods(); send(key.bytes) }
             is ScreenKey.Action -> key.run()
         }
@@ -640,7 +676,8 @@ class ScreenActivity : Activity() {
     }
 
     private fun longPressMenu(col: Int, row: Int) {
-        val items = listOf<Pair<String, () -> Unit>>(
+        val content = view.emulator?.screen?.let { TerminalPress.read(it, view.cols, view.rows, col, row, paneLayout) }
+        showTerminalLongPressMenu(this, content, listOf(
             "ダブルクリック" to { send(KeyBytes.click(col, row) + KeyBytes.click(col, row)) },
             "クリック（1回）" to { send(KeyBytes.click(col, row)) },
             "右クリック" to { send(KeyBytes.click(col, row, 2)) },
@@ -648,8 +685,7 @@ class ScreenActivity : Activity() {
             "写真を送る（カメラロール）" to { pickPhoto() },
             "ファイルを送る（ファイラー）" to { pickDocument() },
             "キーボードを出す" to { input?.let { it.requestFocus(); (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(it, 0) } },
-        )
-        AlertDialog.Builder(this).setItems(items.map { it.first }.toTypedArray()) { _, which -> items[which].second() }.show()
+        ))
     }
 
     private fun pasteClipboard() {
@@ -818,7 +854,7 @@ class ScreenActivity : Activity() {
             "screen_opened" -> {
                 if (!opening) return
                 opening = false; screenId = message.optInt("screen")
-                scanner = NativeUiScanner(); lastMenu = null
+                scanner = NativeUiScanner(); lastMenu = null; paneLayout = null
                 status.text = "${target()?.name ?: "PC"} の画面"
                 // The size changed while opening (the keyboard, for example): send the latest one.
                 wanted?.let { (c, r) -> if (c != message.optInt("cols") || r != message.optInt("rows")) sizeChanged(c, r) }
@@ -828,10 +864,13 @@ class ScreenActivity : Activity() {
             "screen_data" -> if (message.optInt("screen") == screenId) {
                 val bytes = Base64.decode(message.optString("data"), Base64.NO_WRAP)
                 val result = scanner.scan(bytes)
-                result.signals.forEach { showNative(it) }
                 view.feed(result.screen)
+                result.signals.forEach {
+                    if (it.optString("kind") == "panes") paneLayout = TerminalPaneLayout.decode(it)
+                    else showNative(it)
+                }
             }
-            "screen_closed" -> if (message.optInt("screen") == screenId) { screenId = -1; view.clear(); Toast.makeText(this, "PC 側で画面が閉じました", Toast.LENGTH_LONG).show(); refresh() }
+            "screen_closed" -> if (message.optInt("screen") == screenId) { screenId = -1; paneLayout = null; view.clear(); Toast.makeText(this, "PC 側で画面が閉じました", Toast.LENGTH_LONG).show(); refresh() }
             "screen_file_saved" -> { status.text = "${target()?.name ?: "PC"} の画面"; notifySaved(message.optString("path")) }
             "operate_expired" -> { if (isFinishing) return; screenId = -1; dropScreen(); view.clear(); Toast.makeText(this, "接続が切れたか、顔・指紋で開いた時間が切れました", Toast.LENGTH_LONG).show(); refresh() }
             "error" -> { opening = false; status.text = "PC 側: ${message.optString("message")}" }
@@ -1037,6 +1076,7 @@ class TerminalCanvas(
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         when (keyCode) {
+            KeyEvent.KEYCODE_TAB -> KeyBytes.code(keyCode, KeyBytes.fromMetaState(event.metaState), emulator?.isCursorKeysApplicationMode == true)?.let { keys(it) }
             KeyEvent.KEYCODE_ENTER -> keys(byteArrayOf(13))
             KeyEvent.KEYCODE_DEL -> keys(byteArrayOf(0x7f))
             KeyEvent.KEYCODE_BACK -> return super.onKeyDown(keyCode, event)

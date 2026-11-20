@@ -39,10 +39,11 @@ const (
 )
 
 type SidebarRow struct {
-	Kind     SidebarRowKind
-	Ws, Pane int
-	Section  model.Section
-	Line     int
+	Kind         SidebarRowKind
+	Ws, Pane     int
+	Section      model.Section
+	Line         int
+	Continuation bool
 }
 
 func drawSectionHeading(f *Frame, x, y, width int, label string, collapsed, dragging, showNew bool) {

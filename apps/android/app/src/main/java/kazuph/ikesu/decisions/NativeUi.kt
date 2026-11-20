@@ -48,6 +48,45 @@ class NativeUiScanner {
     companion object { const val MAX = 1024 * 1024 }
 }
 
+/** Pane contents in the PC's rendered terminal cells. All bounds are zero-based and exclusive at the end. */
+internal data class TerminalPaneRect(val left: Int, val top: Int, val right: Int, val bottom: Int) {
+    fun contains(x: Int, y: Int): Boolean = x in left until right && y in top until bottom
+}
+
+internal class TerminalPaneLayout private constructor(
+    private val cols: Int,
+    private val rows: Int,
+    private val panes: List<TerminalPaneRect>,
+    val spacesOpen: Boolean?,
+) {
+    fun paneAt(cols: Int, rows: Int, x: Int, y: Int): TerminalPaneRect? {
+        if (this.cols != cols || this.rows != rows) return null
+        return panes.singleOrNull { it.contains(x, y) }
+    }
+
+    companion object {
+        fun decode(signal: JSONObject): TerminalPaneLayout {
+            val cols = signal.optInt("cols", -1)
+            val rows = signal.optInt("rows", -1)
+            val raw = signal.optJSONArray("panes")
+            val panes = buildList {
+                if (cols <= 0 || rows <= 0 || raw == null || raw.length().toLong() > cols.toLong() * rows) return@buildList
+                for (i in 0 until raw.length()) {
+                    val item = raw.optJSONObject(i) ?: continue
+                    val x = item.optInt("x", -1)
+                    val y = item.optInt("y", -1)
+                    val w = item.optInt("w", 0)
+                    val h = item.optInt("h", 0)
+                    if (x in 0 until cols && y in 0 until rows && w in 1..(cols - x) && h in 1..(rows - y)) {
+                        add(TerminalPaneRect(x, y, x + w, y + h))
+                    }
+                }
+            }
+            return TerminalPaneLayout(cols, rows, panes, signal.opt("spaces") as? Boolean)
+        }
+    }
+}
+
 /** The keys that move ikesu's menu selection toward a row and choose it (the menu's own ↑/↓ skip separators and
  *  disabled rows; Enter chooses). */
 object MenuKeys {

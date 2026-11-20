@@ -31,7 +31,11 @@ func (s *AppState) TabBarArea() Rect {
 	if !s.TabBarVisible() {
 		return Rect{}
 	}
-	return Rect{X: w, Y: 0, W: max0(s.Cols - w - s.rightSidebarWidth()), H: 1}
+	height := 1
+	if s.PhoneTabRows {
+		height = 2
+	}
+	return Rect{X: w, Y: 0, W: max0(s.Cols - w - s.rightSidebarWidth()), H: min(height, s.Rows)}
 }
 
 // ActionBarArea is the one-row bottom pane action bar (SPEC G1): the
@@ -61,7 +65,7 @@ func (s *AppState) PanesArea() Rect {
 	w := s.leftSidebarWidth()
 	y := 0
 	if s.TabBarVisible() {
-		y = 1
+		y = s.TabBarArea().H
 	}
 	bottom := s.Rows
 	if ab := s.ActionBarArea(); ab.H > 0 {
