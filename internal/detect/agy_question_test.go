@@ -42,21 +42,44 @@ func TestAgyIdleAndActivePriority(t *testing.T) {
 			t.Fatalf("false idle: %+v", d)
 		}
 	}
-	for _, tc := range []struct {
-		prefix string
-		state  State
-	}{{"Requesting permission for: command\nDo you want to proceed?\n", Blocked}, {"", Working}} {
-		screen := tc.prefix + idle
-		if tc.state == Working {
-			screen += "· 1 task\n"
-		}
-		if d := Detect("agy", Input{Screen: screen}); d.State != tc.state {
-			t.Fatalf("priority: %+v", d)
-		}
+	if d := Detect("agy", Input{Screen: "Requesting permission for: command\nDo you want to proceed?\n" + idle}); d.State != Blocked {
+		t.Fatalf("permission priority: %+v", d)
 	}
 	b, _ := os.ReadFile("../screenprompt/testdata/agy-question.txt")
 	if d := Detect("agy", Input{Screen: idle + string(b)}); d.State != Blocked {
 		t.Fatalf("question priority: %+v", d)
+	}
+}
+
+func TestAgyBackgroundTasksLeavePromptIdle(t *testing.T) {
+	// agy displays the task panel below the blank input box.
+	prompt := "──────────\n>\n──────────\n"
+	task := "  ● [16:18:52] npm run storybook running\n"
+	footer := "──────────\n? for shortcuts    auto · Gemini 4 Neon · medium · 1 task(s) · /tasks\n"
+	quota := "Gemini 5h 21% (<1m) · wk 17% (6d10h) │ Claude/GPT 5h 0% (<1m) · wk 0% (6d18h) │ Argon wk 0% (6d18h)\n"
+	idle := prompt + task + footer + quota
+	for _, screen := range []string{idle, prompt + strings.Repeat(task, 5) + strings.Replace(footer, "1 task(s)", "5 task(s)", 1)} {
+		d := Detect("agy", Input{Screen: screen})
+		if d.State != Idle || !d.VisibleIdle || d.VisibleWorking {
+			t.Fatalf("background tasks with idle prompt: %+v", d)
+		}
+	}
+	for _, screen := range []string{footer + quota, idle + "unknown screen\n", strings.Replace(idle, ">\n", "> unsent draft\n", 1)} {
+		d := Detect("agy", Input{Screen: screen})
+		if d.VisibleIdle || d.VisibleWorking {
+			t.Fatalf("task footer alone must not signal a state: %+v", d)
+		}
+	}
+	for _, tc := range []struct {
+		prefix string
+		state  State
+	}{
+		{"⣻  Working...\n", Working},
+		{"Requesting permission for: command\nDo you want to proceed?\n", Blocked},
+	} {
+		if d := Detect("agy", Input{Screen: tc.prefix + idle}); d.State != tc.state {
+			t.Fatalf("foreground priority: %+v", d)
+		}
 	}
 }
 
