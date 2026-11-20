@@ -142,7 +142,7 @@ func (s *Server) screenPromptPaneActive(pid int) bool {
 	if reported, _, ok := s.app.Reported(pid); ok && reported != "" {
 		agent = reported
 	}
-	return (agent == "claude" || agent == "codex" || agent == "devin") && s.app.PaneStatusKey(pid) == "blocked"
+	return (agent == "claude" || agent == "codex" || agent == "devin" || agent == "agy") && s.app.PaneStatusKey(pid) == "blocked"
 }
 
 // Output and status hooks inspect only their pane. Reservations return before

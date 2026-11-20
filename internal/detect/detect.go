@@ -6,6 +6,8 @@ package detect
 import (
 	"embed"
 	"strings"
+
+	"github.com/kazuph/ikesu/internal/agyview"
 )
 
 //go:embed manifests/*.toml
@@ -63,6 +65,9 @@ func Detect(agent string, in Input) Detection {
 		return Detection{State: Unknown}
 	}
 	d := m.detect(in)
+	if agent == "agy" && d.RuleID == "question_prompt" && !agyview.HasCurrentFooter(strings.Split(in.Screen, "\n")) {
+		d = m.detectExcept(in, "question_prompt")
+	}
 	// herdr parity: a Codex screen that says "Working (" / "esc to interrupt"
 	// in its live region overrides an Idle verdict.
 	if agent == "codex" && d.State == Idle && codexActivityFingerprint(in.Screen) != "" {

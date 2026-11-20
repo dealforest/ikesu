@@ -231,9 +231,16 @@ func anyLineMatches(text string, re *regexp.Regexp) bool {
 // detect evaluates every rule; highest priority match wins (first wins
 // ties). No match → Idle.
 func (m *manifest) detect(in Input) Detection {
+	return m.detectExcept(in, "")
+}
+
+func (m *manifest) detectExcept(in Input, excluded string) Detection {
 	var best *rule
 	for i := range m.rules {
 		r := &m.rules[i]
+		if r.ID == excluded {
+			continue
+		}
 		text := regionText(in, r.Region)
 		if !gateMatches(&r.gate, text, strings.ToLower(text)) {
 			continue

@@ -31,3 +31,26 @@ priority = 90
 region = "bottom_non_empty_lines(5)"
 visible_working = true
 line_regex = ['(?i)·\s*[1-9][0-9]*\s+task']
+
+[[rules]]
+id = "question_prompt"
+state = "blocked"
+priority = 310
+region = "whole_recent"
+visible_blocker = true
+contains = ["↑/↓ Navigate"]
+any = [
+  { contains = ["→ Next", "enter Select", "esc Skip", "ctrl+r Review"] },
+  { contains = ["enter Submit All"] },
+  { contains = ["enter Submit"] },
+]
+not = [{ contains = ["Toggle"] }]
+line_regex = ['^\s*Question [1-9][0-9]*/[1-9][0-9]*:']
+
+[[rules]]
+id = "idle_prompt"
+state = "idle"
+priority = 50
+region = "bottom_non_empty_lines(8)"
+visible_idle = true
+regex = ['(?m)^[ \t]*─{3,}[ \t]*\n[ \t]*>[ \t]*\n[ \t]*─{3,}[ \t]*\n[ \t]*\? for shortcuts[^\n]*$']

@@ -1,0 +1,13 @@
+? Previous question?
+
+Question
+────────────────────────────────────────────────────────────────────────
+
+Question 1/4: Which format should be used?
+
+> 1. (Recommended) Plain text
+  2. Markdown
+  3. Write-in...
+
+  ↑/↓ Navigate · → Next · enter Select · esc Skip · ctrl+r Review
+esc to cancel                            auto · Gemini 4 Neon · medium

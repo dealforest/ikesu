@@ -200,3 +200,20 @@ func TestRefreshJobDots(t *testing.T) {
 		t.Fatalf("ws1 dots = %d, want 0 (dead runner + old finish)", got)
 	}
 }
+
+func TestAgyClearStaleReport(t *testing.T) {
+	st := model.New("/tmp", 120, 30)
+	a := &App{st: st, reported: map[int]reportedPane{1: {agent: "agy", state: "working"}}}
+	now := time.Now()
+	idle := detect.Detection{State: detect.Idle, VisibleIdle: true}
+	a.clearStaleReport(1, "agy", idle, now)
+	a.clearStaleReport(1, "agy", detect.Detection{State: detect.Working, VisibleWorking: true}, now.Add(10*time.Second))
+	a.clearStaleReport(1, "agy", idle, now.Add(16*time.Second))
+	if _, ok := a.reported[1]; !ok {
+		t.Fatal("active state did not reset idle timer")
+	}
+	a.clearStaleReport(1, "agy", idle, now.Add(32*time.Second))
+	if _, ok := a.reported[1]; ok {
+		t.Fatal("stale agy report retained")
+	}
+}

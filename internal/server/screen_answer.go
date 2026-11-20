@@ -27,6 +27,9 @@ func (s *Server) validateScreenAnswer(d api.Decision, p api.DecisionAnswerParams
 	}
 	w := s.screenPrompts.watches[pid]
 	current := s.readScreenPrompt(pid)
+	if ok && w != nil && w.prompt != nil && w.prompt.AgyQuestion && current == nil {
+		return nil, 0, &api.Error{Code: api.ErrDecisionStale, Message: "cannot verify the current agy question"}
+	}
 	if ok && w != nil && w.prompt != nil && w.prompt.CodexQuestion && current == nil {
 		return nil, 0, &api.Error{Code: api.ErrDecisionStale, Message: "cannot verify the current Codex question and notes state"}
 	}
@@ -282,6 +285,20 @@ func (s *Server) deliverScreenAnswer(pid int, signature string, prompt *screenpr
 	if prompt.MCPServer != "" {
 		return s.deliverMCPAnswer(pid, signature, prompt, answer)
 	}
+	if prompt.AgyQuestion {
+		if answer.Text != nil || answer.OptionID == nil {
+			return fmt.Errorf("agy write-in is unsupported")
+		}
+		if err := s.navigateScreenRow(pid, signature, *answer.OptionID); err != nil {
+			return err
+		}
+		var current *screenprompt.Prompt
+		s.app.Do(func() { current = s.readScreenPrompt(pid) })
+		if current == nil || current.Cursor < 0 || current.Cursor >= len(current.Items) || current.Items[current.Cursor] != *answer.OptionID {
+			return fmt.Errorf("agy selected row changed")
+		}
+		return s.screenInputChecked(pid, signature, "\r", true, nil, &current.Cursor)
+	}
 	if prompt.CodexQuestion {
 		return s.deliverCodexQuestionAnswer(pid, signature, prompt, answer)
 	}
@@ -374,7 +391,7 @@ func (s *Server) navigateScreenRow(pid int, signature, row string) error {
 	for {
 		var current *screenprompt.Prompt
 		s.app.Do(func() { current = s.readScreenPrompt(pid) })
-		if current == nil || current.Signature() != signature || (!current.CodexQuestion && current.Progress < 0 && (current.Params.Origin == nil || current.Params.Origin.Tool == "")) || current.Cursor < 0 {
+		if current == nil || current.Signature() != signature || (!current.CodexQuestion && !current.AgyQuestion && current.Progress < 0 && (current.Params.Origin == nil || current.Params.Origin.Tool == "")) || current.Cursor < 0 {
 			return fmt.Errorf("cannot locate multi-select row")
 		}
 		target := -1
@@ -395,7 +412,7 @@ func (s *Server) navigateScreenRow(pid int, signature, row string) error {
 			arrow = "\x1b[A"
 			next = current.Cursor - 1
 		}
-		if err := s.screenInput(pid, signature, arrow, true, nil); err != nil {
+		if err := s.screenInputChecked(pid, signature, arrow, true, nil, &current.Cursor); err != nil {
 			return err
 		}
 		sentAt := time.Now()
