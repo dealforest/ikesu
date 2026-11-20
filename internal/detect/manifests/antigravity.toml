@@ -40,7 +40,8 @@ region = "whole_recent"
 visible_blocker = true
 contains = ["↑/↓ Navigate"]
 any = [
-  { contains = ["→ Next", "enter Select", "esc Skip", "ctrl+r Review"] },
+  { contains = ["→ Next", "enter Select", "esc Skip"] },
+  { contains = ["enter Write-in"] },
   { contains = ["enter Submit All"] },
   { contains = ["enter Submit"] },
 ]

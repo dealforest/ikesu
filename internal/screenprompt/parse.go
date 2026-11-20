@@ -21,6 +21,7 @@ type Prompt struct {
 	// Truncated は、質問の先頭が画面の上に出て読めていないこと（Claude の質問の枠の上端が見えない）。
 	Truncated  bool
 	TextOpen   bool
+	TextValue  string
 	Final      bool
 	Flow       string
 	Question   int

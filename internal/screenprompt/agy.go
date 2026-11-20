@@ -13,7 +13,7 @@ var agyFinalFooter = regexp.MustCompile(`(?:^|·)\s*enter (?:Submit All|Submit)\
 var agyHeader = regexp.MustCompile(`^Question ([1-9][0-9]*)/([1-9][0-9]*):\s*(.+)$`)
 
 // Parse only the observed Question form, including its navigation footer.
-// Write-in and review screens are intentionally not actionable without evidence.
+// Review screens are intentionally not actionable.
 func parseAgy(screen []string) *Prompt {
 	start := -1
 	for i, line := range screen {
@@ -43,11 +43,29 @@ func parseAgy(screen []string) *Prompt {
 	p.Params.QuestionLabel = &label
 	p.Params.Kind = "agent_prompt"
 	p.Params.Title = m[3]
+	p.Params.AllowText = true
 	footer := false
 	selected := 0
 	writeIn := false
+	editor := false
 	for rowIndex, line := range screen[start+1:] {
 		trim := strings.TrimSpace(line)
+		if editor {
+			if trim == "enter Submit · esc Back" || index == total && trim == "enter Submit All · esc Back" {
+				footer = agyview.Tail(screen[start+1+rowIndex+1:])
+				p.TextOpen = true
+				break
+			}
+			p.TextValue += strings.TrimSpace(line) + "\n"
+			continue
+		}
+		if trim == "Your answer:" {
+			if !writeIn || p.Cursor != len(p.Items)-1 {
+				return nil
+			}
+			editor = true
+			continue
+		}
 		if agyFooter(trim, index == total) {
 			footer = agyview.Tail(screen[start+1+rowIndex+1:])
 			break
@@ -73,6 +91,7 @@ func parseAgy(screen []string) *Prompt {
 				return nil
 			}
 			writeIn = true
+			p.TextID = id
 			continue
 		}
 		if writeIn || checkbox.MatchString(value) {
@@ -93,7 +112,7 @@ func agyFooter(line string, final bool) bool {
 		return false
 	}
 	if final {
-		return agyFinalFooter.MatchString(line)
+		return agyFinalFooter.MatchString(line) || strings.Contains(line, "enter Write-in")
 	}
-	return strings.Contains(line, "→ Next") && strings.Contains(line, "enter Select") && strings.Contains(line, "esc Skip") && strings.Contains(line, "ctrl+r Review")
+	return strings.Contains(line, "→ Next") && (strings.Contains(line, "enter Select") || strings.Contains(line, "enter Write-in")) && strings.Contains(line, "esc Skip")
 }

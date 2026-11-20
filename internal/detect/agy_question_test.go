@@ -15,10 +15,13 @@ func TestAgyQuestionDetection(t *testing.T) {
 	if d := Detect("agy", Input{Screen: screen}); d.State != Blocked || d.RuleID != "question_prompt" {
 		t.Fatalf("question: %+v", d)
 	}
-	for _, s := range []string{strings.Replace(screen, "Question 1/4:", "Permission:", 1), strings.Replace(screen, "ctrl+r Review", "", 1)} {
+	for _, s := range []string{strings.Replace(screen, "Question 1/4:", "Permission:", 1), strings.Replace(screen, "esc Skip", "", 1)} {
 		if d := Detect("agy", Input{Screen: s}); d.RuleID == "question_prompt" {
 			t.Fatalf("false question: %+v", d)
 		}
+	}
+	if d := Detect("agy", Input{Screen: strings.Replace(screen, " · ctrl+r Review", "", 1)}); d.State != Blocked {
+		t.Fatalf("question without Review: %+v", d)
 	}
 }
 
