@@ -625,7 +625,7 @@ func (a *App) applyFossilExpiry(pid int, agentID, screen string, d detect.Detect
 }
 
 // clearStaleReport drops a reported working/blocked authority once screen
-// detection for the same Claude/Codex agent has shown explicit visible
+// detection for the same Claude/Codex/agy agent has shown explicit visible
 // idle for the fossil window (SPEC G3). Reports are non-full-lifecycle
 // authorities, so all of them are clearable; the pane's recorded agent
 // session is untouched — only the stale state override goes away.
@@ -639,7 +639,7 @@ func (a *App) clearStaleReport(pid int, agentID string, d detect.Detection, now 
 		delete(a.visibleIdle, pid)
 		return
 	}
-	if agentID != "claude" && agentID != "codex" {
+	if agentID != "claude" && agentID != "codex" && agentID != "agy" {
 		delete(a.visibleIdle, pid)
 		return
 	}

@@ -142,7 +142,7 @@ func (s *Server) screenPromptPaneActive(pid int) bool {
 	if reported, _, ok := s.app.Reported(pid); ok && reported != "" {
 		agent = reported
 	}
-	return (agent == "claude" || agent == "codex" || agent == "devin") && s.app.PaneStatusKey(pid) == "blocked"
+	return (agent == "claude" || agent == "codex" || agent == "devin" || agent == "agy") && s.app.PaneStatusKey(pid) == "blocked"
 }
 
 // Output and status hooks inspect only their pane. Reservations return before
@@ -277,7 +277,7 @@ func (s *Server) scanScreenPrompts() {
 	}
 	for pid := range panes {
 		w := s.screenPrompts.watches[pid]
-		if w != nil && w.editingText && w.prompt != nil && w.prompt.Params.Origin != nil && w.prompt.Params.Origin.Tool != "" {
+		if w != nil && w.editingText && w.prompt != nil && (w.prompt.AgyQuestion || w.prompt.Params.Origin != nil && w.prompt.Params.Origin.Tool != "") {
 			continue
 		}
 		if w == nil && s.app.PaneStatusKey(pid) != "blocked" {
@@ -535,6 +535,18 @@ func (s *Server) reuseScreenPrompt(pid int, w *screenPromptWatch) bool {
 	pending, err := store.Decisions("pending")
 	if err != nil {
 		return false
+	}
+	if w.prompt.AgyQuestion && w.prompt.Params.AllowText {
+		legacy := *w.prompt
+		legacy.Params.AllowText = false
+		legacySignature := legacy.Signature()
+		for _, d := range pending {
+			if d.Kind == "agent_prompt" && d.Origin != nil && d.Origin.Agent == "agy" && d.Origin.Machine == "local" && d.Origin.Reason == "screen_prompt" && d.Origin.PaneID == fmtPaneID(pid) && screenprompt.FromDecision(d) == legacySignature {
+				// An open dialog has a fixed form. Close the options-only
+				// dialog so a new notification opens one with text input.
+				s.cancelScreenPrompt(&screenPromptWatch{decisionID: d.DecisionID})
+			}
+		}
 	}
 	for _, d := range pending {
 		if d.Origin != nil && d.Origin.Reason == "screen_prompt" && d.Origin.PaneID == fmtPaneID(pid) && screenprompt.FromDecision(d) == w.signature {

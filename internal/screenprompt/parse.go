@@ -17,9 +17,11 @@ import (
 type Prompt struct {
 	MCPServer     string
 	CodexQuestion bool
+	AgyQuestion   bool
 	// Truncated は、質問の先頭が画面の上に出て読めていないこと（Claude の質問の枠の上端が見えない）。
 	Truncated  bool
 	TextOpen   bool
+	TextValue  string
 	Final      bool
 	Flow       string
 	Question   int
@@ -35,6 +37,7 @@ type Prompt struct {
 	Preview    *string
 }
 
+var numberedQuestionLabel = regexp.MustCompile(`^Question [0-9]+/[0-9]+$`)
 var numbered = regexp.MustCompile(`^\s*([❯›>]?)\s*(\d+)[.)]\s+(.*)$`)
 var checkbox = regexp.MustCompile(`^\[([ ✔✓xX])\]\s*(.*)$`)
 var shortcut = regexp.MustCompile(`\((esc|[[:alnum:]])\)`)
@@ -92,6 +95,9 @@ func Parse(agent string, screen []string) *Prompt {
 const TruncatedNotice = "（この質問は長く、先頭の部分が画面の外に出ていて取り込めませんでした。全文は AI のペインで確かめてください）"
 
 func ParseWithTextID(agent string, screen []string, textID string) *Prompt {
+	if agent == "agy" {
+		return parseAgy(screen)
+	}
 	if agent != "claude" && agent != "codex" && agent != "devin" {
 		return nil
 	}
@@ -375,7 +381,7 @@ func (p *Prompt) Signature() string {
 		options = append(options, option{o.ID, stableText(o.Label), description})
 	}
 	var label *string
-	if p.Params.QuestionLabel != nil && codexQuestionHeader.MatchString(*p.Params.QuestionLabel) {
+	if p.Params.QuestionLabel != nil && (codexQuestionHeader.MatchString(*p.Params.QuestionLabel) || numberedQuestionLabel.MatchString(*p.Params.QuestionLabel)) {
 		label = p.Params.QuestionLabel
 	}
 	command, tool, warning, columns := "", "", "", 0

@@ -22,6 +22,19 @@ func isCtrlB(k uv.Key) bool {
 
 // handleKey routes one key event.
 func (a *App) handleKey(k uv.Key, raw []byte) {
+	// Reserved for the phone's space controls; never forward these keys to a PTY.
+	if a.sidebarConfig.UI.NativeMenus && k.Mod == 0 && (k.Code == uv.KeyF9 || k.Code == uv.KeyF10) {
+		open := a.st.Mobile() && a.mobileSwitcher || !a.st.Mobile() && a.st.SidebarVisible
+		if open && a.dialog == nil && a.menu == nil && a.help == nil && a.settings == nil && a.navigator == nil && a.cm == nil && !a.prefix {
+			dir := -1
+			if k.Code == uv.KeyF10 {
+				dir = 1
+			}
+			a.cycleWorkspace(dir)
+			a.dirty = true
+		}
+		return
+	}
 	if a.modalClipboardKey(k) {
 		return
 	}

@@ -25,9 +25,34 @@ visible_working = true
 line_regex = ['^\s*[\u2800-\u28FF]+\s+\p{Alphabetic}+\w*ing\b']
 
 [[rules]]
-id = "background_tasks_working"
-state = "working"
-priority = 90
-region = "bottom_non_empty_lines(5)"
-visible_working = true
-line_regex = ['(?i)·\s*[1-9][0-9]*\s+task']
+id = "idle_prompt_with_tasks"
+state = "idle"
+priority = 50
+region = "whole_recent"
+visible_idle = true
+# The task panel sits below an idle prompt; its count does not indicate foreground work.
+regex = ['(?m)^[ \t]*─{3,}[ \t]*\n[ \t]*>[ \t]*\n[ \t]*─{3,}[ \t]*\n(?:[ \t]*● \[[0-9]{2}:[0-9]{2}:[0-9]{2}\] [^\n]+\n)+[ \t]*─{3,}[ \t]*\n[ \t]*\? for shortcuts[^\n]*· [1-9][0-9]* task\(s\) · /tasks[ \t]*(?:\nGemini [^\n]+ │ Claude/GPT [^\n]+ │ Argon [^\n]+)?[ \t\n]*\z']
+
+[[rules]]
+id = "question_prompt"
+state = "blocked"
+priority = 310
+region = "whole_recent"
+visible_blocker = true
+contains = ["↑/↓ Navigate"]
+any = [
+  { contains = ["→ Next", "enter Select", "esc Skip"] },
+  { contains = ["enter Write-in"] },
+  { contains = ["enter Submit All"] },
+  { contains = ["enter Submit"] },
+]
+not = [{ contains = ["Toggle"] }]
+line_regex = ['^\s*Question [1-9][0-9]*/[1-9][0-9]*:']
+
+[[rules]]
+id = "idle_prompt"
+state = "idle"
+priority = 50
+region = "bottom_non_empty_lines(8)"
+visible_idle = true
+regex = ['(?m)^[ \t]*─{3,}[ \t]*\n[ \t]*>[ \t]*\n[ \t]*─{3,}[ \t]*\n[ \t]*\? for shortcuts[^\n]*$']

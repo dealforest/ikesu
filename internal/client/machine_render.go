@@ -161,12 +161,16 @@ func (m *machineClient) paint() error {
 		}
 	}
 	data := m.frames.Frame(composed.Frame, composed.AnchorX, composed.AnchorY, composed.AnchorVisible, composed.AnchorShape)
+	enabled := m.settings != nil && m.settings.config != nil && m.settings.config.UI.NativeMenus
+	panes := m.nativePanes.Next(enabled, in, m.size.Cols, m.size.Rows, m.search != nil)
+	data = append(panes, data...)
 	data = append(data, retired...)
 	endWrite := benchstage.Span("outer.write")
 	_, writeErr := m.out.Write(data)
 	endWrite()
 	benchstage.Values("outer.bytes", len(data), 0)
 	if err := writeErr; err != nil {
+		m.nativePanes.Forget()
 		return err
 	}
 	if err := m.writeNativeMenu(in); err != nil {

@@ -18,7 +18,7 @@ func drawTabBar(f *Frame, s *model.AppState, in Input, out *Output) {
 	if in.ServerUI {
 		base.Fg = f.Palette.Text
 	}
-	f.Fill(area.X, area.Y, area.W, 1, " ", base)
+	f.Fill(area.X, area.Y, area.W, area.H, " ", base)
 	var starts, widths []int
 	var labels []string
 	total := 0
@@ -122,7 +122,7 @@ func drawTabBar(f *Frame, s *model.AppState, in Input, out *Output) {
 		left, right := max(starts[i], offset), min(starts[i]+widths[i], offset+viewport)
 		r := layout.Rect{}
 		if left < right {
-			r = layout.Rect{X: x + left - offset, Y: area.Y, W: right - left, H: 1}
+			r = layout.Rect{X: x + left - offset, Y: area.Y, W: right - left, H: area.H}
 		}
 		out.TabHits = append(out.TabHits, r)
 	}
@@ -154,6 +154,9 @@ func drawTabBar(f *Frame, s *model.AppState, in Input, out *Output) {
 		}
 		if dst := f.Cell(x+n, area.Y); dst != nil {
 			*dst = cell
+		}
+		if area.H > 1 {
+			f.Set(x+n, area.Y+1, " ", cell.Style)
 		}
 	}
 	if out.TabLeftRect.W > 0 {

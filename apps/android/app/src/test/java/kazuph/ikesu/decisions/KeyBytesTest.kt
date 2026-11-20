@@ -35,4 +35,16 @@ class KeyBytesTest {
     }
 
     @Test fun pasteIsBracketedAndDropsEscapes() = assertEquals("\u001b[200~ab\u001b[201~", s(KeyBytes.paste("a\u001bb")))
+    @Test fun controlTabKeepsItsModifier() {
+        assertEquals("\u001b[9;5u", s(KeyBytes.code(android.view.KeyEvent.KEYCODE_TAB, KeyBytes.CTRL, false)!!))
+        assertEquals("\u001b[9;6u", s(KeyBytes.code(android.view.KeyEvent.KEYCODE_TAB, KeyBytes.CTRL or KeyBytes.SHIFT, false)!!))
+        assertEquals("\t", s(KeyBytes.code(android.view.KeyEvent.KEYCODE_TAB, 0, false)!!))
+        assertEquals("\u001b[Z", s(KeyBytes.code(android.view.KeyEvent.KEYCODE_TAB, KeyBytes.SHIFT, false)!!))
+    }
+    @Test fun hardwareModifierStateFeedsControlTab() {
+        val meta = android.view.KeyEvent.META_CTRL_ON or android.view.KeyEvent.META_SHIFT_ON
+        val mods = KeyBytes.fromMetaState(meta)
+        assertEquals(KeyBytes.CTRL or KeyBytes.SHIFT, mods)
+        assertEquals("\u001b[9;6u", s(KeyBytes.code(android.view.KeyEvent.KEYCODE_TAB, mods, false)!!))
+    }
 }

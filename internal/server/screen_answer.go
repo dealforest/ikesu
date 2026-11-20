@@ -27,6 +27,9 @@ func (s *Server) validateScreenAnswer(d api.Decision, p api.DecisionAnswerParams
 	}
 	w := s.screenPrompts.watches[pid]
 	current := s.readScreenPrompt(pid)
+	if ok && w != nil && w.prompt != nil && w.prompt.AgyQuestion && current == nil {
+		return nil, 0, &api.Error{Code: api.ErrDecisionStale, Message: "cannot verify the current agy question"}
+	}
 	if ok && w != nil && w.prompt != nil && w.prompt.CodexQuestion && current == nil {
 		return nil, 0, &api.Error{Code: api.ErrDecisionStale, Message: "cannot verify the current Codex question and notes state"}
 	}
@@ -98,7 +101,7 @@ func (s *Server) validateScreenAnswer(d api.Decision, p api.DecisionAnswerParams
 	if d.ExpiresUnixMS != nil && w.prompt.Params.Origin != nil && w.prompt.Params.Origin.Tool != "" {
 		w.permissionDeadline = time.UnixMilli(*d.ExpiresUnixMS)
 	}
-	if w.prompt.CodexQuestion && w.prompt.TextOpen && p.Text == nil {
+	if (w.prompt.CodexQuestion || w.prompt.AgyQuestion) && w.prompt.TextOpen && p.Text == nil {
 		return nil, 0, &api.Error{Code: "screen_prompt_unsupported", Message: "close Codex notes before choosing a numbered option"}
 	}
 	answer, err := dispatch.ValidateDecisionAnswer(d, p)
@@ -110,6 +113,12 @@ func (s *Server) validateScreenAnswer(d api.Decision, p api.DecisionAnswerParams
 	}
 	if !d.MultiSelect && len(answer.OptionIDs) > 1 {
 		return nil, 0, &api.Error{Code: "screen_prompt_unsupported", Message: "single-choice screen cannot submit multiple options"}
+	}
+	if w.prompt.AgyQuestion && p.Text != nil && (strings.TrimSpace(*p.Text) == "" || strings.IndexFunc(*p.Text, func(r rune) bool { return unicode.IsControl(r) && r != '\n' }) >= 0 || answer.OptionID != nil) {
+		return nil, 0, &api.Error{Code: "screen_prompt_unsupported", Message: "agy write-in requires safe nonempty text without an option"}
+	}
+	if w.prompt.AgyQuestion && w.prompt.TextOpen {
+		return nil, 0, &api.Error{Code: "screen_prompt_unsupported", Message: "agy editor is already open"}
 	}
 	if p.Text != nil && w.prompt.TextID == "" && !(w.prompt.Params.Origin != nil && w.prompt.Params.Origin.Tool != "") {
 		return nil, 0, &api.Error{Code: "screen_prompt_unsupported", Message: "free input row is unavailable"}
@@ -151,7 +160,7 @@ func (s *Server) startScreenAnswer(pid int, w *screenPromptWatch, answer api.Dec
 	prompt := w.prompt
 	signature := w.signature
 	recorded := w.transcriptID != ""
-	w.editingText = (prompt.Params.MultiSelect || prompt.CodexQuestion || prompt.Params.Origin != nil && prompt.Params.Origin.Tool != "") && answer.Text != nil
+	w.editingText = (prompt.Params.MultiSelect || prompt.CodexQuestion || prompt.AgyQuestion || prompt.Params.Origin != nil && prompt.Params.Origin.Tool != "") && answer.Text != nil
 	go func() {
 		err := s.deliverScreenAnswer(pid, signature, prompt, answer, recorded)
 		s.app.Do(func() {
@@ -178,6 +187,10 @@ func (s *Server) screenInput(pid int, signature, data string, verify bool, notes
 }
 
 func (s *Server) screenInputChecked(pid int, signature, data string, verify bool, notesOpen *bool, cursor *int) error {
+	return s.screenInputCheckedPaste(pid, signature, data, verify, notesOpen, cursor, false, nil)
+}
+
+func (s *Server) screenInputCheckedPaste(pid int, signature, data string, verify bool, notesOpen *bool, cursor *int, paste bool, expectedText *string) error {
 	err := fmt.Errorf("server stopped before input delivery")
 	s.app.Do(func() {
 		pane := s.sup.Get(pid)
@@ -210,12 +223,24 @@ func (s *Server) screenInputChecked(pid int, signature, data string, verify bool
 				err = fmt.Errorf("selected option changed before input delivery")
 				return
 			}
-			if p.CodexQuestion {
+			if p.CodexQuestion || p.AgyQuestion {
 				expected := notesOpen != nil && *notesOpen
 				if p.TextOpen != expected {
-					err = fmt.Errorf("Codex notes state changed during input delivery")
+					err = fmt.Errorf("text editor state changed during input delivery")
 					return
 				}
+			}
+			if expectedText != nil && (!p.AgyQuestion || !p.TextOpen || agyTextIdentity(p.TextValue) != agyTextIdentity(*expectedText)) {
+				err = fmt.Errorf("agy editor contents changed during input delivery")
+				return
+			}
+		}
+		if paste {
+			if pane.BracketedPasteMode() {
+				data = "\x1b[200~" + data + "\x1b[201~"
+			} else if strings.Contains(data, "\n") {
+				err = fmt.Errorf("cannot paste multiline agy answer safely")
+				return
 			}
 		}
 		watch := s.screenPrompts.watches[pid]
@@ -281,6 +306,23 @@ func (s *Server) deliverScreenAnswer(pid int, signature string, prompt *screenpr
 	}
 	if prompt.MCPServer != "" {
 		return s.deliverMCPAnswer(pid, signature, prompt, answer)
+	}
+	if prompt.AgyQuestion {
+		if answer.Text != nil {
+			return s.deliverAgyWriteIn(pid, signature, prompt, *answer.Text)
+		}
+		if answer.OptionID == nil {
+			return fmt.Errorf("missing agy option")
+		}
+		if err := s.navigateScreenRow(pid, signature, *answer.OptionID); err != nil {
+			return err
+		}
+		var current *screenprompt.Prompt
+		s.app.Do(func() { current = s.readScreenPrompt(pid) })
+		if current == nil || current.Cursor < 0 || current.Cursor >= len(current.Items) || current.Items[current.Cursor] != *answer.OptionID {
+			return fmt.Errorf("agy selected row changed")
+		}
+		return s.screenInputChecked(pid, signature, "\r", true, nil, &current.Cursor)
 	}
 	if prompt.CodexQuestion {
 		return s.deliverCodexQuestionAnswer(pid, signature, prompt, answer)
@@ -374,7 +416,7 @@ func (s *Server) navigateScreenRow(pid int, signature, row string) error {
 	for {
 		var current *screenprompt.Prompt
 		s.app.Do(func() { current = s.readScreenPrompt(pid) })
-		if current == nil || current.Signature() != signature || (!current.CodexQuestion && current.Progress < 0 && (current.Params.Origin == nil || current.Params.Origin.Tool == "")) || current.Cursor < 0 {
+		if current == nil || current.Signature() != signature || (!current.CodexQuestion && !current.AgyQuestion && current.Progress < 0 && (current.Params.Origin == nil || current.Params.Origin.Tool == "")) || current.Cursor < 0 {
 			return fmt.Errorf("cannot locate multi-select row")
 		}
 		target := -1
@@ -395,7 +437,7 @@ func (s *Server) navigateScreenRow(pid int, signature, row string) error {
 			arrow = "\x1b[A"
 			next = current.Cursor - 1
 		}
-		if err := s.screenInput(pid, signature, arrow, true, nil); err != nil {
+		if err := s.screenInputChecked(pid, signature, arrow, true, nil, &current.Cursor); err != nil {
 			return err
 		}
 		sentAt := time.Now()

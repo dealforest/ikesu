@@ -17,6 +17,7 @@ type displayState struct {
 	density, scope                                           string
 	rightManual                                              bool
 	presetActive                                             bool
+	phoneTabs                                                bool
 	portrait                                                 bool // this screen's orientation, never saved
 	panelRows                                                int  // rows the sidebar plugins took when this viewer last drew
 }
@@ -25,7 +26,7 @@ func captureDisplay(s *model.AppState) displayState {
 	return displayState{s.SidebarVisible, s.SidebarCollapsedHidden, s.SidebarManual,
 		s.ShowTabBar, s.HideTabBarWhenSingleTab, s.PaneBorders, s.PaneGaps,
 		s.SidebarSize, s.SidebarMin, s.SidebarMax, s.SidebarDefault, s.MobileWidthThreshold,
-		s.RightSidebarMode, s.RightSidebarSize, s.SidebarHidden, s.SidebarSectionSplit, s.WorkspaceDensity, s.AgentScope, s.RightSidebarManual, s.SidebarPresetActive, s.Portrait, s.SidebarPanelRows}
+		s.RightSidebarMode, s.RightSidebarSize, s.SidebarHidden, s.SidebarSectionSplit, s.WorkspaceDensity, s.AgentScope, s.RightSidebarManual, s.SidebarPresetActive, s.PhoneTabRows, s.Portrait, s.SidebarPanelRows}
 }
 
 func (d displayState) apply(s *model.AppState) {
@@ -36,6 +37,7 @@ func (d displayState) apply(s *model.AppState) {
 	s.WorkspaceDensity, s.AgentScope = d.density, d.scope
 	s.RightSidebarManual = d.rightManual
 	s.SidebarPresetActive = d.presetActive
+	s.PhoneTabRows = d.phoneTabs
 	s.Portrait = d.portrait
 	s.SidebarPanelRows = d.panelRows
 	s.RightSidebarMode, s.RightSidebarSize, s.SidebarHidden = d.rightMode, d.rightSize, d.explicitHidden
