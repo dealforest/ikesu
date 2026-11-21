@@ -1008,7 +1008,9 @@ func (s *Server) attach(conn net.Conn) {
 				return nil
 			})
 		}
-		c.viewer.SetLegacySidebarControls(!endpoint.Allows(available, endpoint.MachineGeneration, hello.Methods, "workspace_new"))
+		legacySidebar := !endpoint.Allows(available, endpoint.MachineGeneration, hello.Methods, "workspace_new")
+		menuRight := !legacySidebar && !endpoint.Allows(available, endpoint.MachineGeneration, hello.Methods, endpoint.SidebarMenuLeft)
+		c.viewer.SetLegacySidebarControls(legacySidebar, menuRight)
 		c.viewer.RestoreSelection(s.app, hello.Selection)
 		c.viewer.SetContinuousSidebarRows(endpoint.Allows(available, 1, hello.Methods, "sidebar_continuous"))
 		if hello.Visible != nil && !*hello.Visible {

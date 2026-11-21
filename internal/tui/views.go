@@ -218,6 +218,7 @@ func (a *App) draw() {
 		CopyHint:  a.copyHint(),
 
 		LegacySidebarControls: a.legacySidebarControls,
+		SidebarMenuRight:      a.sidebarMenuRight,
 	}
 	if a.mobileSwitcher {
 		in.MobileMenu = a.mainMenuItems()

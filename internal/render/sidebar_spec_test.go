@@ -117,11 +117,7 @@ func TestG2SectionNewNarrowAndWidthFooter(t *testing.T) {
 	for _, serverUI := range []bool{false, true} {
 		area := s.SidebarArea()
 		r := SidebarMenuRect(s, serverUI)
-		wantEnd := area.X + area.W - 2
-		if serverUI {
-			wantEnd++
-		}
-		if r.X+r.W != wantEnd || r.Y != s.Rows-1 || r.W != len("[menu]") {
+		if r.X != area.X || r.Y != s.Rows-1 || r.W != len("[menu]") {
 			t.Fatal(r)
 		}
 	}

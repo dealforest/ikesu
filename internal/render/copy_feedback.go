@@ -29,11 +29,15 @@ func drawSidebarCopyFeedback(f *Frame, in Input) {
 	area := s.SidebarArea()
 	if area.W > 1 && area.H > 0 {
 		x, y, w := area.X, area.Y+area.H-1, area.W-2
-		if menu := SidebarMenuRect(s, in.ServerUI); !in.LegacySidebarControls && menu.W > 0 {
-			if menu.X-x < ansi.StringWidth(in.Copied) && area.H >= 4 {
+		if menu := sidebarMenuRect(s, in.ServerUI, in.SidebarMenuRight); !in.LegacySidebarControls && menu.W > 0 {
+			feedbackX, feedbackWidth := x+menu.W, w-menu.W
+			if in.SidebarMenuRight {
+				feedbackX, feedbackWidth = x, min(w, menu.X-x)
+			}
+			if feedbackWidth < ansi.StringWidth(in.Copied) {
 				y = SidebarFooter(s).Y
 			} else {
-				w = min(w, menu.X-x)
+				x, w = feedbackX, feedbackWidth
 			}
 		}
 		f.Fill(x, y, w, 1, " ", uv.Style{})

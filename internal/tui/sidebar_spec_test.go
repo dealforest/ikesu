@@ -281,8 +281,8 @@ func TestG2FooterBlankAndSectionBody(t *testing.T) {
 	a := specRuntimeApp(t)
 	r := render.SidebarMenuRect(a.st, a.serverUI)
 	area := a.st.SidebarArea()
-	if r.Y != area.Y+area.H-1 || r.X+r.W != render.SidebarToggleRect(a.st).X {
-		t.Fatalf("menu is outside the bottom-right footer: %+v", r)
+	if r.Y != area.Y+area.H-1 || r.X != area.X {
+		t.Fatalf("menu is outside the bottom-left footer: %+v", r)
 	}
 	sidebarEvent(a, input.KindMouseClick, r.X, r.Y)
 	if a.menu == nil || a.menu.kind != menuMain {

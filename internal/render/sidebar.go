@@ -232,8 +232,17 @@ func SidebarToggleRect(s *model.AppState) layout.Rect {
 	return layout.Rect{X: area.X + (area.W-1)/2, Y: area.Y + area.H - 1, W: 1, H: 1}
 }
 
-// SidebarMenuRect locates the menu at the bottom-right of the expanded sidebar.
+// SidebarMenuRect locates the menu at the bottom-left of the expanded sidebar.
 func SidebarMenuRect(s *model.AppState, serverUI bool) layout.Rect {
+	return sidebarMenuRect(s, serverUI, false)
+}
+
+// RightSidebarMenuRect is the menu position used by ikesu 0.4.180.
+func RightSidebarMenuRect(s *model.AppState, serverUI bool) layout.Rect {
+	return sidebarMenuRect(s, serverUI, true)
+}
+
+func sidebarMenuRect(s *model.AppState, serverUI, right bool) layout.Rect {
 	area := s.SidebarArea()
 	end := area.X + area.W - 1 // divider
 	if !serverUI {
@@ -243,7 +252,11 @@ func SidebarMenuRect(s *model.AppState, serverUI bool) layout.Rect {
 	if !s.SidebarVisible || end-area.X < width || area.H < 4 {
 		return layout.Rect{}
 	}
-	return layout.Rect{X: end - width, Y: area.Y + area.H - 1, W: width, H: 1}
+	x := area.X
+	if right {
+		x = end - width
+	}
+	return layout.Rect{X: x, Y: area.Y + area.H - 1, W: width, H: 1}
 }
 
 // LegacySidebarMenuRect locates the menu on endpoints using the former footer.
@@ -267,8 +280,8 @@ func LegacySidebarPresetRect(s *model.AppState) layout.Rect {
 	return layout.Rect{X: a.X, Y: a.Y + a.H - 1, W: 8, H: 1}
 }
 
-func drawSidebarMenu(f *Frame, s *model.AppState, serverUI bool) {
-	r := SidebarMenuRect(s, serverUI)
+func drawSidebarMenu(f *Frame, s *model.AppState, serverUI, right bool) {
+	r := sidebarMenuRect(s, serverUI, right)
 	if r.W == 0 {
 		return
 	}

@@ -31,6 +31,7 @@ func (m *machineClient) paint() error {
 	}
 	in := *e.snapshot
 	in.LegacySidebarControls = e.connection != nil && legacySidebarControls(e.connection.writer)
+	in.SidebarMenuRight = e.connection != nil && sidebarMenuRight(e.connection.writer)
 	in.Koi = true
 	if m.settings != nil && m.settings.config != nil {
 		in.Koi = m.settings.config.KoiEnabled()

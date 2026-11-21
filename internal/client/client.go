@@ -371,6 +371,7 @@ func pump(conn net.Conn, in, out *os.File, leave func(), settings *localSettings
 				return pumpRejected
 			}
 			in.LegacySidebarControls = legacySidebarControls(w)
+			in.SidebarMenuRight = sidebarMenuRight(w)
 			if err := inputSource.Prefix(in.Prefix, in.SidebarConfig.Experimental.SwitchASCIIInputSourceInPrefix); err != nil {
 				fmt.Fprintln(os.Stderr, "ikesu: input source:", err)
 			}

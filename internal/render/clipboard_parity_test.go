@@ -20,7 +20,7 @@ func TestClipboardFeedbackSidebarBothRuntimes(t *testing.T) {
 						f := Compose(in).Frame
 						area := s.SidebarArea()
 						y := area.Y + area.H - 1
-						if menu := SidebarMenuRect(s, server); menu.W > 0 && menu.X-area.X < len(in.Copied) {
+						if menu := SidebarMenuRect(s, server); menu.W > 0 && area.W-2-menu.W < len(in.Copied) {
 							y = SidebarFooter(s).Y
 						}
 						var row strings.Builder
