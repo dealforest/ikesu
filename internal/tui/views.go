@@ -52,7 +52,8 @@ func (a *App) PaneAgentStatusKey(pid int) string {
 	if tr != nil {
 		key = tr.Key()
 	}
-	if r, ok := a.reported[pid]; ok && r.state != "" {
+	if r, ok := a.reported[pid]; ok && r.state != "" &&
+		(tr == nil || tr.AgentID != "agy" || r.agent == "" || r.agent == "agy") {
 		key = r.state
 		if key == "idle" && r.unseen {
 			key = "done"

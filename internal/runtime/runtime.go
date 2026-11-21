@@ -133,6 +133,7 @@ type Snapshot struct {
 	Revision         uint64
 	ProcName         string
 	AgentID          string
+	ForegroundAgent  string
 	FgPID            int
 	Cwd              string
 	OSCTitle         string
@@ -146,6 +147,15 @@ type Snapshot struct {
 	ScrollbackLen    int
 	ScrollbarVisible bool
 	Dead             bool
+}
+
+// ScreenAgent is the agent whose screen is used for status detection. A live
+// agy process can follow another agent in the same shell with a saved report.
+func (s Snapshot) ScreenAgent() string {
+	if s.ForegroundAgent == "agy" {
+		return s.ForegroundAgent
+	}
+	return s.AgentID
 }
 
 // Supervisor runs all panes of the app.
@@ -736,6 +746,7 @@ func (p *Pane) snapshotLocked() Snapshot {
 		Revision:         p.revision.Load(),
 		ProcName:         p.procName,
 		AgentID:          p.effectiveAgent(),
+		ForegroundAgent:  p.agentID,
 		FgPID:            p.fgPID,
 		Cwd:              p.procCwdOrDefault(),
 		OSCTitle:         p.oscTitle,

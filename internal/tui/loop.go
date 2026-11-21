@@ -199,7 +199,7 @@ func (a *App) detectPane(pid int, visible bool, now time.Time) {
 		a.trackers[pid] = tr
 	}
 	sn := p.Snapshot()
-	agentID := sn.AgentID
+	agentID := sn.ScreenAgent()
 	in := detect.Input{OSCTitle: sn.OSCTitle, OSCProgress: sn.OSCProgress}
 	if agentID != "" {
 		in.Screen = p.ScreenText()
