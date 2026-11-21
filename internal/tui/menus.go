@@ -307,6 +307,9 @@ func (a *App) sidebarMenuRect(serverUI bool) layout.Rect {
 	if a.legacySidebarControls {
 		return render.LegacySidebarMenuRect(a.st)
 	}
+	if a.sidebarMenuRight {
+		return render.RightSidebarMenuRect(a.st, serverUI)
+	}
 	return render.SidebarMenuRect(a.st, serverUI)
 }
 

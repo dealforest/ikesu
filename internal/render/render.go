@@ -124,6 +124,7 @@ type JobDot struct {
 type Input struct {
 	// LegacySidebarControls keeps input geometry aligned with older peers.
 	LegacySidebarControls bool
+	SidebarMenuRight      bool
 
 	ApprovalCounts     map[int]int
 	ApprovalGuardPanes map[int]bool
@@ -333,7 +334,7 @@ func composeInto(in Input, machines *MachineSidebar, version string, notice bool
 	f.Palette = previewPalette
 	drawSidebarBoundaries(f, s, in)
 	if !in.LegacySidebarControls {
-		drawSidebarMenu(f, s, in.ServerUI)
+		drawSidebarMenu(f, s, in.ServerUI, in.SidebarMenuRight)
 	}
 	if machines != nil {
 		machines.drawPaneStatus(f, in, out)

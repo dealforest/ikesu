@@ -19,6 +19,10 @@ func legacySidebarControls(w *writer) bool {
 	return !endpoint.Allows(w.available, endpoint.MachineGeneration, w.methods, "workspace_new")
 }
 
+func sidebarMenuRight(w *writer) bool {
+	return !legacySidebarControls(w) && !endpoint.Allows(w.available, endpoint.MachineGeneration, w.methods, endpoint.SidebarMenuLeft)
+}
+
 // Each connection keeps its own decoder and writer. Only the terminal
 // supervisor reads stdin and decides which endpoint receives that input.
 type endpointConnection struct {

@@ -3,8 +3,8 @@ package tui
 import "github.com/kazuph/ikesu/internal/model"
 
 // SetLegacySidebarControls selects the geometry understood by this viewer's client.
-func (v *Viewer) SetLegacySidebarControls(legacy bool) {
-	v.app.legacySidebarControls = legacy
+func (v *Viewer) SetLegacySidebarControls(legacy, menuRight bool) {
+	v.app.legacySidebarControls, v.app.sidebarMenuRight = legacy, menuRight
 }
 
 // Hidden machine endpoints still supply sidebar snapshots, but cannot mark

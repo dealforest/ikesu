@@ -341,6 +341,7 @@ type App struct {
 	jobsAt                                   time.Time             // last job snapshot
 	actionBar                                render.ActionBarRects // last frame's action bar hit areas
 	legacySidebarControls                    bool
+	sidebarMenuRight                         bool
 	uiShowTab                                bool // [ui] show_tab_bar
 	uiHideSingle                             bool // [ui] hide_tab_bar_when_single_tab
 	inputSource                              platform.InputSource

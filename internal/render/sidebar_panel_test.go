@@ -24,7 +24,7 @@ func TestSidebarPanelDrawsPluginLinesWithColorsAboveFooter(t *testing.T) {
 	}
 	f := NewFrame(120, 40)
 	drawSidebar(f, s, Input{State: s, SidebarPanel: panel})
-	drawSidebarMenu(f, s, false)
+	drawSidebarMenu(f, s, false, false)
 	fr := SidebarFooter(s)
 	lines := []string{}
 	for y := fr.Y - 5; y < fr.Y; y++ {

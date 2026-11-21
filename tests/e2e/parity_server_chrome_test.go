@@ -44,7 +44,9 @@ func TestServerCopyStatusConsumesButtonAndYanksOSC52(t *testing.T) {
 		return strings.Contains(raw.String(), "\x1b]52;c;") && !strings.Contains(tx, "y/enter copy")
 	})
 	s.waitFor("successful one-line copy feedback on sidebar bottom", 5*time.Second, func(tx string) bool {
-		return strings.HasPrefix(strings.Split(tx, "\n")[termH-1], "Copied 1 line")
+		bottom := strings.Split(tx, "\n")[termH-1]
+		sidebar, _, _ := strings.Cut(bottom, "│")
+		return strings.HasPrefix(sidebar, "[menu]") && strings.Contains(sidebar, "Copied 1 line")
 	})
 	s.waitFor("copy feedback expires", 5*time.Second, func(tx string) bool {
 		return !strings.Contains(tx, "Copied")
