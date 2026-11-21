@@ -347,7 +347,7 @@ export class MobileHub {
     const session = candidate.session;
     session.send({ type: 'paired', device: device.device, tag: this.appTag(Buffer.from(device.device, 'base64url')), name: pairing.name, permissions: pairing.permissions });
     session.paired = true;
-    this.closePairing(session);
+    if (this.pairing === pairing) this.closePairing(session);
     const linger = setTimeout(() => session.close(), 10_000); linger.unref?.();
     return device;
   }

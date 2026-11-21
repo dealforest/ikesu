@@ -40,10 +40,13 @@ async function listenControl(file, hub) {
   try { fs.unlinkSync(file); } catch { /* 無ければよい */ }
   const server = net.createServer(socket => {
     let buffer = '';
+    let ownedPairing = null;
     const write = value => { if (!socket.destroyed) socket.write(`${JSON.stringify(value)}\n`); };
-    const previous = hub.onCandidate;
-    hub.onCandidate = candidate => { write({ event: 'candidate', name: candidate.name }); previous?.(candidate); };
-    socket.on('close', () => { hub.onCandidate = previous; });
+    let candidateHandler;
+    socket.on('close', () => {
+      if (hub.pairing === ownedPairing && ownedPairing) hub.closePairing();
+      if (candidateHandler && hub.onCandidate === candidateHandler) hub.onCandidate = null;
+    });
     socket.on('error', () => {});
     socket.on('data', async chunk => {
       buffer += chunk;
@@ -54,11 +57,16 @@ async function listenControl(file, hub) {
           const message = JSON.parse(line);
           if (message.op === 'pair_start') {
             if (!Array.isArray(message.permissions) || !message.permissions.every(item => PERMISSIONS.includes(item)) || typeof message.name !== 'string' || !message.name) throw Error('引数が不正です');
-            write({ ok: true, qr: hub.startPairing({ name: message.name, permissions: message.permissions }).qr() });
+            if (hub.pairing?.active) throw Error('既にペアリングが実行中です');
+            ownedPairing = hub.startPairing({ name: message.name, permissions: message.permissions });
+            candidateHandler = candidate => { if (hub.pairing === ownedPairing) write({ event: 'candidate', name: candidate.name }); };
+            hub.onCandidate = candidateHandler;
+            write({ ok: true, qr: ownedPairing.qr() });
           } else if (message.op === 'pair_confirm') {
+            if (!ownedPairing || hub.pairing !== ownedPairing) throw Error('この接続のペアリングはありません');
             const device = await hub.confirmPairing(message.code);
             write({ ok: Boolean(device), device: device?.device, active: Boolean(hub.pairing?.active) });
-          } else if (message.op === 'pair_cancel') { hub.closePairing(); write({ ok: true }); }
+          } else if (message.op === 'pair_cancel') { if (ownedPairing && hub.pairing === ownedPairing) hub.closePairing(); ownedPairing = null; write({ ok: true }); }
           else throw Error('不明な操作です');
         } catch (error) { write({ ok: false, error: error.message }); }
       }

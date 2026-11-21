@@ -42,6 +42,7 @@ class MainActivity : Activity() {
     companion object {
         /** Kept after the panel closes, so opening it again keeps what was typed. */
         private val drafts = mutableMapOf<String, Draft>()
+        private const val CAMERA_PERMISSION_REQUEST = 5
     }
     private val green = 0xFF33FF66.toInt()
     private val dim = 0xFF1E9948.toInt()
@@ -547,7 +548,7 @@ class MainActivity : Activity() {
     private fun renderMachines() {
         block(text("PC（中継でつなぐ）", 22f), 4)
         val machines = MachineStore(this).list()
-        if (machines.isEmpty()) block(text("まだ登録した PC はありません。PC の端末で `node apps/android/bridge/main.mjs pair` を実行し、出た QR を読んでください。", 16f), 4)
+        if (machines.isEmpty()) block(text("まだ登録した PC はありません。", 16f), 4)
         machines.forEach { machine ->
             val state = DecisionState.sources[machine.id]
             val status = when { state == null || !state.connected -> "未接続"; state.operable -> "接続中・操作できる"; else -> "接続中・顔と指紋で開く前" }
@@ -587,14 +588,24 @@ class MainActivity : Activity() {
                 render()
             } catch (error: Exception) { Toast.makeText(this, error.message ?: "接続情報を読めませんでした", Toast.LENGTH_LONG).show() }
         })
+        block(text("PC の ikesu で [menu] → Android pairing QR... を開き、表示された QR を読んでください。", 16f), 4)
         block(button("PC を追加（QR を読む）", true) {
             if (checkSelfPermission(android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(arrayOf(android.Manifest.permission.CAMERA), 5); return@button
+                requestPermissions(arrayOf(android.Manifest.permission.CAMERA), CAMERA_PERMISSION_REQUEST); return@button
             }
-            com.google.zxing.integration.android.IntentIntegrator(this).setDesiredBarcodeFormats(com.google.zxing.integration.android.IntentIntegrator.QR_CODE)
-                .setPrompt("PC の端末に出た QR を読んでください").setBeepEnabled(false).setOrientationLocked(false).initiateScan()
+            scanPairingQr()
         })
     }
+    private fun scanPairingQr() {
+        com.google.zxing.integration.android.IntentIntegrator(this).setDesiredBarcodeFormats(com.google.zxing.integration.android.IntentIntegrator.QR_CODE)
+            .setPrompt("PC の端末に出た QR を読んでください").setBeepEnabled(false).setOrientationLocked(false).initiateScan()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == CAMERA_PERMISSION_REQUEST && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) scanPairingQr()
+    }
+
     private fun renderSettings() {
         block(text("接続設定", 28f))
         renderMachines()

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/kazuph/ikesu/internal/api"
+	"runtime"
 
 	"github.com/kazuph/ikesu/internal/input"
 	"github.com/kazuph/ikesu/internal/layout"
@@ -280,6 +281,9 @@ func (a *App) mainMenuItems() []render.MenuItem {
 	items := []render.MenuItem{
 		{Label: "new workspace"}, {Label: "new tab"}, {Label: "delete idle panes…"}, {Separator: true}, {Label: "settings"}, {Label: "keybinds"}, {Label: "reload config"}, {Label: koiLabel}, {Label: "sidebar narrow"}, {Label: "sidebar normal"}, {Label: "sidebar wide"}, {Separator: true}, {Label: "restore agents...", Disabled: a.restoreHook == nil}, {Label: menuReopenSpace, Disabled: a.closedSpaceReopen == nil}, {Separator: true}, {Label: "detach", Disabled: a.detacher == nil}, {Separator: true}, {Label: "add machine..."}, {Label: "remove machine..."}, {Separator: true}, {Label: "stop server"}, {Label: "restart", Disabled: a.restartHook == nil},
 	}
+	if runtime.GOOS == "darwin" && !a.sidebarConfig.UI.NativeMenus && !a.clientMachines {
+		items = append(items[:5], append([]render.MenuItem{{Label: "Android pairing QR..."}}, items[5:]...)...)
+	}
 	if a.clientMachines || a.machineRequest != nil {
 		var base, machines []render.MenuItem
 		for _, item := range items {
@@ -528,6 +532,8 @@ func (a *App) activateMenu(i int) {
 			a.newTabNameDialog()
 		case "settings":
 			a.openSettings()
+		case "Android pairing QR...":
+			a.openAndroidPair()
 		case "keybinds":
 			a.openHelp()
 		case "reload config":
