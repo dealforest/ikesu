@@ -25,7 +25,7 @@ func TestReopenClosedSpaceMenuListsAndReopens(t *testing.T) {
 		reopened = id
 		return 0, nil
 	})
-	r := render.SidebarMenuRect(a.st)
+	r := render.SidebarMenuRect(a.st, a.serverUI)
 	sidebarEvent(a, input.KindMouseClick, r.X, r.Y)
 	if a.menu == nil || a.menu.kind != menuMain {
 		t.Fatal("main menu missing")

@@ -2,6 +2,11 @@ package tui
 
 import "github.com/kazuph/ikesu/internal/model"
 
+// SetLegacySidebarControls selects the geometry understood by this viewer's client.
+func (v *Viewer) SetLegacySidebarControls(legacy bool) {
+	v.app.legacySidebarControls = legacy
+}
+
 // Hidden machine endpoints still supply sidebar snapshots, but cannot mark
 // panes seen or receive clipboard writes until this terminal displays them.
 func (v *Viewer) SetVisible(a *App, visible bool) {
@@ -26,6 +31,11 @@ func (v *Viewer) SelectWorkspace(a *App, id int) bool {
 		}
 	}
 	return false
+}
+
+// NewWorkspace creates a workspace using this viewer's current selection and cwd.
+func (v *Viewer) NewWorkspace(a *App) {
+	v.with(a, func(ui *App) { ui.newWorkspace() })
 }
 
 func (v *Viewer) HasWorkspace(a *App, id int, generation string) bool {

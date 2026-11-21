@@ -370,6 +370,7 @@ func pump(conn net.Conn, in, out *os.File, leave func(), settings *localSettings
 				fmt.Fprintln(out, "ikesu: invalid snapshot:", err)
 				return pumpRejected
 			}
+			in.LegacySidebarControls = legacySidebarControls(w)
 			if err := inputSource.Prefix(in.Prefix, in.SidebarConfig.Experimental.SwitchASCIIInputSourceInPrefix); err != nil {
 				fmt.Fprintln(os.Stderr, "ikesu: input source:", err)
 			}

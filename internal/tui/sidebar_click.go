@@ -27,14 +27,12 @@ func (a *App) sidebarClick(m uv.Mouse) {
 		return
 	}
 
-	// Footer buttons.
-	if pointIn(m.X, m.Y, render.SidebarMenuRect(s)) {
-		a.openMainMenu(0, render.SidebarMenuRect(s).Y)
-		_, h := render.MenuSize(&a.menu.m)
-		a.menu.m.Y -= h
+	if pointIn(m.X, m.Y, a.sidebarMenuRect(a.serverUI)) {
+		a.openMainMenu(0, 0)
+		a.positionMainMenu(a.serverUI)
 		return
 	}
-	if pointIn(m.X, m.Y, render.SidebarNewRect(s)) {
+	if a.legacySidebarControls && pointIn(m.X, m.Y, render.LegacySidebarNewRect(s)) {
 		a.newWorkspace()
 		return
 	}
@@ -59,7 +57,8 @@ func (a *App) sidebarClick(m uv.Mouse) {
 // Card padding retains its workspace owner; empty panel rows stay inert.
 func (a *App) sidebarRightClick(m uv.Mouse) {
 	s := a.st
-	if pointIn(m.X, m.Y, render.SidebarMenuRect(s)) || pointIn(m.X, m.Y, render.SidebarNewRect(s)) {
+	if pointIn(m.X, m.Y, a.sidebarMenuRect(a.serverUI)) ||
+		a.legacySidebarControls && pointIn(m.X, m.Y, render.LegacySidebarNewRect(s)) {
 		return
 	}
 	r, ok := a.sidebarRowAt(m.X, m.Y)

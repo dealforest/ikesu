@@ -1008,6 +1008,7 @@ func (s *Server) attach(conn net.Conn) {
 				return nil
 			})
 		}
+		c.viewer.SetLegacySidebarControls(!endpoint.Allows(available, endpoint.MachineGeneration, hello.Methods, "workspace_new"))
 		c.viewer.RestoreSelection(s.app, hello.Selection)
 		c.viewer.SetContinuousSidebarRows(endpoint.Allows(available, 1, hello.Methods, "sidebar_continuous"))
 		if hello.Visible != nil && !*hello.Visible {
@@ -1128,6 +1129,8 @@ func (s *Server) attach(conn net.Conn) {
 					c.viewer.RecordInput(s.app, m.InputSequence)
 				}
 			})
+		case "workspace_new":
+			s.app.Do(func() { c.viewer.NewWorkspace(s.app) })
 		case "workspace_menu":
 			s.app.Do(func() {
 				if !c.viewer.OpenWorkspaceMenu(s.app, m.Workspace, m.WorkspaceGeneration, m.MenuX, m.MenuY) {

@@ -60,7 +60,7 @@ func TestG2PanelScrollTotalsCollapseAndFooterExclusion(t *testing.T) {
 			t.Fatal("last scroll position", p, h, top)
 		}
 	}
-	footer := SidebarWidthRect(s)
+	footer := SidebarMenuRect(s, false)
 	for _, row := range v.Rows {
 		if !row.Right && row.Y >= SidebarFooter(s).Y {
 			t.Fatal("workspace invaded footer", row)

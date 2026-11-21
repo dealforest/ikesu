@@ -16,6 +16,7 @@ import (
 	"github.com/kazuph/ikesu/internal/config"
 	"github.com/kazuph/ikesu/internal/endpoint"
 	"github.com/kazuph/ikesu/internal/input"
+	"github.com/kazuph/ikesu/internal/model"
 	"github.com/kazuph/ikesu/internal/render"
 	"golang.org/x/sys/unix"
 )
@@ -242,7 +243,9 @@ func (m *machineClient) input(event input.Event) error {
 	if event.Kind == input.KindMouseClick && event.Mouse.Button == uv.MouseLeft {
 		left, right := activeView.snapshot.State.SidebarArea(), activeView.snapshot.State.RightSidebarArea()
 		x, y := event.Mouse.X, event.Mouse.Y
-		leftEdge := left.W > 0 && (x == left.X+left.W-1 || x == left.X+left.W) && y >= left.Y && y < left.Y+left.H
+		actionBar := activeView.snapshot.State.ActionBarArea()
+		paneEdge := x == left.X+left.W && !contains(actionBar.X, actionBar.Y, actionBar.W, actionBar.H, x, y)
+		leftEdge := left.W > 0 && (x == left.X+left.W-1 || paneEdge) && y >= left.Y && y < left.Y+left.H
 		rightEdge := right.W > 0 && x == right.X && y >= right.Y && y < right.Y+right.H
 		if leftEdge || rightEdge {
 			// Keep the original endpoint for the entire divider gesture;
@@ -256,7 +259,7 @@ func (m *machineClient) input(event input.Event) error {
 		return m.paint()
 	}
 	if activeView.connection == nil && event.Kind == input.KindMouseClick && event.Mouse.Button == uv.MouseLeft {
-		r := render.SidebarMenuRect(activeView.snapshot.State)
+		r := render.SidebarMenuRect(activeView.snapshot.State, true)
 		if contains(r.X, r.Y, r.W, r.H, event.Mouse.X, event.Mouse.Y) {
 			if err := m.forms.Open("menu", activeView.snapshot.State); err != nil {
 				return err
@@ -404,8 +407,22 @@ func (m *machineClient) createWorkspace(id string) error {
 	if e.connection == nil || e.snapshot == nil {
 		return fmt.Errorf("machine %s is not connected", e.profile.Label)
 	}
-	rect := render.SidebarNewRect(e.snapshot.State)
-	data := []byte(fmt.Sprintf("\x1b[<0;%d;%dM\x1b[<0;%d;%dm", rect.X+1, rect.Y+1, rect.X+1, rect.Y+1))
+	modern := endpoint.Allows(e.connection.writer.available, endpoint.MachineGeneration, e.connection.writer.methods, "workspace_new")
+	var data []byte
+	if !modern {
+		// Legacy servers draw [new] in the old footer, three rows from the bottom.
+		state := *e.snapshot.State
+		if id != m.active {
+			state.Cols, state.Rows = m.size.Cols, m.size.Rows
+		}
+		area := state.SidebarArea()
+		if !state.SidebarVisible || area.W < model.SidebarMinDefault || area.H < 4 {
+			m.notify("endpoint_action_unsupported: workspace_new (legacy sidebar unavailable)")
+			return m.paint()
+		}
+		rect := render.LegacySidebarNewRect(&state)
+		data = []byte(fmt.Sprintf("\x1b[<0;%d;%dM\x1b[<0;%d;%dm", rect.X+1, rect.Y+1, rect.X+1, rect.Y+1))
+	}
 	if id != m.active {
 		previous := map[int]bool{}
 		for _, ws := range e.snapshot.State.Workspaces {
@@ -415,6 +432,9 @@ func (m *machineClient) createWorkspace(id string) error {
 		if err := e.connection.enqueue(resizeMessage(m.size)); err != nil {
 			return err
 		}
+	}
+	if modern {
+		return e.connection.enqueue(msg{Type: "workspace_new"})
 	}
 	return m.sendInput(id, data)
 }

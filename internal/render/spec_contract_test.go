@@ -19,7 +19,10 @@ func TestSPECActionBarGeometryStyleAndLabels(t *testing.T) {
 		if a.Area.H != 1 || a.Area.Y != s.PanesArea().Y+s.PanesArea().H || a.Copy.W != len([]rune(label)) {
 			t.Fatal("bar geometry", a)
 		}
-		if c := out.Frame.Cell(a.Area.X, a.Area.Y); c.Style.Bg != nil {
+		if a.Preset.X != a.Area.X || a.Preset.Y != a.Copy.Y || a.Preset.W != len(s.PresetLabel()) || a.Preset.X+a.Preset.W != a.Copy.X {
+			t.Fatal("sidebar preset must be immediately left of copy", a)
+		}
+		if c := out.Frame.Cell(a.Copy.X, a.Area.Y); c.Style.Bg != nil {
 			t.Fatal("copy background", c.Style)
 		}
 		for _, r := range []layout.Rect{a.Cycle, a.Rotate, a.Equalize} {
@@ -38,7 +41,7 @@ func TestSPECActionBarGeometryStyleAndLabels(t *testing.T) {
 		s := testState(model.SidebarWidth+width, 30)
 		out := Compose(Input{State: s})
 		for _, r := range []layout.Rect{out.ActionBar.Cycle, out.ActionBar.Rotate, out.ActionBar.Equalize} {
-			if r.W != 0 && (r.X < out.ActionBar.Area.X || r.X+r.W > out.ActionBar.Area.X+width) {
+			if r.W != 0 && (r.X < out.ActionBar.Copy.X+out.ActionBar.Copy.W || r.X+r.W > out.ActionBar.Area.X+width) {
 				t.Fatal("partial hit area", width, r)
 			}
 		}

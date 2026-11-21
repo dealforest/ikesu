@@ -52,7 +52,7 @@ func (a *App) sidebarPress(m uv.Mouse) bool {
 	if a.sidebarScrollbarPress(m) {
 		return true
 	}
-	if pointIn(m.X, m.Y, render.SidebarWidthRect(s)) {
+	if a.legacySidebarControls && pointIn(m.X, m.Y, render.LegacySidebarPresetRect(s)) {
 		a.sidebarPreset(s.CyclePreset())
 		return true
 	}

@@ -59,7 +59,9 @@ func TestServerSidebarWidthButtonCyclesRecordedPresets(t *testing.T) {
 	a := NewApp(s, runtime.NewSupervisor(), nil, t.TempDir())
 	a.SetServerUI()
 	for _, want := range []string{" WIDE ", " NARROW ", " NORMAL "} {
-		a.sidebarClick(uv.Mouse{X: 0, Y: 44, Button: uv.MouseLeft})
+		a.actionBar = render.Compose(render.Input{State: s, ServerUI: true}).ActionBar
+		button := a.actionBar.Preset
+		a.click(uv.Mouse{X: button.X, Y: button.Y, Button: uv.MouseLeft})
 		if s.PresetLabel() != want {
 			t.Fatalf("width click: got %q, want %q", s.PresetLabel(), want)
 		}

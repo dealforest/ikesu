@@ -54,7 +54,11 @@ func TestRenderExpandedSidebarFooter(t *testing.T) {
 	pid := s.Workspaces[0].Tabs[0].Layout.Focused()
 	out := Compose(Input{State: s, Panes: map[int]*PaneSnap{pid: blankSnap()}})
 	text := screenText(t, out, 80, 24)
-	for _, want := range []string{"[menu]", "[new]", "«"} {
+	footer := SidebarFooter(s)
+	if strings.Contains(frameLine(out.Frame, footer.Y)[:footer.W], "[new]") {
+		t.Fatal("global new button remains")
+	}
+	for _, want := range []string{"[menu]", "«"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in:\n%s", want, text)
 		}

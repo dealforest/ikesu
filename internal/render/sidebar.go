@@ -205,7 +205,7 @@ func agentRank(key string) int {
 
 // SidebarContent returns the interior rect of the (expanded) sidebar box and
 // how many rows are visible. Rows scroll inside it; the last interior row is
-// the fixed [menu]/[new] footer.
+// the fixed controls below the scrollable area.
 func SidebarContent(area layout.Rect) (x, y, w, rows int) {
 	x = area.X
 	y = area.Y
@@ -232,14 +232,51 @@ func SidebarToggleRect(s *model.AppState) layout.Rect {
 	return layout.Rect{X: area.X + (area.W-1)/2, Y: area.Y + area.H - 1, W: 1, H: 1}
 }
 
-// SidebarMenuRect / SidebarNewRect locate the footer's [menu] and [new].
-func SidebarMenuRect(s *model.AppState) layout.Rect {
+// SidebarMenuRect locates the menu at the bottom-right of the expanded sidebar.
+func SidebarMenuRect(s *model.AppState, serverUI bool) layout.Rect {
+	area := s.SidebarArea()
+	end := area.X + area.W - 1 // divider
+	if !serverUI {
+		end-- // collapse button
+	}
+	const width = len("[menu]")
+	if !s.SidebarVisible || end-area.X < width || area.H < 4 {
+		return layout.Rect{}
+	}
+	return layout.Rect{X: end - width, Y: area.Y + area.H - 1, W: width, H: 1}
+}
+
+// LegacySidebarMenuRect locates the menu on endpoints using the former footer.
+func LegacySidebarMenuRect(s *model.AppState) layout.Rect {
 	fr := SidebarFooter(s)
 	return layout.Rect{X: fr.X, Y: fr.Y, W: len("[menu]"), H: 1}
 }
-func SidebarNewRect(s *model.AppState) layout.Rect {
+
+// LegacySidebarNewRect locates the former global [new] control.
+func LegacySidebarNewRect(s *model.AppState) layout.Rect {
 	fr := SidebarFooter(s)
 	return layout.Rect{X: fr.X + fr.W - len("[new]"), Y: fr.Y, W: len("[new]"), H: 1}
+}
+
+// LegacySidebarPresetRect locates the old width preset on the sidebar's last row.
+func LegacySidebarPresetRect(s *model.AppState) layout.Rect {
+	a := s.SidebarArea()
+	if !s.SidebarVisible || a.W-1 < 8 || a.H < 1 {
+		return layout.Rect{}
+	}
+	return layout.Rect{X: a.X, Y: a.Y + a.H - 1, W: 8, H: 1}
+}
+
+func drawSidebarMenu(f *Frame, s *model.AppState, serverUI bool) {
+	r := SidebarMenuRect(s, serverUI)
+	if r.W == 0 {
+		return
+	}
+	style := uv.Style{Fg: f.Palette.Dim}
+	if serverUI {
+		style.Bg = f.Palette.PopupBG
+	}
+	f.Text(r.X, r.Y, "[menu]", style, r.X+r.W)
 }
 
 func drawSidebar(f *Frame, s *model.AppState, in Input) {
@@ -265,7 +302,7 @@ func drawSidebar(f *Frame, s *model.AppState, in Input) {
 	for y := area.Y; y < area.Y+area.H; y++ {
 		f.Set(area.X+area.W-1, y, "│", boundary)
 	}
-	ix, iy, iw, _ := SidebarContent(area)
+	ix, _, iw, _ := SidebarContent(area)
 	if iw < 1 {
 		return
 	}
@@ -310,14 +347,18 @@ func drawSidebar(f *Frame, s *model.AppState, in Input) {
 	}
 
 	drawSidebarPanel(f, s, in)
-	fr := SidebarFooter(s)
-	if fr.W > 1 && fr.Y >= iy {
-		f.Text(fr.X, fr.Y, "[menu]", uv.Style{Fg: f.Palette.Dim}, fr.X+fr.W)
-		f.Text(fr.X+fr.W-len("[new]"), fr.Y, "[new]", uv.Style{Fg: f.Palette.Dim}, fr.X+fr.W)
-	}
-	wr := SidebarWidthRect(s)
-	if wr.W > 0 {
-		f.Text(wr.X, wr.Y, s.PresetLabel(), uv.Style{Fg: f.Palette.Accent, Attrs: uv.AttrBold, Underline: uv.UnderlineSingle}, wr.X+wr.W)
+	if in.LegacySidebarControls {
+		fr := SidebarFooter(s)
+		if fr.W > 1 && fr.Y >= area.Y {
+			style := uv.Style{Fg: f.Palette.Dim}
+			f.Text(fr.X, fr.Y, "[menu]", style, fr.X+fr.W)
+			n := LegacySidebarNewRect(s)
+			f.Text(n.X, n.Y, "[new]", style, fr.X+fr.W)
+		}
+		preset := LegacySidebarPresetRect(s)
+		if preset.W > 0 {
+			f.Text(preset.X, preset.Y, s.PresetLabel(), uv.Style{Fg: f.Palette.Accent, Attrs: uv.AttrBold, Underline: uv.UnderlineSingle}, preset.X+preset.W)
+		}
 	}
 	if !in.ServerUI {
 		f.Set(area.X+area.W-2, area.Y+area.H-1, "«", uv.Style{Fg: f.Palette.Dim})
@@ -358,13 +399,6 @@ func sectionDropIndex(in Input) *int {
 	return nil
 }
 
-func SidebarWidthRect(s *model.AppState) layout.Rect {
-	a := s.SidebarArea()
-	if !s.SidebarVisible || a.W-1 < 8 || a.H < 1 {
-		return layout.Rect{}
-	}
-	return layout.Rect{X: a.X, Y: a.Y + a.H - 1, W: 8, H: 1}
-}
 func SectionNewRect(x, y, w int) layout.Rect {
 	if w < 6 {
 		return layout.Rect{}

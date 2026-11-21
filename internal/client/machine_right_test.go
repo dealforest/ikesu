@@ -136,7 +136,11 @@ func newRightMachineHarness(t *testing.T, idleFixture ...bool) *rightMachineHarn
 		t.Fatal(err)
 	}
 	cfgPath := filepath.Join(root, "config.toml")
-	if err := os.WriteFile(cfgPath, []byte("onboarding=false\n[session]\nresume_agents_on_restore=false\n[ui.sound]\nenabled=false\n"), 0600); err != nil {
+	configText := "onboarding=false\n[session]\nresume_agents_on_restore=false\n[ui.sound]\nenabled=false\n"
+	if os.Getenv("IKESU_RIGHT_TEST_SERVER_BIN") != "" {
+		configText += "[experimental]\nallow_nested=true\n"
+	}
+	if err := os.WriteFile(cfgPath, []byte(configText), 0600); err != nil {
 		t.Fatal(err)
 	}
 	out, err := os.CreateTemp(root, "terminal-")

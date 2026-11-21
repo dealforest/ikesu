@@ -28,11 +28,18 @@ func drawSidebarCopyFeedback(f *Frame, in Input) {
 	}
 	area := s.SidebarArea()
 	if area.W > 1 && area.H > 0 {
-		x, y, w := area.X, area.Y+area.H-1, area.W-1
-		f.Fill(x, y, w-1, 1, " ", uv.Style{})
+		x, y, w := area.X, area.Y+area.H-1, area.W-2
+		if menu := SidebarMenuRect(s, in.ServerUI); !in.LegacySidebarControls && menu.W > 0 {
+			if menu.X-x < ansi.StringWidth(in.Copied) && area.H >= 4 {
+				y = SidebarFooter(s).Y
+			} else {
+				w = min(w, menu.X-x)
+			}
+		}
+		f.Fill(x, y, w, 1, " ", uv.Style{})
 		copyStyle := uv.Style{Fg: f.Palette.Green, Bg: f.Palette.PopupBG, Attrs: uv.AttrBold}
-		label := truncate(in.Copied, w-1)
-		f.Text(x, y, label, copyStyle, x+w-1)
+		label := truncate(in.Copied, w)
+		f.Text(x, y, label, copyStyle, x+w)
 		prefix := strings.TrimSuffix(in.Copied, " lines")
 		for xx := x; xx < x+min(len([]rune(prefix)), len([]rune(label))); xx++ {
 			if cell := f.Cell(xx, y); cell != nil {

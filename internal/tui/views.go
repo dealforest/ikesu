@@ -216,6 +216,8 @@ func (a *App) draw() {
 		CopyLabel: a.copyLabel(),
 		Copy:      a.copyMark(),
 		CopyHint:  a.copyHint(),
+
+		LegacySidebarControls: a.legacySidebarControls,
 	}
 	if a.mobileSwitcher {
 		in.MobileMenu = a.mainMenuItems()
@@ -234,9 +236,7 @@ func (a *App) draw() {
 	}
 	if a.menu != nil {
 		if a.menu.kind == menuMain {
-			_, h := render.MenuSize(&a.menu.m)
-			a.menu.m.X = 0
-			a.menu.m.Y = render.SidebarMenuRect(a.st).Y - h
+			a.positionMainMenu(a.serverUI)
 		}
 		in.Menu = &a.menu.m
 	}

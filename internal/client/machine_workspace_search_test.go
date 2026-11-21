@@ -330,9 +330,9 @@ func TestWorkspaceSearchSidebarButtonOpensAndKeepsDensityButton(t *testing.T) {
 	if m.workspaceSearchInput(searchClick(t, densityX+1, b.Y)) || m.search != nil {
 		t.Fatal("density button click was taken")
 	}
-	// Neither is the new-workspace footer.
-	if m.workspaceSearchInput(searchClick(t, render.SidebarNewRect(local.State).X+1, render.SidebarNewRect(local.State).Y)) || m.search != nil {
-		t.Fatal("new button click was taken")
+	// Neither is the menu button.
+	if m.workspaceSearchInput(searchClick(t, render.SidebarMenuRect(local.State, true).X+1, render.SidebarMenuRect(local.State, true).Y)) || m.search != nil {
+		t.Fatal("menu button click was taken")
 	}
 	if !m.workspaceSearchInput(searchClick(t, b.X, b.Y)) || m.search == nil {
 		t.Fatal("tap did not open the search")

@@ -24,7 +24,8 @@ func TestSidebarPresetButtonLinksRightWidth(t *testing.T) {
 				a.preferenceSave = func(p endpoint.ViewPreferences) error { saved = p; return nil }
 				lo, hi, normal := a.st.SidebarBounds()
 				for _, want := range []int{hi, lo, normal} {
-					button := render.SidebarWidthRect(a.st)
+					a.actionBar = render.Compose(render.Input{State: a.st, ServerUI: true}).ActionBar
+					button := a.actionBar.Preset
 					if button.W == 0 {
 						t.Fatal("width button unavailable")
 					}

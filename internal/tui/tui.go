@@ -340,8 +340,9 @@ type App struct {
 	gitPending                               bool
 	jobsAt                                   time.Time             // last job snapshot
 	actionBar                                render.ActionBarRects // last frame's action bar hit areas
-	uiShowTab                                bool                  // [ui] show_tab_bar
-	uiHideSingle                             bool                  // [ui] hide_tab_bar_when_single_tab
+	legacySidebarControls                    bool
+	uiShowTab                                bool // [ui] show_tab_bar
+	uiHideSingle                             bool // [ui] hide_tab_bar_when_single_tab
 	inputSource                              platform.InputSource
 	uiBorders                                bool // [ui] pane_borders
 	serverUI                                 bool

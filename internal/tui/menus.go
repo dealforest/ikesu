@@ -303,6 +303,21 @@ func (a *App) openMainMenu(x, y int) {
 	a.menu = &uiMenu{justOpened: true, kind: menuMain, m: render.Menu{X: x, Y: y, Hover: -1, Sel: 0, Items: a.mainMenuItems(), Global: true}}
 }
 
+func (a *App) sidebarMenuRect(serverUI bool) layout.Rect {
+	if a.legacySidebarControls {
+		return render.LegacySidebarMenuRect(a.st)
+	}
+	return render.SidebarMenuRect(a.st, serverUI)
+}
+
+func (a *App) positionMainMenu(serverUI bool) {
+	r := a.sidebarMenuRect(serverUI)
+	if r.W > 0 {
+		w, h := render.MenuSize(&a.menu.m)
+		a.menu.m.X, a.menu.m.Y = r.X+r.W-w, r.Y-h
+	}
+}
+
 // activateMenu runs the command for menu item i and closes the menu.
 func (a *App) activateMenu(i int) {
 	m := a.menu
