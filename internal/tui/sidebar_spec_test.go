@@ -8,6 +8,7 @@ import (
 	"github.com/kazuph/ikesu/internal/render"
 	"github.com/kazuph/ikesu/internal/teststate"
 	"reflect"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -296,6 +297,9 @@ func TestG2FooterBlankAndSectionBody(t *testing.T) {
 		}
 	}
 	want := []string{"new workspace", "new tab", "delete idle panes…", "--", "settings", "keybinds", "reload config", "koi: on", "sidebar narrow", "sidebar normal", "sidebar wide", "--", "restore agents...", "reopen closed space…", "--", "detach", "--", "add machine...", "remove machine...", "--", "stop server", "restart"}
+	if runtime.GOOS == "darwin" {
+		want = append(want[:5], append([]string{"Android pairing QR..."}, want[5:]...)...)
+	}
 	if !reflect.DeepEqual(labels, want) {
 		t.Fatal(labels)
 	}

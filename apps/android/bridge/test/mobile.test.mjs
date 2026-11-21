@@ -71,6 +71,30 @@ test('ペアリング: 6桁が合うと許可リストに入り paired が届く
   assert.equal(mode, 0o600);
 });
 
+test('保存中に古い QR を閉じて新しい QR を開始しても、新しい接続は閉じない', async t => {
+  const env = await setup(t);
+  const old = env.hub.startPairing({ name: 'old', permissions: ['notify'] });
+  const oldApp = new FakeApp(env.relay, 'pair', old.id, env.bridgePublic);
+  assert.ok(await oldApp.handshake());
+  oldApp.sendJson(oldApp.pairMessage(old.secret));
+  await until(() => old.candidates.length === 1);
+  // confirmPairing reaches the real asynchronous devices.json write before returning.
+  const saving = env.hub.confirmPairing(oldApp.sas(old.secret));
+  env.hub.closePairing();
+  const current = env.hub.startPairing({ name: 'new', permissions: ['notify'] });
+  const newApp = new FakeApp(env.relay, 'pair', current.id, env.bridgePublic);
+  assert.ok(await newApp.handshake());
+  const saved = await saving;
+  assert.ok(saved);
+  assert.ok(env.hub.pairing === current, 'new QR remains current');
+  assert.equal(current.active, true);
+  newApp.sendJson(newApp.pairMessage(current.secret));
+  await until(() => current.candidates.length === 1);
+  assert.ok(await env.hub.confirmPairing(newApp.sas(current.secret)));
+  assert.equal(env.hub.pairing, null);
+  assert.equal((await loadDevices(env.configDir)).length, 2);
+});
+
 test('ペアリング: 6桁が違うと許可リストに入らない。5回外れると QR が無効になる', async t => {
   const env = await setup(t);
   const pairing = env.hub.startPairing({ name: 'PC', permissions: ['notify'] });
@@ -420,7 +444,28 @@ test('run 中の bridge へ手元の unix socket 経由で pair を頼める', a
   const qr = JSON.parse(await remote.start({ name: 'PC', permissions: ['notify'] }));
   assert.equal(qr.room, env.relayInfo.room);
   assert.deepEqual(await remote.confirm('000000'), { device: null, active: true });
+  const other = await remotePairing(dir);
+  await assert.rejects(other.start({ name: 'other', permissions: ['notify'] }), /既にペアリング/);
+  await other.cancel();
+  other.close();
+  assert.ok(control.hub.pairing?.active, 'another client cannot cancel the owner');
   remote.close();
+  await until(() => control.hub.pairing === null);
+  const expired = await remotePairing(dir);
+  await expired.start({ name: 'expired', permissions: ['notify'] });
+  const oldCandidates = [];
+  expired.onCandidate(value => oldCandidates.push(value));
+  control.hub.closePairing();
+  const next = await remotePairing(dir);
+  const newCandidates = [];
+  next.onCandidate(value => newCandidates.push(value));
+  await next.start({ name: 'next', permissions: ['notify'] });
+  expired.close();
+  control.hub.onCandidate({ name: 'new device' });
+  await until(() => newCandidates.length === 1);
+  assert.equal(oldCandidates.length, 0);
+  assert.ok(control.hub.pairing?.active, 'old disconnect cannot cancel the new QR');
+  next.close();
 });
 
 test('操作中に同じ operate を送り直しても、期限は延びない', async t => {

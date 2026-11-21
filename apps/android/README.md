@@ -21,6 +21,8 @@ adb devices -l
 adb -s <端末ID> install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
+PC の ikesu のグローバル `[menu]` → `Android pairing QR...` からも登録できます。リンク済みの bridge を使い、Mac の Terminal に QR と6桁の入力欄を開きます。表示前に Terminal ウィンドウを広げて Enter を押し、QR 全体が見えるようにしてください。中止は Terminal で Control-C を押します。メニューから同時に複数の登録は開始できません。この経路は macOS ホストの既定の ikesu 設定・状態ディレクトリを使います。bridge が見つからない場合は上の導入手順でリンクしてください。QR と入力した6桁は Terminal 上だけで扱い、ikesu の画面やジョブログに出しません。
+
 スマホの登録は2通りです。PC の前にいるときは `node bridge/main.mjs pair --name <PC の名前>` の QR をアプリで読み、アプリに出る6桁を PC に入力します。QR を読めないときは、アプリの「鍵を作る（公開鍵を出す）」で出た1行を PC で `node bridge/main.mjs devices add --name … --noise … --operate …` に渡し、出てきた接続情報をアプリの「接続情報で PC を追加」に貼ります。どちらも、アプリと PC に出る鍵の指紋が同じか確かめます。端末の通知許可も必要です。
 
 端末を紛失したときは `node bridge/main.mjs revoke <端末 ID>` で外します（端末 ID は `devices` で見られます）。動いている bridge は、再起動なしでその端末の接続を切ります。
