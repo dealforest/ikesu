@@ -65,7 +65,7 @@ func drawApprovalIndicators(f *Frame, in Input, out *Output) {
 }
 
 func approvalBorderlessSlot(f *Frame, in Input, out *Output, width int) (layout.Rect, bool) {
-	blocked := []layout.Rect{out.ActionBar.Copy, out.ActionBar.Cycle, out.ActionBar.Rotate, out.ActionBar.Equalize, out.NewTabRect, out.TabLeftRect, out.TabRightRect}
+	blocked := []layout.Rect{out.ActionBar.Preset, out.ActionBar.Copy, out.ActionBar.Cycle, out.ActionBar.Rotate, out.ActionBar.Equalize, out.NewTabRect, out.TabLeftRect, out.TabRightRect}
 	blocked = append(blocked, out.TabHits...)
 	blocked = append(blocked, SidebarViewForInput(in).Workspace.Rect)
 	for _, r := range out.AnswerRects {

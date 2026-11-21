@@ -366,6 +366,10 @@ func (a *App) actionBarHit(m uv.Mouse) bool {
 		a.copyCycle()
 		return true
 	}
+	if pointIn(m.X, m.Y, a.actionBar.Preset) {
+		a.sidebarPreset(a.st.CyclePreset())
+		return true
+	}
 	focused := a.st.FocusedPane()
 	if pointIn(m.X, m.Y, a.actionBar.Cycle) {
 		a.exec(model.CmdArrange{Pane: focused, Op: "cycle"})

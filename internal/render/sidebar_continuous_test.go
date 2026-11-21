@@ -82,6 +82,16 @@ func TestSidebarContinuousRowsAndStatusAtEveryWidth(t *testing.T) {
 								rx = in.State.Cols - 18 + 1
 							}
 							for y := 0; y < in.State.Rows; y++ {
+								if !right && y == in.State.Rows-1 {
+									// The menu follows the actual width, independently of the cropped sidebar content.
+									r := SidebarMenuRect(in.State, server)
+									for i, c := range "[menu]" {
+										if r.W > 0 && f.Cell(r.X+i, r.Y).Content != string(c) {
+											t.Fatalf("width %d: misplaced menu %+v", width, r)
+										}
+									}
+									continue
+								}
 								skip := 0
 								if width == 2 && statusRows[right][y] && (reference.Cell(rx, y).Content == " " || reference.Cell(rx, y).Content == "▌") {
 									skip = 1

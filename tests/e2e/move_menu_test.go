@@ -19,9 +19,8 @@ func TestRightClickMovesPaneAndTabBetweenSpaces(t *testing.T) {
 			t.Logf("== %s ==\n%s", name, strings.Join(strings.Split(screen, "\n")[:16], "\n"))
 		}
 	}
-	s.waitFor("boot", 10*time.Second, func(tx string) bool { return strings.Contains(tx, "[new]") })
-	nx, ny := s.find("[new]")
-	s.click(nx, ny)
+	s.waitFor("boot", 10*time.Second, func(tx string) bool { return strings.Contains(tx, "[menu]") })
+	s.createWorkspaceFromMenu()
 	second := regexp.MustCompile(`(?m)^[▌· ]*2 \S`)
 	s.waitFor("workspace 2", 5*time.Second, func(tx string) bool {
 		return strings.Contains(tx, " %2 terminal ") && second.MatchString(tx)

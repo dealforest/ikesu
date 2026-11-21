@@ -19,9 +19,13 @@ func TestClipboardFeedbackSidebarBothRuntimes(t *testing.T) {
 						in.SidebarConfig.UI.Toast.Clipboard.Enabled = &enabled
 						f := Compose(in).Frame
 						area := s.SidebarArea()
+						y := area.Y + area.H - 1
+						if menu := SidebarMenuRect(s, server); menu.W > 0 && menu.X-area.X < len(in.Copied) {
+							y = SidebarFooter(s).Y
+						}
 						var row strings.Builder
 						for x := area.X; x < area.X+area.W; x++ {
-							row.WriteString(f.Cell(x, area.Y+area.H-1).Content)
+							row.WriteString(f.Cell(x, y).Content)
 						}
 						got := row.String()
 						if visible && enabled {

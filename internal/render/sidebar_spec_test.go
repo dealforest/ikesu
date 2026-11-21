@@ -113,13 +113,20 @@ func TestG2SectionNewNarrowAndWidthFooter(t *testing.T) {
 			t.Fatal(w, r)
 		}
 	}
-	s := model.New("", 100, 30)
-	r := SidebarWidthRect(s)
-	if r.W != 8 {
-		t.Fatal(r)
+	s := model.New("/tmp", 100, 30)
+	for _, serverUI := range []bool{false, true} {
+		area := s.SidebarArea()
+		r := SidebarMenuRect(s, serverUI)
+		wantEnd := area.X + area.W - 2
+		if serverUI {
+			wantEnd++
+		}
+		if r.X+r.W != wantEnd || r.Y != s.Rows-1 || r.W != len("[menu]") {
+			t.Fatal(r)
+		}
 	}
 	s.Cols = 7
-	if SidebarWidthRect(s).W != 0 {
+	if SidebarMenuRect(s, false).W != 0 {
 		t.Fatal("invisible hit")
 	}
 }

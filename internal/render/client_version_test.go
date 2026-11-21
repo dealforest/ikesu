@@ -18,10 +18,15 @@ func TestClientVersionGapAndButtons(t *testing.T) {
 			text := screenText(t, out, cols, 24)
 			left, right := bar.Copy.X+bar.Copy.W, bar.Cycle.X
 			fits := !notice && bar.Area.H > 0 && bar.Copy.W > 0 && bar.Cycle.W > 0 && right-left >= len("ikesu v0.1.0")+2
-			if strings.Contains(text, "ikesu v0.1.0") != fits || out.ActionBar != bar {
+			footer := SidebarFooter(testState(cols, 24))
+			inFooter := !notice && !fits && bar.Preset.W > 0 && footer.W >= len("ikesu v0.1.0")+2
+			if strings.Contains(text, "ikesu v0.1.0") != (fits || inFooter) || out.ActionBar != bar {
 				t.Fatalf("cols=%d notice=%v: visibility or hit regions changed", cols, notice)
 			}
-			if !fits && screenText(t, base, cols, 24) != text {
+			if inFooter && !strings.Contains(frameLine(out.Frame, footer.Y), "ikesu v0.1.0") {
+				t.Fatalf("cols=%d: version is outside the former footer", cols)
+			}
+			if !fits && !inFooter && screenText(t, base, cols, 24) != text {
 				t.Fatalf("cols=%d: hidden version changed frame", cols)
 			}
 			if fits {

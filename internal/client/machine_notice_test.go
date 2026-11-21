@@ -53,7 +53,8 @@ func TestMachineNoticeUsesAvailableCellsAndExpiresAtTenSeconds(t *testing.T) {
 			}
 			x, y, end := base.ActionBar.Copy.X+base.ActionBar.Copy.W, base.ActionBar.Area.Y, base.ActionBar.Cycle.X
 			if end-x < len([]rune(text)) {
-				x, y, end = 1, 24, max(1, state.SidebarArea().W-1)
+				// Long notices use the freed sidebar footer, leaving the new menu visible.
+				x, y, end = 1, 22, max(1, state.SidebarArea().W-1)
 			}
 			for index, r := range []rune(text) {
 				if x+index >= end {

@@ -122,6 +122,9 @@ type JobDot struct {
 }
 
 type Input struct {
+	// LegacySidebarControls keeps input geometry aligned with older peers.
+	LegacySidebarControls bool
+
 	ApprovalCounts     map[int]int
 	ApprovalGuardPanes map[int]bool
 	Approval           *Approval
@@ -243,6 +246,7 @@ type Output struct {
 type ActionBarRects struct {
 	Area     layout.Rect
 	Copy     layout.Rect
+	Preset   layout.Rect
 	Cycle    layout.Rect
 	Rotate   layout.Rect
 	Equalize layout.Rect
@@ -328,6 +332,9 @@ func composeInto(in Input, machines *MachineSidebar, version string, notice bool
 	drawPanes(f, s, in, out)
 	f.Palette = previewPalette
 	drawSidebarBoundaries(f, s, in)
+	if !in.LegacySidebarControls {
+		drawSidebarMenu(f, s, in.ServerUI)
+	}
 	if machines != nil {
 		machines.drawPaneStatus(f, in, out)
 	}
@@ -336,7 +343,7 @@ func composeInto(in Input, machines *MachineSidebar, version string, notice bool
 		drawModeHint(f, area.X, area.Y+area.H-1, area.W, in.ModeHint)
 	}
 	drawActionBar(f, s, in, out)
-	drawClientVersion(f, version, notice, out)
+	drawClientVersion(f, in, version, notice, out)
 	if s.Mobile() {
 		drawMobile(f, in, out)
 	}
@@ -684,8 +691,8 @@ func drawCopyCursor(f *Frame, x, y int, endpoint bool) {
 
 // --- bottom pane action bar (SPEC G1) ---
 
-// drawActionBar draws the one-row bar under the panes: the copy label on
-// the left, CYCLE LAYOUT / ROTATE PANES / EQUALIZE right-aligned with
+// drawActionBar draws the one-row bar under the panes: the sidebar preset
+// and copy controls on the left, CYCLE LAYOUT / ROTATE PANES / EQUALIZE right-aligned with
 // 1-cell gaps and a 1-cell right margin. Buttons that do not fit are
 // neither drawn nor clickable.
 func drawActionBar(f *Frame, s *model.AppState, in Input, out *Output) {
@@ -702,11 +709,19 @@ func drawActionBar(f *Frame, s *model.AppState, in Input, out *Output) {
 	if copyLabel == "" {
 		copyLabel = " COPY "
 	}
+	x := area.X
 	cw := len([]rune(copyLabel))
+	preset := s.PresetLabel()
+	if sidebar := s.SidebarArea(); !in.LegacySidebarControls && s.SidebarVisible && sidebar.W > 0 && area.W >= cw+len(preset) {
+		f.Text(x, area.Y, preset, btn, area.X+area.W)
+		out.ActionBar.Preset = layout.Rect{X: x, Y: area.Y, W: len(preset), H: 1}
+		x += len(preset)
+	}
 	if cw > 0 {
-		cw = min(cw, area.W)
-		f.Text(area.X, area.Y, copyLabel, btn, area.X+area.W)
-		out.ActionBar.Copy = layout.Rect{X: area.X, Y: area.Y, W: cw, H: 1}
+		cw = min(cw, area.X+area.W-x)
+		f.Text(x, area.Y, copyLabel, btn, area.X+area.W)
+		out.ActionBar.Copy = layout.Rect{X: x, Y: area.Y, W: cw, H: 1}
+		x += cw
 	}
 
 	labels := []struct {
@@ -717,14 +732,18 @@ func drawActionBar(f *Frame, s *model.AppState, in Input, out *Output) {
 		{" ROTATE PANES ", &out.ActionBar.Rotate},
 		{" EQUALIZE ", &out.ActionBar.Equalize},
 	}
-	total := 1 + len(labels) - 1 // right margin and inter-button gaps
+	total := 0
 	for _, l := range labels {
-		total += len([]rune(l.text))
+		total += len(l.text)
 	}
-	x := area.X + area.W - total
-	if x < area.X {
-		x = area.X // too narrow: left-align and drop what does not fit
+	gap, margin := 1, 1
+	if in.LegacySidebarControls {
+		x = area.X
+	} else if area.X+area.W-x < total+len(labels) {
+		// The labels carry their own padding when the extra gaps do not fit.
+		gap, margin = 0, 0
 	}
+	x = max(x, area.X+area.W-total-gap*(len(labels)-1)-margin)
 	for _, l := range labels {
 		w := len([]rune(l.text))
 		if x+w > area.X+area.W {
@@ -732,7 +751,7 @@ func drawActionBar(f *Frame, s *model.AppState, in Input, out *Output) {
 		}
 		f.Text(x, area.Y, l.text, btn, area.X+area.W)
 		*l.slot = layout.Rect{X: x, Y: area.Y, W: w, H: 1}
-		x += w + 1
+		x += w + gap
 	}
 }
 

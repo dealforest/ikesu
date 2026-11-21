@@ -24,6 +24,7 @@ func TestSidebarPanelDrawsPluginLinesWithColorsAboveFooter(t *testing.T) {
 	}
 	f := NewFrame(120, 40)
 	drawSidebar(f, s, Input{State: s, SidebarPanel: panel})
+	drawSidebarMenu(f, s, false)
 	fr := SidebarFooter(s)
 	lines := []string{}
 	for y := fr.Y - 5; y < fr.Y; y++ {
@@ -41,7 +42,7 @@ func TestSidebarPanelDrawsPluginLinesWithColorsAboveFooter(t *testing.T) {
 	if c := f.Cell(fr.X+7, fr.Y-4); c == nil || c.Content != "█" || !reflect.DeepEqual(c.Style.Fg, color.RGBA{229, 72, 77, 255}) {
 		t.Fatalf("colored cell = %+v", c)
 	}
-	if !strings.Contains(frameLine(f, fr.Y), "[menu]") {
+	if !strings.Contains(frameLine(f, s.Rows-1), "[menu]") {
 		t.Fatal("footer moved")
 	}
 	heads := SidebarPanelLayout(s, panel)

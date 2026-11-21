@@ -340,17 +340,21 @@ func countPanes(screen string) int {
 	return n
 }
 
+func (s *session) createWorkspaceFromMenu() {
+	x, y := s.find("[menu]")
+	s.click(x, y)
+	s.waitFor("new workspace menu", 5*time.Second, func(text string) bool { return strings.Contains(text, "new workspace") })
+	x, y = s.find("new workspace")
+	s.click(x, y)
+}
+
 func TestMouseFullFlow(t *testing.T) {
 	t.Parallel()
 	s := start(t)
-	s.waitFor("boot", 10*time.Second, func(tx string) bool { return strings.Contains(tx, "[new]") })
+	s.waitFor("boot", 10*time.Second, func(tx string) bool { return strings.Contains(tx, "[menu]") })
 
-	// 1. [new] creates a workspace.
-	nx, ny := s.find("[new]")
-	if nx < 0 {
-		t.Fatal("[new] not found")
-	}
-	s.click(nx, ny)
+	// 1. The bottom-right menu still creates a workspace.
+	s.createWorkspaceFromMenu()
 	// Git discovery can replace the initial cwd label before we see the frame.
 	secondWorkspace := regexp.MustCompile(`(?m)^[▌· ]*2 \S`)
 	s.waitFor("workspace 2", 5*time.Second, func(tx string) bool {
@@ -364,8 +368,6 @@ func TestMouseFullFlow(t *testing.T) {
 	})
 
 	// 3. Right-click inside the pane → menu → Split vertical.
-	px, _ := s.find("[new]")
-	_ = px
 	paneX, paneY := termW/2+14, termH/2
 	s.rightClick(paneX, paneY)
 	s.waitFor("menu", 5*time.Second, func(tx string) bool {
@@ -406,7 +408,7 @@ func TestMouseFullFlow(t *testing.T) {
 func TestSplitMouseReportProducesNoText(t *testing.T) {
 	t.Parallel()
 	s := start(t)
-	s.waitFor("boot", 10*time.Second, func(tx string) bool { return strings.Contains(tx, "[new]") })
+	s.waitFor("boot", 10*time.Second, func(tx string) bool { return strings.Contains(tx, "[menu]") })
 	// A mouse press sequence split across two writes must not leak
 	// fragments like "35;61;8M" into the pane as text.
 	s.send("\x1b[<35;60;8")
@@ -422,7 +424,7 @@ func TestSplitMouseReportProducesNoText(t *testing.T) {
 func TestDividerDrag(t *testing.T) {
 	t.Parallel()
 	s := start(t)
-	s.waitFor("boot", 10*time.Second, func(tx string) bool { return strings.Contains(tx, "[new]") })
+	s.waitFor("boot", 10*time.Second, func(tx string) bool { return strings.Contains(tx, "[menu]") })
 	s.send("\x02v")
 	s.waitFor("two panes", 5*time.Second, func(tx string) bool { return countPanes(tx) >= 2 })
 
@@ -454,7 +456,7 @@ func TestDividerDrag(t *testing.T) {
 func TestWheelScrollback(t *testing.T) {
 	t.Parallel()
 	s := start(t)
-	s.waitFor("boot", 10*time.Second, func(tx string) bool { return strings.Contains(tx, "[new]") })
+	s.waitFor("boot", 10*time.Second, func(tx string) bool { return strings.Contains(tx, "[menu]") })
 	// Wait for the shell prompt inside the pane before typing; under -race
 	// the pane shell (zshrc/direnv) can take several seconds to be ready.
 	s.waitFor("prompt", 15*time.Second, func(tx string) bool { return strings.Contains(tx, "❯") })
@@ -482,7 +484,7 @@ func TestWheelScrollback(t *testing.T) {
 func TestDragSelectCopy(t *testing.T) {
 	t.Parallel()
 	s := startLocal(t)
-	s.waitFor("boot", 10*time.Second, func(tx string) bool { return strings.Contains(tx, "[new]") })
+	s.waitFor("boot", 10*time.Second, func(tx string) bool { return strings.Contains(tx, "[menu]") })
 	s.waitFor("prompt", 15*time.Second, func(tx string) bool { return strings.Contains(tx, "❯") })
 	s.send("echo SELECT_ME\n")
 	s.waitFor("echo output", 10*time.Second, func(tx string) bool { return strings.Contains(tx, "SELECT_ME") })
@@ -506,7 +508,7 @@ func TestDragSelectCopy(t *testing.T) {
 func TestCopyModeSelectYank(t *testing.T) {
 	t.Parallel()
 	s := startLocal(t)
-	s.waitFor("boot", 10*time.Second, func(tx string) bool { return strings.Contains(tx, "[new]") })
+	s.waitFor("boot", 10*time.Second, func(tx string) bool { return strings.Contains(tx, "[menu]") })
 	s.waitFor("prompt", 15*time.Second, func(tx string) bool { return strings.Contains(tx, "❯") })
 	s.send("echo COPYMARK\n")
 	s.waitFor("echo output", 10*time.Second, func(tx string) bool { return strings.Contains(tx, "COPYMARK") })
@@ -558,7 +560,7 @@ func TestActionBarCopyCycle(t *testing.T) {
 func TestTmuxSplitKeys(t *testing.T) {
 	t.Parallel()
 	s := start(t)
-	s.waitFor("boot", 10*time.Second, func(tx string) bool { return strings.Contains(tx, "[new]") })
+	s.waitFor("boot", 10*time.Second, func(tx string) bool { return strings.Contains(tx, "[menu]") })
 	s.send("\x02v") // observed vertical binding
 	s.waitFor("vertical split", 5*time.Second, func(tx string) bool {
 		return countPanes(tx) >= 2
@@ -575,7 +577,7 @@ func TestServerRestartKeepsPanes(t *testing.T) {
 	t.Parallel()
 	s := start(t)
 	s.waitFor("boot", 10*time.Second, func(tx string) bool {
-		return strings.Contains(tx, "[new]")
+		return strings.Contains(tx, "[menu]")
 	})
 
 	// Two panes in the initial workspace.
@@ -676,7 +678,7 @@ func TestPaneEnvNoColor(t *testing.T) {
 func TestKeybindHelp(t *testing.T) {
 	t.Parallel()
 	s := start(t)
-	s.waitFor("boot", 15*time.Second, func(tx string) bool { return strings.Contains(tx, "[new]") })
+	s.waitFor("boot", 15*time.Second, func(tx string) bool { return strings.Contains(tx, "[menu]") })
 	s.send("\x02?")
 	s.waitFor("help open", 5*time.Second, func(tx string) bool {
 		return strings.Contains(tx, "keybinds") && strings.Contains(tx, "available commands and configured shortcuts") &&
@@ -701,7 +703,7 @@ func TestBootWithoutTerminalQueryRepliesAllowsInputAndLateReplies(t *testing.T) 
 	var raw strings.Builder
 	s.observeOutput = func(b []byte) { raw.Write(b) }
 	s.waitFor("boot without query replies", 10*time.Second, func(tx string) bool {
-		return strings.Contains(tx, "[new]") && countPanes(tx) == 1
+		return strings.Contains(tx, "[menu]") && countPanes(tx) == 1
 	})
 	for _, query := range []string{"\x1b[?1016$p", "\x1b[16t", "\x1b[14t"} {
 		if !strings.Contains(raw.String(), query) {

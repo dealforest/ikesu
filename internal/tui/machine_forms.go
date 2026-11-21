@@ -32,7 +32,8 @@ func (f *MachineForms) Open(action string, state *model.AppState) error {
 	case "remove":
 		f.app.removeMachineMenu()
 	case "menu":
-		f.app.openMainMenu(0, render.SidebarMenuRect(state).Y)
+		f.app.openMainMenu(0, 0)
+		f.app.positionMainMenu(true)
 	default:
 		return fmt.Errorf("endpoint_action_unsupported: machine menu %q", action)
 	}

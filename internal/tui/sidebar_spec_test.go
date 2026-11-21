@@ -279,10 +279,10 @@ func TestG2HeaderTogglesPersistAndResetScroll(t *testing.T) {
 func TestG2FooterBlankAndSectionBody(t *testing.T) {
 	teststate.Lock(t)
 	a := specRuntimeApp(t)
-	r := render.SidebarMenuRect(a.st)
-	n := render.SidebarNewRect(a.st)
-	if r.X+r.W > n.X {
-		t.Fatal("footer order")
+	r := render.SidebarMenuRect(a.st, a.serverUI)
+	area := a.st.SidebarArea()
+	if r.Y != area.Y+area.H-1 || r.X+r.W != render.SidebarToggleRect(a.st).X {
+		t.Fatalf("menu is outside the bottom-right footer: %+v", r)
 	}
 	sidebarEvent(a, input.KindMouseClick, r.X, r.Y)
 	if a.menu == nil || a.menu.kind != menuMain {
@@ -305,9 +305,15 @@ func TestG2FooterBlankAndSectionBody(t *testing.T) {
 	}
 	a.menu = nil
 	before := len(a.st.Workspaces)
-	sidebarEvent(a, input.KindMouseClick, n.X, n.Y)
+	footer := render.SidebarFooter(a.st)
+	sidebarEvent(a, input.KindMouseClick, footer.X+footer.W-1, footer.Y)
+	if len(a.st.Workspaces) != before || a.menu != nil {
+		t.Fatal("former footer new location is still active")
+	}
+	sidebarEvent(a, input.KindMouseClick, r.X, r.Y)
+	a.activateMenu(0)
 	if len(a.st.Workspaces) != before+1 || a.st.ActiveWorkspace().SidebarSection() != model.SectionNone {
-		t.Fatal("footer new section")
+		t.Fatal("main menu new workspace section")
 	}
 	a.setSection(0, model.SectionWork)
 	source := a.st.Active

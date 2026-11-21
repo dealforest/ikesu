@@ -15,6 +15,10 @@ import (
 	"github.com/kazuph/ikesu/internal/tui"
 )
 
+func legacySidebarControls(w *writer) bool {
+	return !endpoint.Allows(w.available, endpoint.MachineGeneration, w.methods, "workspace_new")
+}
+
 // Each connection keeps its own decoder and writer. Only the terminal
 // supervisor reads stdin and decides which endpoint receives that input.
 type endpointConnection struct {

@@ -13,7 +13,7 @@ import (
 )
 
 // SidebarPanel is the block at the bottom of the left sidebar, above the
-// [menu]/[new] footer: one section per sidebar plugin with its output. Each
+// sidebar controls: one section per sidebar plugin with its output. Each
 // section folds from its heading like a space section.
 type SidebarPanel struct {
 	Sections []SidebarPanelSection

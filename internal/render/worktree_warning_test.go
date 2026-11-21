@@ -15,11 +15,13 @@ func TestEndpointWorktreeRejectionKeepsActionButtonsAndToast(t *testing.T) {
 		in := Input{State: s, ServerUI: true, ConfigWarningBanner: true, ConfigWarning: "ikesu worktree actions require a workspace inside a Git work tree."}
 		base := Compose(Input{State: s, ServerUI: true})
 		out := Compose(in)
-		if c := out.Frame.Cell(34, 24); c.Content != "i" || c.Style.Fg != out.Frame.Palette.Red || c.Style.Bg != nil {
+		start := out.ActionBar.Copy.X + out.ActionBar.Copy.W + 2
+		if c := out.Frame.Cell(start, 24); c.Content != "i" || c.Style.Fg != out.Frame.Palette.Red || c.Style.Bg != nil {
 			t.Fatal("rejection did not occupy the observed action bar slot", c)
 		}
 		if cols == 100 {
-			if out.Frame.Cell(56, 24).Content != "…" || *out.Frame.Cell(57, 24) != *base.Frame.Cell(57, 24) || *out.Frame.Cell(58, 24) != *base.Frame.Cell(58, 24) {
+			first := out.ActionBar.Cycle.X
+			if out.Frame.Cell(first-3, 24).Content != "…" || *out.Frame.Cell(first-2, 24) != *base.Frame.Cell(first-2, 24) || *out.Frame.Cell(first-1, 24) != *base.Frame.Cell(first-1, 24) {
 				t.Fatal("rejection did not leave the recorded two-cell gap before CYCLE")
 			}
 		}
@@ -32,7 +34,7 @@ func TestEndpointWorktreeRejectionKeepsActionButtonsAndToast(t *testing.T) {
 		}
 		in.Settings = &Settings{Theme: "catppuccin"}
 		out = Compose(in)
-		if out.Frame.Cell(34, 24).Style.Attrs&uv.AttrFaint == 0 {
+		if out.Frame.Cell(start, 24).Style.Attrs&uv.AttrFaint == 0 {
 			t.Fatal("rejection did not dim behind settings")
 		}
 		in.Settings = nil

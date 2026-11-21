@@ -30,6 +30,7 @@ func (m *machineClient) paint() error {
 		return err
 	}
 	in := *e.snapshot
+	in.LegacySidebarControls = e.connection != nil && legacySidebarControls(e.connection.writer)
 	in.Koi = true
 	if m.settings != nil && m.settings.config != nil {
 		in.Koi = m.settings.config.KoiEnabled()
@@ -120,6 +121,9 @@ func (m *machineClient) paint() error {
 			x = 1
 			y = f.H - 1
 			end = max(x, in.State.SidebarArea().W-1)
+			if menu := render.SidebarMenuRect(in.State, in.ServerUI); !in.LegacySidebarControls && menu.W > 0 {
+				y = render.SidebarFooter(in.State).Y
+			}
 		}
 		for _, r := range m.notice {
 			if x >= end {
