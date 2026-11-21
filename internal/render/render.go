@@ -343,7 +343,7 @@ func composeInto(in Input, machines *MachineSidebar, version string, notice bool
 		drawModeHint(f, area.X, area.Y+area.H-1, area.W, in.ModeHint)
 	}
 	drawActionBar(f, s, in, out)
-	drawClientVersion(f, version, notice, out)
+	drawClientVersion(f, in, version, notice, out)
 	if s.Mobile() {
 		drawMobile(f, in, out)
 	}
