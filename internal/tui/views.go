@@ -482,6 +482,9 @@ func (a *App) paneSnaps() map[int]*render.PaneSnap {
 					branchCwds[filepath.Clean(cwd)] = true
 				}
 				snap.Branch = a.cachedGitBranch(cwd)
+				if rec := a.sessions[pid]; sn.ForegroundAgent == "agy" && rec != nil && rec.Agent == "agy" {
+					snap.Agent = "agy"
+				}
 				snap.Agent, snap.Restore = a.paneRestoreLabel(pid, snap.Agent)
 				out[pid] = snap
 			}

@@ -251,6 +251,10 @@ type App struct {
 	restoreHook         func(dryRun bool) // main menu "Restore agents…"
 	localRestore        bool
 	localObservedStart  map[int]time.Time
+	localAgyGroup       map[int]int
+	localAgyPending     map[int]bool
+	localAgySeen        map[int]localAgyScan
+	localAgyResults     chan localAgyResult
 	spaceClosedHook     func(ws session.Workspace, label, reason string) // whole space removed with its panes
 	closedSpacesList    func() []ClosedSpace
 	skipClosedRecord    bool // rollback of a space this app just created

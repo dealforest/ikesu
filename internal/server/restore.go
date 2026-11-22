@@ -123,6 +123,8 @@ func (s *Server) ledgerPut(pid int, rec tui.AgentRecord) {
 // ledgerDel drops the ledger row for a permanently closed pane.
 func (s *Server) ledgerDel(pid int) {
 	delete(s.observedStart, pid)
+	delete(s.agyScans, pid)
+	delete(s.agyObservedGroup, pid)
 	s.enqueueLedger(ledgerWrite{row: dispatch.PaneSession{PaneID: pid}, delete: true})
 }
 
@@ -300,11 +302,25 @@ func (s *Server) observeAgentSessions() {
 // own resume-shape cmdline. Anything ambiguous stays unrecorded.
 func (s *Server) observePaneSession(pid int) {
 	observation, ok := s.prepareSessionObservation(pid)
-	if !ok {
+	if !ok || observation.snapshot.ScreenAgent() == "agy" {
 		return
 	}
 	observation.observe()
 	s.applySessionObservation(observation)
+}
+
+type agyScanKey struct {
+	pane      *runtime.Pane
+	revision  uint64
+	fg        int
+	inputSeq  uint64
+	record    tui.AgentRecord
+	hasRecord bool
+}
+
+type agyScanEntry struct {
+	key   agyScanKey
+	retry session.AgyScanRetry
 }
 
 type sessionObservation struct {
@@ -314,11 +330,15 @@ type sessionObservation struct {
 	record        tui.AgentRecord
 	hasRecord     bool
 	previousStart time.Time
+	previousGroup int
 	forceRecheck  bool
 	start         time.Time
 	startKnown    bool
+	processGroup  int
+	agyKey        agyScanKey
 	result        tui.AgentRecord
 	found         bool
+	agyFailed     bool
 }
 
 func (s *Server) prepareSessionObservations() []sessionObservation {
@@ -342,31 +362,59 @@ func (s *Server) prepareSessionObservation(pid int) (sessionObservation, bool) {
 		return sessionObservation{}, false
 	}
 	snap := rp.Snapshot()
-	agent := snap.AgentID
+	agent := snap.ScreenAgent()
 	if agent == "" {
 		return sessionObservation{}, false
 	}
 	rec, hasRec := s.app.SessionRecord(pid)
-	if hasRec && rec.Value != "" && strings.HasPrefix(rec.Source, "report:") {
+	if agent != "agy" && hasRec && rec.Value != "" && strings.HasPrefix(rec.Source, "report:") {
 		return sessionObservation{}, false
 	}
 	conflict := hasRec && rec.Agent == "codex" && rec.Kind == "id" && s.codexSessionIDTaken(pid, rec.Value)
+	_, inputSeq := rp.IdleActivity()
+	key := agyScanKey{pane: rp, revision: snap.Revision, fg: snap.FgPID, inputSeq: inputSeq, record: rec, hasRecord: hasRec}
+	if agent == "agy" {
+		if prior, ok := s.agyScans[pid]; ok && prior.key == key && !prior.retry.MayScan() {
+			return sessionObservation{}, false
+		}
+	}
 	return sessionObservation{pid: pid, pane: rp, snapshot: snap, record: rec,
-		hasRecord: hasRec, previousStart: s.observedStart[pid], forceRecheck: conflict}, true
+		hasRecord: hasRec, previousStart: s.observedStart[pid], previousGroup: s.agyObservedGroup[pid], forceRecheck: conflict, agyKey: key}, true
 }
 
 func (o *sessionObservation) observe() {
 	job := o.pane.ForegroundJob()
 	o.start, o.startKnown = session.ProcessStart(job)
-	if !o.forceRecheck && o.startKnown && o.hasRecord && o.record.Value != "" && o.previousStart.Equal(o.start) {
+	o.processGroup = job.ProcessGroupID
+	if o.snapshot.ScreenAgent() != "agy" && !o.forceRecheck && o.startKnown && o.hasRecord && o.record.Value != "" && o.previousStart.Equal(o.start) {
 		return
 	}
-	if o.snapshot.AgentID == "codex" {
+	if o.snapshot.ScreenAgent() == "codex" {
 		if id, ok := session.ObserveCmdline(job); ok {
-			o.result = tui.AgentRecord{Agent: o.snapshot.AgentID, Kind: "id", Value: id, Title: o.record.Title, Source: "observed:cmdline"}
+			o.result = tui.AgentRecord{Agent: o.snapshot.ScreenAgent(), Kind: "id", Value: id, Title: o.record.Title, Source: "observed:cmdline"}
 			o.found = true
 			return
 		}
+	}
+	if o.snapshot.ScreenAgent() == "agy" {
+		o.agyFailed = true
+		if !o.startKnown {
+			return
+		}
+		id, state := session.ObserveAgyPresence(job, o.pane.SessionEnvironment())
+		o.agyFailed = state == session.AgyPresenceUnknown
+		id, source, update := session.SelectAgySession(state, id, job, o.previousStart, o.start, o.previousGroup, o.processGroup, o.record.Agent, o.record.Value, o.record.Source)
+		if update {
+			o.result = tui.AgentRecord{Agent: "agy", Value: id, Source: source}
+			if id != "" {
+				o.result.Kind = "id"
+			}
+			if o.record.Agent == "agy" {
+				o.result.Title = o.record.Title
+			}
+			o.found = true
+		}
+		return
 	}
 	if o.startKnown {
 		if id, found := session.ObserveProcessSession(o.snapshot.AgentID, o.snapshot.Cwd, o.start, job, o.pane.SessionEnvironment()); found {
@@ -382,21 +430,21 @@ func (o *sessionObservation) observe() {
 	}
 	if id, ok2 := session.ObserveCmdline(job); ok2 {
 		source := "observed:cmdline"
-		if spec, native := nativeResumeAgents[o.snapshot.AgentID]; native {
+		if spec, native := nativeResumeAgents[o.snapshot.ScreenAgent()]; native {
 			source = spec.Source
 		}
-		o.result = tui.AgentRecord{Agent: o.snapshot.AgentID, Kind: "id", Value: id, Title: o.record.Title, Source: source}
+		o.result = tui.AgentRecord{Agent: o.snapshot.ScreenAgent(), Kind: "id", Value: id, Title: o.record.Title, Source: source}
 		o.found = true
 	}
 }
 
 func (s *Server) applySessionObservation(o sessionObservation) {
-	if !o.found || s.sup.Get(o.pid) != o.pane {
+	if (!o.found && o.snapshot.ScreenAgent() != "agy") || s.sup.Get(o.pid) != o.pane {
 		return
 	}
 	current := o.pane.Snapshot()
 	rec, hasRec := s.app.SessionRecord(o.pid)
-	if current.AgentID != o.snapshot.AgentID || current.Cwd != o.snapshot.Cwd || current.FgPID != o.snapshot.FgPID || current.Dead || hasRec != o.hasRecord || rec != o.record || !s.observedStart[o.pid].Equal(o.previousStart) {
+	if current.ScreenAgent() != o.snapshot.ScreenAgent() || (o.snapshot.ScreenAgent() == "agy" && current.ForegroundAgent != o.snapshot.ForegroundAgent) || current.Cwd != o.snapshot.Cwd || current.FgPID != o.snapshot.FgPID || current.Dead || hasRec != o.hasRecord || rec != o.record || !s.observedStart[o.pid].Equal(o.previousStart) {
 		s.markSessionDirty()
 		return
 	}
@@ -408,8 +456,67 @@ func (s *Server) applySessionObservation(o sessionObservation) {
 		}
 		return
 	}
+	if o.snapshot.ScreenAgent() == "agy" {
+		// FD reads happen off the app loop. Reject a result if the pane has
+		// output since the read began or its foreground process changed.
+		job := o.pane.ForegroundJob()
+		start, ok := session.ProcessStart(job)
+		_, inputSeq := o.pane.IdleActivity()
+		if current.Revision != o.snapshot.Revision || inputSeq != o.agyKey.inputSeq || (o.startKnown && (!ok || job.ProcessGroupID != o.processGroup || !start.Equal(o.start))) {
+			s.markSessionDirty()
+			return
+		}
+		if s.agyScans == nil {
+			s.agyScans = map[int]agyScanEntry{}
+		}
+		entry := s.agyScans[o.pid]
+		if entry.key != o.agyKey {
+			entry = agyScanEntry{key: o.agyKey}
+		}
+		if o.agyFailed {
+			if entry.retry.Fail() {
+				s.markSessionDirty()
+			}
+		} else {
+			entry.retry.Complete()
+		}
+		s.agyScans[o.pid] = entry
+		if !o.found {
+			return
+		}
+	}
+	if o.result.Agent == "agy" && hasRec && rec == o.result {
+		if o.result.Agent == "agy" && o.startKnown {
+			if s.agyObservedGroup == nil {
+				s.agyObservedGroup = map[int]int{}
+			}
+			s.agyObservedGroup[o.pid] = o.processGroup
+		}
+		if o.startKnown {
+			if s.observedStart == nil {
+				s.observedStart = map[int]time.Time{}
+			}
+			s.observedStart[o.pid] = o.start
+		}
+		return
+	}
 	s.app.RecordSession(o.pid, o.result)
-	s.ledgerPut(o.pid, o.result)
+	if o.result.Value == "" {
+		s.ledgerDel(o.pid)
+	} else {
+		s.ledgerPut(o.pid, o.result)
+	}
+	if o.result.Agent == "agy" {
+		key := o.agyKey
+		key.record, key.hasRecord = o.result, true
+		entry := s.agyScans[o.pid]
+		entry.key = key
+		s.agyScans[o.pid] = entry
+		if s.agyObservedGroup == nil {
+			s.agyObservedGroup = map[int]int{}
+		}
+		s.agyObservedGroup[o.pid] = o.processGroup
+	}
 	if o.startKnown {
 		if s.observedStart == nil {
 			s.observedStart = map[int]time.Time{}
@@ -449,12 +556,15 @@ func (s *Server) runAgentRestore(dryRun bool) api.AgentRestoreResult {
 		for _, t := range ws.Tabs {
 			for _, pid := range t.Layout.Order() {
 				v := s.resolvePaneSession(pid)
-				if rp := s.sup.Get(pid); rp != nil && rp.Snapshot().AgentID != "" {
+				if rp := s.sup.Get(pid); rp != nil && rp.AgentRunningForRestore(v.agent) {
 					running++
 					// Never double-launch a live agent; surface the
 					// per-pane skip with its spec reason.
 					reason := "agent already running"
 					agent := v.agent
+					if rp.Snapshot().ForegroundAgent == "agy" {
+						agent = "agy"
+					}
 					if agent == "" {
 						agent = rp.Snapshot().AgentID
 					}

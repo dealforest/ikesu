@@ -25,6 +25,11 @@ ikesu の機能仕様の正は herdr fork の `~/src/github.com/kazuph/herdr/SPE
 - `server.stop` と画面の「stop server」の確認操作は、従来どおりペイン・画面・サーバーを終了する。
 - 復元可能な現在のAIペインの保持、ほかのスペース・タブの閉鎖、保存・復元・live-handoff・複数画面・自動スペース名の引き継ぎは維持する。
 
+## Antigravity CLI の会話の保存と復元
+
+- 前面の `agy` プロセスが開いている会話のIDを一意に照合できたとき、そのペインに保存して `saved session` を表示する。
+- 復元は保存したIDを使う `agy --conversation <id>` で行う。フォルダの最新会話からペインのIDを推測しない。
+
 ## P1. 性能要件
 
 ### ペインのスクロールバーとサイドバー境界（2026-10-29 店長承認）

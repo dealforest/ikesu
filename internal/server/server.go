@@ -221,7 +221,9 @@ type Server struct {
 
 	// observedStart remembers the process start an observed session id
 	// was recorded for, so the same process is never re-observed.
-	observedStart map[int]time.Time
+	observedStart    map[int]time.Time
+	agyObservedGroup map[int]int
+	agyScans         map[int]agyScanEntry
 
 	// domain event bus (SPEC G1 events): journal replay + live push
 	evMu      sync.Mutex
