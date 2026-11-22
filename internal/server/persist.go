@@ -236,6 +236,12 @@ func (s *Server) paneRecordFiller() func(w *session.Workspace, p *session.Pane) 
 			p.Cwd = w.Cwd
 		}
 		if rec, ok := s.app.SessionRecord(p.ID); ok {
+			// A stale report from another agent must not describe a live agy
+			// pane while its conversation has yet to be identified.
+			if rp := s.sup.Get(p.ID); rp != nil && rp.Snapshot().ForegroundAgent == "agy" && rec.Agent != "agy" {
+				p.Agent, p.SessionID, p.SessionKind, p.Title = "agy", "", "", ""
+				return
+			}
 			p.Agent = rec.Agent
 			p.SessionID = rec.Value
 			p.SessionKind = rec.Kind

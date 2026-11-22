@@ -445,13 +445,21 @@ func (s *Server) onPaneOutput(pid int) {
 		lr = &outputEmit{}
 		s.outEmit[pid] = lr
 	}
-	if sn.Revision == lr.rev || time.Since(lr.at) < 100*time.Millisecond {
-		s.evMu.Unlock()
+	markAgy := sn.ForegroundAgent == "agy" && (sn.Revision != lr.agySaveRev || sn.FgPID != lr.agySaveFg)
+	if markAgy {
+		lr.agySaveRev, lr.agySaveFg = sn.Revision, sn.FgPID
+	}
+	emit := sn.Revision != lr.rev && time.Since(lr.at) >= 100*time.Millisecond
+	if emit {
+		lr.rev, lr.at = sn.Revision, time.Now()
+	}
+	s.evMu.Unlock()
+	if markAgy {
+		s.markSessionDirty()
+	}
+	if !emit {
 		return
 	}
-	lr.rev = sn.Revision
-	lr.at = time.Now()
-	s.evMu.Unlock()
 	wi, _ := s.app.State().FindPane(pid)
 	if wi < 0 {
 		return
@@ -669,8 +677,10 @@ func (s *Server) eventsWait(ctx context.Context, req *api.Request) api.Response 
 }
 
 type outputEmit struct {
-	rev uint64
-	at  time.Time
+	agySaveRev uint64
+	agySaveFg  int
+	rev        uint64
+	at         time.Time
 }
 
 func sortedKeys(m []string) []string {

@@ -7,6 +7,7 @@ import (
 )
 
 func (a *App) observeLocalSessions() {
+	a.applyLocalAgyObservations()
 	if a.localObservedStart == nil {
 		a.localObservedStart = map[int]time.Time{}
 	}
@@ -18,25 +19,30 @@ func (a *App) observeLocalSessions() {
 					continue
 				}
 				snap := rp.Snapshot()
-				if snap.AgentID == "" {
+				agent := snap.ScreenAgent()
+				if agent == "" {
 					continue
 				}
 				rec, hasRec := a.SessionRecord(pid)
-				if hasRec && rec.Value != "" && strings.HasPrefix(rec.Source, "report:") {
+				if agent != "agy" && hasRec && rec.Value != "" && strings.HasPrefix(rec.Source, "report:") {
 					continue
 				}
 				if hasRec && rec.Agent == "codex" && rec.Kind == "id" && a.codexSessionInOtherPane(pid, rec.Value) {
 					delete(a.localObservedStart, pid)
+				}
+				if agent == "agy" {
+					a.queueLocalAgyObservation(pid, rp, snap, rec, hasRec)
+					continue
 				}
 				job := rp.ForegroundJob()
 				start, hasStart := session.ProcessStart(job)
 				if hasStart && hasRec && rec.Value != "" && a.localObservedStart[pid].Equal(start) {
 					continue
 				}
-				if snap.AgentID == "codex" {
+				if agent == "codex" {
 					if id, found := session.ObserveCmdline(job); found {
 						if !a.codexSessionInOtherPane(pid, id) {
-							a.RecordSession(pid, AgentRecord{Agent: snap.AgentID, Kind: "id", Value: id, Title: rec.Title, Source: "observed:cmdline"})
+							a.RecordSession(pid, AgentRecord{Agent: agent, Kind: "id", Value: id, Title: rec.Title, Source: "observed:cmdline"})
 							if hasStart {
 								a.localObservedStart[pid] = start
 							}
@@ -45,11 +51,11 @@ func (a *App) observeLocalSessions() {
 					}
 				}
 				if hasStart {
-					if id, found := session.ObserveProcessSession(snap.AgentID, snap.Cwd, start, job, rp.SessionEnvironment()); found {
-						if snap.AgentID == "codex" && a.codexSessionInOtherPane(pid, id) {
+					if id, found := session.ObserveProcessSession(agent, snap.Cwd, start, job, rp.SessionEnvironment()); found {
+						if agent == "codex" && a.codexSessionInOtherPane(pid, id) {
 							continue
 						}
-						a.RecordSession(pid, AgentRecord{Agent: snap.AgentID, Kind: "id", Value: id, Title: rec.Title, Source: "observed:file"})
+						a.RecordSession(pid, AgentRecord{Agent: agent, Kind: "id", Value: id, Title: rec.Title, Source: "observed:file"})
 						a.localObservedStart[pid] = start
 						continue
 					}
@@ -58,7 +64,7 @@ func (a *App) observeLocalSessions() {
 					continue
 				}
 				if id, found := session.ObserveCmdline(job); found {
-					a.RecordSession(pid, AgentRecord{Agent: snap.AgentID, Kind: "id", Value: id, Title: rec.Title, Source: "observed:cmdline"})
+					a.RecordSession(pid, AgentRecord{Agent: agent, Kind: "id", Value: id, Title: rec.Title, Source: "observed:cmdline"})
 					if hasStart {
 						a.localObservedStart[pid] = start
 					}

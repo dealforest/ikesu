@@ -46,6 +46,10 @@ read -r done
 		t.Fatalf("foreground agy did not paint %q: %+v\n%s", text, p.Snapshot(), p.ScreenText())
 	}
 	waitScreen("Running command")
+	a.RecordSession(1, AgentRecord{Agent: "agy", Kind: "id", Value: "agy-session", Source: "observed:file"})
+	if snap := a.paneSnaps()[1]; snap.Agent != "agy" || snap.Restore != "saved session" {
+		t.Fatalf("live agy saved session hidden by old report: %+v", snap)
+	}
 	now := time.Now()
 	a.detectPane(1, false, now)
 	a.detectPane(1, false, now.Add(status.StartupGrace))

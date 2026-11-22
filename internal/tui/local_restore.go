@@ -17,11 +17,11 @@ func (a *App) restoreLocalAgents(dryRun bool) {
 				if rp == nil {
 					continue
 				}
-				if rp.Snapshot().AgentID != "" {
+				rec, ok := a.SessionRecord(pid)
+				if rp.AgentRunningForRestore(rec.Agent) {
 					running++
 					continue
 				}
-				rec, ok := a.SessionRecord(pid)
 				if !ok || rec.Agent == "" {
 					continue
 				}

@@ -481,6 +481,9 @@ func (a *App) effect(e model.Effect) {
 		delete(a.agentStateSeq, e.Pane)
 		delete(a.sessions, e.Pane)
 		delete(a.localObservedStart, e.Pane)
+		delete(a.localAgyGroup, e.Pane)
+		delete(a.localAgyPending, e.Pane)
+		delete(a.localAgySeen, e.Pane)
 		if a.paneClosedHook != nil {
 			a.paneClosedHook(e.Pane)
 		}
