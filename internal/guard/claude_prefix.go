@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"golang.org/x/sys/unix"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -163,37 +164,82 @@ func ClaudePrefixLine(i Input, line string) string {
 
 func paneClaudePrefix(i Input) (string, bool) {
 	m, active, e := ReadMarker(i)
-	if e != nil || !active || !m.Policy.Active() {
+	if e != nil || !active || !m.Policy.Active() || m.Agent != "claude" {
 		return "", false
 	}
-	a, e := markerAssets(i, m)
+	a, e := entryAssets(i)
+	if e != nil || m.Policy == nil {
+		return "", false
+	}
+	a.Config = *m.Policy
+	a.meta = m
+	if m.OutsidePane {
+		a.meta.Pane = i.Env["IKESU_PANE_ID"]
+	}
+	shell, e := a.privateShell(false)
 	if e != nil {
 		return "", false
 	}
-	path := filepath.Join(a.Root, "guard", "shell", a.Pane, "claude-prefix")
-	st, e := os.Lstat(path)
-	if e != nil || !st.Mode().IsRegular() || st.Mode().Perm()&0500 != 0500 || st.Size() > scriptFileLimit {
+	defer shell.close()
+	unlock, e := shell.lock(false)
+	if e != nil {
 		return "", false
 	}
-	data, e := os.ReadFile(path)
+	defer unlock()
+	_, dir, g, e := loadGeneration(shell)
+	if e != nil {
+		return "", false
+	}
+	defer dir.close()
+	a.native = g.Native
+	if !a.generationMatches(dir, g, true) {
+		return "", false
+	}
+	a.Executable = g.Executable
+	// Verify the stable `ikesu` symlink invoked by claude-prefix points to
+	// current/ikesu and resolves to the same binary as the verified generation.
+	stableLink, e := shell.readlink("ikesu")
+	if e != nil || stableLink != filepath.Join("current", "ikesu") {
+		return "", false
+	}
+	stableInfo, e := os.Stat(filepath.Join(shell.path, "ikesu"))
+	if e != nil {
+		return "", false
+	}
+	genInfo, e := os.Stat(filepath.Join(dir.path, "ikesu"))
+	if e != nil || !os.SameFile(stableInfo, genInfo) {
+		return "", false
+	}
+	// Verify claude-prefix via the private shell directory FD under the shared
+	// generation lock: regular file, owned by current euid, mode 0700, exact content.
+	data, e := shell.read("claude-prefix")
 	if e != nil || string(data) != a.claudePrefixScript() {
 		return "", false
 	}
-	return path, true
+	var st unix.Stat_t
+	if e := unix.Fstatat(shell.fd(), "claude-prefix", &st, unix.AT_SYMLINK_NOFOLLOW); e != nil {
+		return "", false
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFREG || int(st.Uid) != os.Geteuid() || os.FileMode(st.Mode&0777) != 0700 {
+		return "", false
+	}
+	return filepath.Join(a.Root, "guard", "shell", a.Pane, "claude-prefix"), true
 }
 
 // trustedClaudePrefixCall recognizes the outer shell hook (exec-string /
 // zsh-debug / bash-debug) running this pane's own verified claude-prefix
-// wrapper with a single literal argument. Passing it through defers line
-// inspection to `ikesu guard claude-prefix`, which unwraps the Claude
-// bootstrap so inline AI_GUARD_REQUEST_REASON and destination tiers apply to
-// the actual inner command.
+// wrapper for a Claude pane with a single literal canonical Claude bootstrap
+// argument. Passing it through defers line inspection to `ikesu guard
+// claude-prefix`, which unwraps the bootstrap (never entering claude-harness
+// because canonical bootstraps are mutually exclusive with harness lines) so
+// inline AI_GUARD_REQUEST_REASON and destination tiers apply to the inner
+// command.
 func trustedClaudePrefixCall(i Input, line string) bool {
 	if !has([]string{"exec-string", "zsh-debug", "bash-debug"}, i.LineVia) {
 		return false
 	}
-	prefixPath, ok := paneClaudePrefix(i)
-	if !ok {
+	// Fast path before any parsing or filesystem/lock checks.
+	if !strings.Contains(line, "/claude-prefix") {
 		return false
 	}
 	tree, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(line), "claude prefix call")
@@ -209,11 +255,15 @@ func trustedClaudePrefixCall(i Input, line string) bool {
 		return false
 	}
 	cmd, ok := claudeLiteral(call.Args[0])
-	if !ok || cmd != prefixPath {
+	if !ok || filepath.Base(cmd) != "claude-prefix" {
 		return false
 	}
-	_, ok = claudeLiteral(call.Args[1])
-	return ok
+	arg, ok := claudeLiteral(call.Args[1])
+	if !ok || ClaudePrefixLine(i, arg) == arg {
+		return false
+	}
+	prefixPath, ok := paneClaudePrefix(i)
+	return ok && cmd == prefixPath
 }
 
 func claudeWord(value string) *syntax.Word {

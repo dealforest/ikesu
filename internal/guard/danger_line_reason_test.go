@@ -197,12 +197,24 @@ func TestClaudePrefixExecStringPassesThroughAndPreservesSecurity(t *testing.T) {
 	if gotDecisionParams.Origin == nil || gotDecisionParams.Origin.GuardRule != "danger-word-line" || gotDecisionParams.Origin.Reason != "確認画面が出るかの試験" {
 		t.Fatalf("stage2 origin = %+v", gotDecisionParams.Origin)
 	}
+	// Rejection in Stage 2 must deny execution.
+	reject := func(p api.DecisionCreateParams, _ time.Duration) (api.Decision, error) {
+		opt := "reject"
+		return api.Decision{Status: "answered", Answer: &api.DecisionAnswer{OptionID: &opt}}, nil
+	}
+	var rejectErr bytes.Buffer
+	if AuthorizeLine(cfg, root, stage2Input, ClaudePrefixLine(stage2Input, bootstrap), &rejectErr, reject) {
+		t.Fatal("stage2 claude-prefix unexpectedly allowed after reject")
+	}
 
-	// Security boundaries: non-exec/debug via, extra commands, redirs, assigns,
-	// command substitutions, or fake prefix paths must NOT pass through.
+	// Security boundaries: non-exec/debug via, non-bootstrap/harness args,
+	// extra commands, redirs, assigns, command substitutions, or fake prefix
+	// paths must NOT pass through.
 	for _, tc := range []struct{ name, via, line string }{
 		{"accept-line", "accept-line", execLine},
 		{"claude-prefix", "claude-prefix", execLine},
+		{"direct non-bootstrap arg", "exec-string", prefixPath + " " + quote("echo deploy")},
+		{"harness-like arg", "exec-string", prefixPath + " " + quote("node ~/.claude/hooks/deploy.js")},
 		{"extra command", "exec-string", execLine + "; echo deploy"},
 		{"redirection", "exec-string", execLine + " > /tmp/out"},
 		{"assignment", "exec-string", "FOO=1 " + execLine},
@@ -214,6 +226,58 @@ func TestClaudePrefixExecStringPassesThroughAndPreservesSecurity(t *testing.T) {
 		if AuthorizeLine(cfg, root, i, tc.line, &errOut, nil) {
 			t.Errorf("%s: unexpectedly allowed %q", tc.name, tc.line)
 		}
+	}
+
+	// Non-claude agent marker must NOT pass through.
+	if err := a.Sync("codex"); err != nil {
+		t.Fatal(err)
+	}
+	{
+		var errOut bytes.Buffer
+		i := Input{Cwd: cwd, LaunchCwd: cwd, Env: EnvMap(env), LineVia: "exec-string"}
+		if AuthorizeLine(cfg, root, i, execLine, &errOut, nil) {
+			t.Fatal("non-claude agent unexpectedly allowed claude-prefix pass-through")
+		}
+	}
+	if err := a.Sync("claude"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Tampered stable `ikesu` symlink must NOT pass through.
+	stableIkesu := filepath.Join(root, "guard", "shell", "p_22", "ikesu")
+	if err := os.Remove(stableIkesu); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/bin/sh", stableIkesu); err != nil {
+		t.Fatal(err)
+	}
+	{
+		var errOut bytes.Buffer
+		i := Input{Cwd: cwd, LaunchCwd: cwd, Env: EnvMap(env), LineVia: "exec-string"}
+		if AuthorizeLine(cfg, root, i, execLine, &errOut, nil) {
+			t.Fatal("tampered stable ikesu symlink unexpectedly allowed")
+		}
+	}
+	if err := os.Remove(stableIkesu); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("current", "ikesu"), stableIkesu); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wrong permissions (0755 instead of 0700) on claude-prefix must NOT pass through.
+	if err := os.Chmod(prefixPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	{
+		var errOut bytes.Buffer
+		i := Input{Cwd: cwd, LaunchCwd: cwd, Env: EnvMap(env), LineVia: "exec-string"}
+		if AuthorizeLine(cfg, root, i, execLine, &errOut, nil) {
+			t.Fatal("world-readable claude-prefix unexpectedly allowed")
+		}
+	}
+	if err := os.Chmod(prefixPath, 0700); err != nil {
+		t.Fatal(err)
 	}
 
 	// Tampered claude-prefix script must NOT pass through.
