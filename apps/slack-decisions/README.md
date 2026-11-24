@@ -67,6 +67,7 @@ ikesu plugin link <repo>/apps/slack-decisions
 | キー | 既定 | 意味 |
 | --- | --- | --- |
 | `enabled` | `true` | `false` でデーモン無効 |
+| `allowed_user` | `kazuph` | Slack に送ってよい OS ユーザー名。実際の OS ユーザー名と一致したときだけ送る |
 | `post_delay_ms` | `180000` | グラス接続中の投稿遅延 |
 | `poll_interval_ms` | `5000` | 履歴ポーリング間隔 |
 | `slack_channel` | 資格情報由来 | 投稿先チャンネル |
