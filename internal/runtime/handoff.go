@@ -70,6 +70,9 @@ func (s *Supervisor) PauseHandoff() ([]PaneTransfer, []*os.File, error) {
 }
 
 func (s *Supervisor) PauseHandoffContext(ctx context.Context) ([]PaneTransfer, []*os.File, error) {
+	if err := s.flushGuardSync(ctx); err != nil {
+		return nil, nil, err
+	}
 	s.mu.Lock()
 	ids := make([]int, 0, len(s.panes))
 	for id := range s.panes {
@@ -258,6 +261,7 @@ func (s *Supervisor) StartImported() {
 
 // ReleaseHandoff drops our copies without signalling processes or deleting markers.
 func (s *Supervisor) ReleaseHandoff() {
+	s.stopGuardWorker()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, p := range s.panes {
@@ -288,14 +292,16 @@ func (p *Pane) GuardMarkerPath() string {
 	if p == nil || p.guard == nil {
 		return ""
 	}
-	return p.guard.MarkerPath
+	_, marker := p.guard.Paths()
+	return marker
 }
 
 func (p *Pane) GuardRoot() string {
 	if p == nil || p.guard == nil {
 		return ""
 	}
-	return p.guard.Root
+	root, _ := p.guard.Paths()
+	return root
 }
 
 func (p *Pane) killProcess() {

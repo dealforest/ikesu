@@ -83,6 +83,7 @@ func TestRestoreFailuresStayInTheirPanesWithExistingWarnings(t *testing.T) {
 	}
 	p.SetAgent("claude")
 	sup.SetGuard(guard.Config{}, dir)
+	sup.FlushGuardSync()
 	a := NewApp(st, sup, io.Discard, dir)
 	a.serverUI = true
 	a.configWarning, a.configWarningBanner = "config.toml: test warning", true

@@ -6,7 +6,6 @@ import (
 	"github.com/kazuph/ikesu/internal/model"
 	"github.com/kazuph/ikesu/internal/teststate"
 	"testing"
-	"time"
 )
 
 func TestDecisionOriginAndAttentionOverlay(t *testing.T) {
@@ -47,10 +46,14 @@ func TestDecisionOriginAndAttentionOverlay(t *testing.T) {
 		if unknown.Origin.WorkspaceLabel != "" || unknown.Origin.TabLabel != "" || unknown.Origin.PaneLabel != "" {
 			t.Fatal(unknown)
 		}
-		for _, record := range []api.Decision{d, second} {
-			s.store.CancelDecision(record.DecisionID, time.Now())
+		cancel := func(d api.Decision) {
+			resp := s.decisionRequest(&api.Request{ID: "cancel", Method: api.MethodDecisionCancel, Params: api.MarshalParams(api.DecisionTargetParams{DecisionID: d.DecisionID})})
+			if resp.Err != nil {
+				t.Error(resp.Err)
+			}
 		}
-		s.syncDecisionAttention()
+		cancel(d)
+		cancel(second)
 		if s.app.PaneStatusKey(1) != before {
 			t.Fatal("underlying state not restored")
 		}
@@ -64,8 +67,7 @@ func TestDecisionOriginAndAttentionOverlay(t *testing.T) {
 		if s.app.PaneStatusKey(1) != "blocked" {
 			t.Fatal("overlay lost")
 		}
-		s.store.CancelDecision(d.DecisionID, time.Now())
-		s.syncDecisionAttention()
+		cancel(d)
 		if s.app.PaneStatusKey(1) != "working" {
 			t.Fatal("hook state was overwritten")
 		}

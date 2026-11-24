@@ -28,7 +28,7 @@ func TestHandoffRebindsEveryGuardMarker(t *testing.T) {
 		t.Fatal(e)
 	}
 	for id, p := range s.panes {
-		meta, active, e := guard.ReadMarker(guard.Input{Env: map[string]string{"IKESU_GUARD_MARKER": p.guard.MarkerPath, "IKESU_PANE_ID": fmt.Sprintf("p%d", id), "IKESU_SOCKET_PATH": root + "/stale.sock"}})
+		meta, active, e := guard.ReadMarker(guard.Input{Env: map[string]string{"IKESU_GUARD_MARKER": p.GuardMarkerPath(), "IKESU_PANE_ID": fmt.Sprintf("p%d", id), "IKESU_SOCKET_PATH": root + "/stale.sock"}})
 		if e != nil || !active || meta.Socket != socket {
 			t.Fatal(meta, active, e)
 		}

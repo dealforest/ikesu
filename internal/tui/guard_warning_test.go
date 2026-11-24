@@ -31,6 +31,7 @@ func TestUncoveredAgentAppearsInRenderedWarning(t *testing.T) {
 	a.serverUI = true
 	p.SetAgent("claude")
 	sup.SetGuard(guard.Config{}, d)
+	sup.FlushGuardSync()
 	var screen string
 	a.snapshotSink = func(in render.Input) error {
 		if !in.ConfigWarningBanner {
@@ -58,6 +59,7 @@ func TestUncoveredAgentAppearsInRenderedWarning(t *testing.T) {
 	}
 	t.Log(screen)
 	p.SetAgent("")
+	sup.FlushGuardSync()
 	if sup.GuardWarnings() != "" {
 		t.Fatal("human pane still warned")
 	}

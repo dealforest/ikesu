@@ -22,5 +22,21 @@ func TestScreenPromptWaitingAndPreviewIntervals(t *testing.T) {
 	// A reservation must return without consulting panes or the app.
 	s.screenPrompts.timer = time.NewTimer(time.Hour)
 	defer s.screenPrompts.timer.Stop()
-	s.scheduleScreenPromptPane(1)
+	s.screenPromptOutput(1)
+}
+
+func TestDisabledScreenPromptDriverDoesNoWork(t *testing.T) {
+	s := &Server{}
+	disabled := false
+	s.cfg.Decisions.ScreenPrompts = &disabled
+	if got := testing.AllocsPerRun(100, func() {
+		s.screenPromptOutput(1)
+		s.scheduleScreenPrompts()
+		s.scanScreenPrompts()
+	}); got != 0 {
+		t.Fatalf("disabled screen prompt allocations per output and scan: %v", got)
+	}
+	if s.screenPromptsActive() || s.screenPrompts.timer != nil || s.screenPrompts.watches != nil || s.store != nil || s.decisions.changed != nil {
+		t.Fatal("disabled screen prompt driver initialized state")
+	}
 }

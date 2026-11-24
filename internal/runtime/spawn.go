@@ -110,7 +110,12 @@ func (s *Supervisor) spawnWith(id int, cwd string, cols, rows int, extra, argv, 
 				emu.Close()
 				return nil, err
 			}
-			p.guard = guard.NewAssets(root, "p_"+itoa(id), exe, *cfg)
+			paneID := "p_" + itoa(id)
+			if s.NewPaneGuard != nil {
+				p.guard = s.NewPaneGuard(root, paneID, exe, *cfg)
+			} else {
+				p.guard = guard.NewAssets(root, paneID, exe, *cfg)
+			}
 			if len(argv) == 0 {
 				p.guard.ConfigureShell(cmd.Path)
 			}

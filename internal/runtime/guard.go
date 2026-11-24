@@ -12,19 +12,10 @@ import (
 func (s *Supervisor) SetGuard(c guard.Config, root string) {
 	s.mu.Lock()
 	s.guardConfig, s.guardRoot = &c, root
-	panes := make([]*Pane, 0, len(s.panes))
 	for _, p := range s.panes {
-		panes = append(panes, p)
+		s.enqueueGuardSync(guardSyncJob{pane: p, reconfigure: &c})
 	}
 	s.mu.Unlock()
-	for _, p := range panes {
-		if p.guard != nil {
-			_ = p.guard.Reconfigure(c)
-		}
-		if p.syncGuardLatest(false) {
-			p.queueProcessChange()
-		}
-	}
 }
 func (s *Supervisor) GuardWarnings() string {
 	s.mu.Lock()
@@ -54,13 +45,13 @@ func (p *Pane) SetAgent(id string) {
 		p.guardStarted = ""
 	}
 	p.mu.Unlock()
-	if p.syncGuardLatest(false) {
-		p.queueProcessChange()
+	if p.owner != nil {
+		p.owner.enqueueGuardSync(guardSyncJob{pane: p})
 	}
 }
 
 // syncGuardLatest applies the pane's current agent to the guard. Callers on
-// the process worker and the app loop may race; reading the agent under
+// the process and guard workers may race; reading the agent under
 // guardSyncMu makes the last Sync carry the latest state instead of a value
 // read before another caller's update. withStarted falls back to the agent
 // the guard started, as the process observation path does.
@@ -133,7 +124,7 @@ func (s *Supervisor) RebindGuardSocket(socket string) error {
 }
 
 type GuardCheckpoint struct {
-	assets *guard.Assets
+	assets PaneGuard
 	state  *guard.RuntimeCheckpoint
 }
 

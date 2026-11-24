@@ -32,10 +32,12 @@ func TestGuardRuntimeMarkerLifecycle(t *testing.T) {
 		t.Fatal("human pane marked")
 	}
 	p.SetAgent("codex")
+	s.FlushGuardSync()
 	if !exists(marker("p_1")) {
 		t.Fatal("agent metadata not synchronized")
 	}
 	p.SetAgent("")
+	s.FlushGuardSync()
 	p.PollProcess()
 	if exists(marker("p_1")) {
 		t.Fatal("clear resurrected marker")
@@ -53,6 +55,7 @@ func TestGuardRuntimeMarkerLifecycle(t *testing.T) {
 		t.Fatal("agent start not marked")
 	}
 	p.SetAgent("")
+	s.FlushGuardSync()
 	p.PollProcess()
 	if exists(marker("p_2")) {
 		t.Fatal("explicit clear re-inherited start marker")

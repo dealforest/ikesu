@@ -21,7 +21,9 @@ func (a *Assets) Transfer() Transfer {
 	return Transfer{Root: a.Root, Pane: a.Pane, Bin: a.Bin, MarkerPath: a.MarkerPath, Executable: a.Executable, Active: a.active, Config: a.Config, Meta: a.meta, Injected: a.injected, Prompt: a.prompt, Mode: a.mode, Unsupported: a.unsupported, Issue: a.issue, Native: a.native}
 }
 func Import(t Transfer) *Assets {
-	return &Assets{Root: t.Root, Pane: t.Pane, Bin: t.Bin, MarkerPath: t.MarkerPath, Executable: t.Executable, native: t.Native, active: t.Active, Config: t.Config, meta: t.Meta, injected: t.Injected, prompt: t.Prompt, mode: t.Mode, unsupported: t.Unsupported, issue: t.Issue}
+	a := &Assets{Root: t.Root, Pane: t.Pane, Bin: t.Bin, MarkerPath: t.MarkerPath, Executable: t.Executable, native: t.Native, active: t.Active, Config: t.Config, meta: t.Meta, injected: t.Injected, prompt: t.Prompt, mode: t.Mode, unsupported: t.Unsupported, issue: t.Issue}
+	a.publishIssue()
+	return a
 }
 
 // RebindSocket preserves the marker location inherited by an existing shell.

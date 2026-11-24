@@ -30,7 +30,7 @@ func (s *Server) syncDecisionAttention() {
 	if s.store == nil {
 		return
 	}
-	pending, err := s.store.Decisions("pending")
+	pending, err := s.pendingDecisionsCached()
 	if err != nil {
 		s.app.SetConfigWarning("decision attention: " + err.Error())
 		return

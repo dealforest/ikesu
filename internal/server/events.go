@@ -433,7 +433,7 @@ func (s *Server) onPaneExited(pid int) {
 
 // onPaneOutput emits pane.output_changed, throttled per pane.
 func (s *Server) onPaneOutput(pid int) {
-	s.scheduleScreenPromptPane(pid)
+	s.screenPromptOutput(pid)
 	p := s.app.Supervisor().Get(pid)
 	if p == nil {
 		return
