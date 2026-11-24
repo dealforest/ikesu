@@ -154,9 +154,12 @@ func (a *Assets) buildGeneration(shell *privateDirectory) (string, error) {
 	complete = true
 	return name, nil
 }
+func (a *Assets) claudePrefixScript() string {
+	return "#!/bin/sh\n" + a.identity() + " exec " + quote(a.RuntimePath()) + " guard claude-prefix -- \"$@\"\n"
+}
+
 func (a *Assets) stableEntries(shell *privateDirectory) error {
-	prefix := "#!/bin/sh\n" + a.identity() + " exec " + quote(a.RuntimePath()) + " guard claude-prefix -- \"$@\"\n"
-	if err := shell.write("claude-prefix", []byte(prefix), 0700); err != nil {
+	if err := shell.write("claude-prefix", []byte(a.claudePrefixScript()), 0700); err != nil {
 		return err
 	}
 	for _, name := range []string{"bash-env", ".zshenv", ".zprofile", ".zshrc", ".zlogin"} {

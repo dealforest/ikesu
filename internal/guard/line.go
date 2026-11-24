@@ -43,7 +43,7 @@ func AuthorizeLine(c Config, root string, i Input, line string, errOut io.Writer
 	snapshot := i.shellVariables
 	arrays := i.shellArrays
 	runtimeLine := i.runtimeLine
-	if trustedDirenvLine(i, line) {
+	if trustedDirenvLine(i, line) || trustedClaudePrefixCall(i, line) {
 		return true
 	}
 	i.AuthorizationEnv = EnvMap(environment(i.Env))
