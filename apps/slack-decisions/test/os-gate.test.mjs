@@ -15,6 +15,12 @@ test("OS gate uses real user information and ignores configurable identities", a
   assert.equal(await gateCheck({ enabled: true, osUser: "someoneelse", allowedOsUser: "someoneelse" }, () => ({ username: "kazuph" })), true);
 });
 
+test("OS gate compares the real user with the configured allowed user", async () => {
+  assert.equal(await gateCheck({ enabled: true }, () => ({ username: "dealforest" })), false);
+  assert.equal(await gateCheck({ enabled: true, allowedUser: "dealforest" }, () => ({ username: "dealforest" })), true);
+  assert.equal(await gateCheck({ enabled: true, allowedUser: "dealforest" }, () => ({ username: "kazuph" })), false);
+});
+
 for (const mode of ["run", "deliver", "deliver-context"]) {
   test(`${mode} rejects a different OS user before reading credentials`, async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "slack-os-gate-"));

@@ -37,9 +37,9 @@ node apps/slack-decisions/slack-decisions.mjs deliver <ファイル> [--title T]
 
 `ikesu plugin action invoke deliver --plugin kazuph.slack-decisions`（ペインでテキストを選択しているときに現れます）でも同じ送付を呼べます。プラグイン action は固定 argv なので、ファイルパスは `IKESU_PLUGIN_CONTEXT_JSON.selected_text`（ペインで選択した文字列）から取ります。相対パスはそのペインの cwd から解決します。つまり、成果物のパスをペイン上で選択してから action を呼ぶとそのファイルが送られます。
 
-## 送信は kazuph のマシンのみ
+## 送信は許可した OS ユーザーのマシンのみ
 
-`whoami`（OS ユーザー名）が `kazuph` でないマシン、または Slack 資格情報を解決できない場合は、理由をログに出して安全に終了します。Slack へは一切送信しません。`deliver` / `deliver-context` も同じゲートを通ります。実OSユーザーと固定の `kazuph` を比較し、環境変数・設定ファイルで送信者の制限は変更できません。
+`whoami`（OS ユーザー名）が許可したユーザー（既定は `kazuph`）でないマシン、または Slack 資格情報を解決できない場合は、理由をログに出して安全に終了します。Slack へは一切送信しません。`deliver` / `deliver-context` も同じゲートを通ります。許可するユーザーは設定の `allowed_user` または環境変数 `SLACK_DECISIONS_ALLOWED_USER` で変えられます。比べるのは実際の OS ユーザー名なので、設定で自分のユーザー名を偽って送ることはできません。
 
 ## インストール
 
@@ -67,6 +67,7 @@ ikesu plugin link <repo>/apps/slack-decisions
 | キー | 既定 | 意味 |
 | --- | --- | --- |
 | `enabled` | `true` | `false` でデーモン無効 |
+| `allowed_user` | `kazuph` | Slack に送ってよい OS ユーザー名。実際の OS ユーザー名と一致したときだけ送る |
 | `post_delay_ms` | `180000` | グラス接続中の投稿遅延 |
 | `poll_interval_ms` | `5000` | 履歴ポーリング間隔 |
 | `slack_channel` | 資格情報由来 | 投稿先チャンネル |

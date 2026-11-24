@@ -168,6 +168,8 @@ function loadConfig(env = process.env) {
       env.SLACK_DECISIONS_API_BASE ||
       file.slack_api_base ||
       "https://slack.com/api",
+    allowedUser:
+      env.SLACK_DECISIONS_ALLOWED_USER || file.allowed_user || DEFAULT_ALLOWED_USER,
     slackChannel: env.SLACK_DECISIONS_CHANNEL || file.slack_channel || "",
     mention: env.SLACK_DECISIONS_MENTION ?? file.mention ?? "",
     socketMode:
@@ -2794,9 +2796,10 @@ export async function gateCheck(config, userInfo = os.userInfo) {
     return false;
   }
   const user = userInfo().username;
-  if (user !== DEFAULT_ALLOWED_USER) {
+  const allowed = config.allowedUser || DEFAULT_ALLOWED_USER;
+  if (user !== allowed) {
     log(
-      `このマシンでは Slack 送信をしません (whoami=${user}; 許可: ${DEFAULT_ALLOWED_USER})`,
+      `このマシンでは Slack 送信をしません (whoami=${user}; 許可: ${allowed})`,
     );
     return false;
   }
