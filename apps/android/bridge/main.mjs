@@ -102,26 +102,165 @@ async function relaySetup() {
   process.stdout.write(`relay.json を書きました。\n部屋 ID: ${saved.room}\nRELAY_KEY: ${saved.relayKey}\n中継の Worker に同じ値を入れてください:\n  printf '%s' '${saved.relayKey}' | npx wrangler secret put RELAY_KEY\n`);
 }
 
-async function pair() {
-  const name = option('name');
-  if (!name) throw Error('usage: main.mjs pair --name <PC の名前> [--permissions notify,answer,screen,input]');
-  const permissions = (option('permissions') ?? PERMISSIONS.join(',')).split(',').filter(Boolean);
-  if (!permissions.every(item => PERMISSIONS.includes(item))) throw Error(`権限は ${PERMISSIONS.join(',')} から選んでください`);
-  let session = await remotePairing(stateDir);
-  let mobile = null;
-  if (!session) {
-    mobile = await startMobile({ configDir, stateDir, log, control: false, decisions: { snapshot: async () => [], answer: async () => ({}), later: async () => {} } });
-    if (!mobile) throw Error('relay.json がありません。先に relay-setup --url <wss://…> を実行してください');
-    log('run 中の bridge が見つからないため、この端末で一時的に中継へつなぎます');
-    session = localPairing(mobile);
+function readPairOwner(lockPath) {
+  let contents;
+  try { contents = fs.readFileSync(lockPath, 'utf8'); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  let owner;
+  try { owner = JSON.parse(contents); } catch { /* fall through to stale check */ }
+  if (!Number.isSafeInteger(owner?.pid) || owner.pid <= 0 || !Number.isFinite(owner.startedAt)) {
+    // Recover corrupted/empty lock files left by an older interrupted process.
+    try {
+      const st = fs.statSync(lockPath);
+      if (Date.now() - st.mtimeMs > 5000) return { pid: 0, startedAt: 0 };
+    } catch (error) {
+      if (error.code === 'ENOENT') return null;
+    }
+    throw Error('ペアリングのロックを確認できません。先のペアリングが終了してからやり直してください。');
   }
-  const qr = await session.start({ name, permissions });
-  qrcode.generate(qr, { small: true });
-  process.stdout.write(`この PC の鍵の指紋: ${fingerprint((await loadNoiseKey(configDir)).publicKey)}（アプリに出る指紋と同じか確かめてください）\n`);
-  process.stdout.write('アプリのカメラで上の QR を読んでください（5分間有効）。アプリに出る6桁をここに入力します。\n');
-  session.onCandidate(candidate => process.stdout.write(`\n候補が接続しました（${candidate.name}）\n`));
-  const prompt = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try { process.kill(owner.pid, 0); }
+  catch (error) {
+    if (error.code === 'ESRCH') return owner;
+    if (error.code !== 'EPERM') throw error;
+  }
+  throw Error(`既にペアリングが実行中です（PID ${owner.pid}）。先のペアリングを完了または終了してからやり直してください。`);
+}
+
+function linkAtomicLock(stateDir, targetPath) {
+  const tmpPath = path.join(stateDir, `.pair.lock.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`);
+  fs.writeFileSync(tmpPath, JSON.stringify({ pid: process.pid, startedAt: Date.now() }), { mode: 0o600 });
   try {
+    fs.linkSync(tmpPath, targetPath);
+    return true;
+  } catch (error) {
+    if (error.code === 'EEXIST') return false;
+    throw error;
+  } finally {
+    try { fs.unlinkSync(tmpPath); } catch { /* best effort */ }
+  }
+}
+
+function acquirePairLock(stateDir) {
+  fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  const lockPath = path.join(stateDir, 'pair.lock');
+  const recovery = `${lockPath}.reclaim`;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (linkAtomicLock(stateDir, lockPath)) {
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        try { fs.unlinkSync(lockPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      };
+    }
+    if (attempt === 3) break;
+    if (readPairOwner(lockPath) === null) continue;
+    // Serialize stale-lock removal with a crash-recoverable atomic reclaim lock.
+    let gotRecovery = linkAtomicLock(stateDir, recovery);
+    if (!gotRecovery) {
+      let staleRecovery = false;
+      try {
+        if (readPairOwner(recovery) !== null) staleRecovery = true;
+      } catch {
+        // Check if an older directory-based reclaim lock is stale.
+        try {
+          const st = fs.statSync(recovery);
+          if (st.isDirectory() && Date.now() - st.mtimeMs > 5000) {
+            fs.rmdirSync(recovery);
+            gotRecovery = linkAtomicLock(stateDir, recovery);
+          }
+        } catch { /* ignore */ }
+      }
+      if (staleRecovery) {
+        try { fs.unlinkSync(recovery); } catch { /* ignore */ }
+        gotRecovery = linkAtomicLock(stateDir, recovery);
+      }
+      if (!gotRecovery) throw Error('ペアリングのロックを回収中です。もう一度やり直してください。');
+    }
+    try { if (readPairOwner(lockPath) !== null) fs.unlinkSync(lockPath); }
+    finally { try { fs.unlinkSync(recovery); } catch { /* ignore */ } }
+  }
+  readPairOwner(lockPath);
+  throw Error('ペアリングのロックを取得できませんでした。もう一度やり直してください。');
+}
+
+async function printPairQR(qr) {
+  let rendered;
+  qrcode.generate(qr, { small: true }, text => { rendered = text; });
+  rendered = rendered.trimEnd();
+  const lines = rendered.split('\n');
+  const needCols = Math.max(...lines.map(line => line.length)) + 2;
+  const needRows = lines.length + 4;
+  const { stdin, stdout } = process;
+  const fits = () => stdout.columns >= needCols && stdout.rows >= needRows;
+  if (stdout.isTTY && !fits()) {
+    stdout.write(`画面が小さいため QR 全体が収まりません（現在 ${stdout.columns}×${stdout.rows} / 必要 ${needCols}×${needRows}）。ウィンドウを広げると自動で QR を表示します（中止: Esc / Ctrl-C）\n`);
+    const resized = await new Promise(resolve => {
+      const useRawInput = stdin.isTTY && !stdin.isRaw;
+      const timer = setTimeout(() => finish('expired'), 270_000);
+      const finish = result => {
+        clearTimeout(timer);
+        stdout.off('resize', onResize);
+        stdin.off('data', onKey);
+        if (useRawInput) stdin.setRawMode(false);
+        if (stdin.isTTY) stdin.pause();
+        resolve(result);
+      };
+      const onResize = () => { if (fits()) finish('ok'); };
+      const onKey = key => {
+        if (key.length === 1 && (key[0] === 0x1b || key[0] === 0x03)) finish('cancel');
+      };
+      if (stdin.isTTY) {
+        if (useRawInput) stdin.setRawMode(true);
+        stdin.on('data', onKey);
+      }
+      stdout.on('resize', onResize);
+      onResize();
+    });
+    if (resized === 'expired') {
+      throw Error('画面の拡大待ちの間に QR の有効期限が切れました。もう一度ペアリングを実行してください。');
+    }
+    if (resized !== 'ok') return false;
+    stdout.write('\x1b[2J\x1b[H');
+  }
+  stdout.write(`${rendered}\n`);
+  return true;
+}
+
+async function pair() {
+  const release = acquirePairLock(stateDir);
+  const exitOnSignal = code => () => {
+    if (process.stdin.isTTY && process.stdin.isRaw) process.stdin.setRawMode(false);
+    release();
+    process.exit(code);
+  };
+  const interrupt = exitOnSignal(130);
+  const signals = [['SIGINT', interrupt], ['SIGTERM', exitOnSignal(143)], ['SIGHUP', exitOnSignal(129)]];
+  for (const [signal, handler] of signals) process.once(signal, handler);
+  process.once('exit', release);
+  let session, mobile, prompt;
+  let pairingStarted = false;
+  try {
+    const name = option('name');
+    if (!name) throw Error('usage: main.mjs pair --name <PC の名前> [--permissions notify,answer,screen,input]');
+    const permissions = (option('permissions') ?? PERMISSIONS.join(',')).split(',').filter(Boolean);
+    if (!permissions.every(item => PERMISSIONS.includes(item))) throw Error(`権限は ${PERMISSIONS.join(',')} から選んでください`);
+    session = await remotePairing(stateDir);
+    if (!session) {
+      mobile = await startMobile({ configDir, stateDir, log, control: false, decisions: { snapshot: async () => [], answer: async () => ({}), later: async () => {} } });
+      if (!mobile) throw Error('relay.json がありません。先に relay-setup --url <wss://…> を実行してください');
+      log('run 中の bridge が見つからないため、この端末で一時的に中継へつなぎます');
+      session = localPairing(mobile);
+    }
+    const qr = await session.start({ name, permissions });
+    pairingStarted = true;
+    const keyFingerprint = fingerprint((await loadNoiseKey(configDir)).publicKey);
+    if (!await printPairQR(qr)) { process.exitCode = 130; return; }
+    process.stdout.write(`この PC の鍵の指紋: ${keyFingerprint}\n`);
+    process.stdout.write('アプリで QR を読み、鍵の指紋を照合してください。\n5分以内にアプリに出た6桁を入力してください。\n');
+    session.onCandidate(candidate => process.stdout.write(`\n候補が接続しました（${candidate.name}）\n`));
+    prompt = readline.createInterface({ input: process.stdin, output: process.stdout });
+    prompt.on('SIGINT', interrupt);
     for (;;) {
       const code = await prompt.question('6桁: ');
       const result = await session.confirm(code);
@@ -129,7 +268,18 @@ async function pair() {
       if (!result.active) { process.stdout.write('この QR は無効になりました。もう一度 pair を実行してください\n'); process.exitCode = 1; return; }
       process.stdout.write('一致しません\n');
     }
-  } finally { prompt.close(); await session.cancel().catch(() => {}); session.close(); await mobile?.stop(); }
+  } finally {
+    try {
+      prompt?.close();
+      if (pairingStarted) await session.cancel().catch(() => {});
+      session?.close();
+      await mobile?.stop();
+    } finally {
+      release();
+      process.off('exit', release);
+      for (const [signal, handler] of signals) process.off(signal, handler);
+    }
+  }
 }
 
 async function devices() {
