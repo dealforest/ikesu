@@ -158,7 +158,7 @@ func (s *Server) retainLateCodexQuestion(pid int, w *screenPromptWatch) bool {
 		body = original + "\n\n" + body
 	}
 	p.Body = &body
-	d, _, err := store.UpdatePendingScreenDecision(w.decisionID, p)
+	d, changed, err := store.UpdatePendingScreenDecision(w.decisionID, p)
 	if err != nil {
 		s.app.SetConfigWarning("late question: " + err.Error())
 		return false
@@ -171,6 +171,9 @@ func (s *Server) retainLateCodexQuestion(pid int, w *screenPromptWatch) bool {
 		s.screenPrompts.late = map[string]*lateCodexQuestion{}
 	}
 	s.screenPrompts.late[w.decisionID] = &lateCodexQuestion{pid: pid, w: w}
+	if changed {
+		s.invalidatePendingDecisions()
+	}
 	s.syncDecisionAttention()
 	s.pushDecisionProjection()
 	return true
@@ -182,7 +185,11 @@ func (s *Server) closeCodexAnsweredElsewhere(w *screenPromptWatch) {
 		params := screenDisplayParams(w)
 		body := "ほかで回答済み"
 		params.Body = &body
-		_, _, err = store.UpdatePendingScreenDecision(w.decisionID, params)
+		var changed bool
+		_, changed, err = store.UpdatePendingScreenDecision(w.decisionID, params)
+		if changed {
+			s.invalidatePendingDecisions()
+		}
 	}
 	if err != nil {
 		s.app.SetConfigWarning("screen question: " + err.Error())

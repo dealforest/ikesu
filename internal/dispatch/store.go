@@ -352,6 +352,24 @@ func OpenReadOnly(path string) (*Store, error) {
 	return &Store{db: conn}, nil
 }
 
+// DataVersion changes when another SQLite connection commits to this database.
+func (s *Store) DataVersion() (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, err := s.queryLocked("PRAGMA data_version")
+	if err != nil {
+		return 0, err
+	}
+	defer st.Close()
+	if !st.Step() {
+		if err := st.Err(); err != nil {
+			return 0, err
+		}
+		return 0, errors.New("SQLite did not return data_version")
+	}
+	return st.ColumnInt64(0), nil
+}
+
 // Close releases the database handle.
 func (s *Store) Close() error {
 	s.mu.Lock()

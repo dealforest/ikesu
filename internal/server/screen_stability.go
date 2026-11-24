@@ -70,6 +70,7 @@ func (s *Server) updateScreenPrompt(w *screenPromptWatch) {
 		return
 	}
 	if changed {
+		s.invalidatePendingDecisions()
 		s.pushDecisionProjection()
 	}
 }

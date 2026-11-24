@@ -48,7 +48,7 @@ type Pane struct {
 	graphicsEnabled        bool
 	graphicsVersion        string
 	cellWidth, cellHeight  int
-	guard                  *guard.Assets
+	guard                  PaneGuard
 	guardStarted           string
 	ID                     int
 	cwd                    string // spawn cwd; OSC 7 or proc cwd may refine it
@@ -164,6 +164,13 @@ type Supervisor struct {
 	graphicsVersion string
 	guardConfig     *guard.Config
 	guardRoot       string
+	guardWorkMu     sync.Mutex
+	guardWorkCh     chan struct{}
+	guardWorkStop   chan struct{}
+	guardWorkDone   chan struct{}
+	guardWorkIdle   chan struct{}
+	guardWorkClosed bool
+	guardPending    map[int]guardSyncJob
 	mu              sync.Mutex
 	panes           map[int]*Pane
 	events          chan Event
@@ -180,7 +187,10 @@ type Supervisor struct {
 
 	// Env, when set, contributes extra KEY=VALUE pairs to a spawned pane's
 	// environment (the server uses it for IKESU_PANE_ID/IKESU_SOCKET_PATH).
-	Env                     func(paneID int) []string
+	Env func(paneID int) []string
+	// NewPaneGuard optionally supplies the guard implementation for new panes.
+	// Configure it before spawning any panes.
+	NewPaneGuard            func(root, pane, executable string, cfg guard.Config) PaneGuard
 	IdleActivityChanged     func()
 	defaultShell, shellMode string
 	scrollbackBytes         *int
@@ -944,6 +954,7 @@ func (p *Pane) ClearOSC() {
 
 // KillAll terminates every pane.
 func (s *Supervisor) KillAll() {
+	s.stopGuardWorker()
 	s.mu.Lock()
 	panes := make([]*Pane, 0, len(s.panes))
 	for _, p := range s.panes {

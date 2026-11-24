@@ -20,13 +20,16 @@ import (
 // The app loop owns records, expiry scheduling and notification order.
 // Waiters observe a replace-on-change channel, without polling SQLite.
 type decisionHub struct {
-	guardBindings map[string]guardExecutionBinding
-	boot          string
-	revision      uint64
-	changed       chan struct{}
-	timer         *time.Timer
-	close         sync.Once
-	stopped       chan struct{}
+	guardBindings           map[string]guardExecutionBinding
+	pendingCache            []api.Decision
+	pendingCacheValid       bool
+	pendingCacheDataVersion int64
+	boot                    string
+	revision                uint64
+	changed                 chan struct{}
+	timer                   *time.Timer
+	close                   sync.Once
+	stopped                 chan struct{}
 }
 
 func (s *Server) initDecisionHub() {
@@ -57,6 +60,7 @@ func decisionResult(id string, d api.Decision) api.Response {
 	return api.Success(id, api.DecisionResult{Type: "decision", Decision: d})
 }
 func (s *Server) decisionChanged(kind string, d api.Decision) {
+	s.invalidatePendingDecisions()
 	if d.Status != "pending" && !(d.Status == "answered" && d.Answer != nil && d.Answer.OptionID != nil && (*d.Answer.OptionID == "approve" || *d.Answer.OptionID == "day_allow")) {
 		delete(s.decisions.guardBindings, d.DecisionID)
 	} else {
@@ -69,7 +73,7 @@ func (s *Server) decisionChanged(kind string, d api.Decision) {
 	s.pushDecisionProjection()
 }
 func (s *Server) expireDecisions(store *dispatch.Store) error {
-	pending, err := store.Decisions("pending")
+	pending, err := s.pendingDecisionsCached()
 	if err != nil {
 		return err
 	}
@@ -86,6 +90,12 @@ func (s *Server) expireDecisions(store *dispatch.Store) error {
 		if *d.ExpiresUnixMS <= now.UnixMilli() {
 			expired, err := store.ExpireDecision(d.DecisionID, now)
 			if err != nil {
+				s.invalidatePendingDecisions()
+				var decisionErr *api.Error
+				if errors.As(err, &decisionErr) && (decisionErr.Code == api.ErrDecisionResolved || decisionErr.Code == api.ErrDecisionNotFound) {
+					// Another connection resolved this row after the pending read.
+					continue
+				}
 				return err
 			}
 			s.decisionChanged("decision_resolved", expired)
@@ -315,6 +325,7 @@ func (s *Server) decisionRequest(req *api.Request) api.Response {
 			return decisionFailure(req.ID, err)
 		}
 		if changed {
+			s.invalidatePendingDecisions()
 			// 判断待ちを見ているプラグイン（watch は1秒ごとに内容を比べる）と待ち手に知らせる。
 			close(s.decisions.changed)
 			s.decisions.changed = make(chan struct{})

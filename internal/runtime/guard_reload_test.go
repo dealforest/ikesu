@@ -25,6 +25,7 @@ func TestGuardReloadWarnsUninjectedPaneAndClearsOnExit(t *testing.T) {
 	}
 	p.SetAgent("claude")
 	s.SetGuard(guard.Config{}, d)
+	s.FlushGuardSync()
 	if !strings.Contains(s.GuardWarnings(), "p1") || !strings.Contains(s.GuardWarnings(), "起動時") {
 		t.Fatal(s.GuardWarnings())
 	}
@@ -36,6 +37,7 @@ func TestGuardReloadWarnsUninjectedPaneAndClearsOnExit(t *testing.T) {
 		t.Fatal("false marker", e)
 	}
 	p.SetAgent("")
+	s.FlushGuardSync()
 	if s.GuardWarnings() != "" {
 		t.Fatal("human warning", s.GuardWarnings())
 	}

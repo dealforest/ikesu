@@ -167,7 +167,9 @@ func (s *Server) startScreenAnswer(pid int, w *screenPromptWatch, answer api.Dec
 			w.editingText = false
 			w.deliveryFinished = true
 			w.deliveryErr = err
-			s.finishScreenFlowAnswer(pid, prompt, err)
+			if s.screenPrompts.watches[pid] == w {
+				s.finishScreenFlowAnswer(pid, prompt, err)
+			}
 		})
 		if err != nil && !recovering {
 			message := fmt.Sprintf("screen prompt input failed: decision=%s pane=%s: %v", w.decisionID, fmtPaneID(pid), err)

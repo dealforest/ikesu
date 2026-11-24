@@ -52,6 +52,7 @@ type Assets struct {
 	closed                                  bool
 	injected, prompt                        bool
 	mode, unsupported, issue                string
+	issueText                               atomic.Pointer[string]
 }
 
 func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
@@ -62,6 +63,12 @@ func NewAssets(root, pane, exe string, c Config) *Assets {
 	}
 	return a
 }
+
+// Paths returns the immutable root and marker locations of these assets.
+func (a *Assets) Paths() (root, marker string) {
+	return a.Root, a.MarkerPath
+}
+
 func (a *Assets) Prepare(env []string, cwd string) ([]string, error) {
 	m := EnvMap(env)
 	a.meta = Marker{Pane: m["IKESU_PANE_ID"], Cwd: cwd, Workspace: m["IKESU_WORKSPACE_ID"], Tab: m["IKESU_TAB_ID"], Socket: m["IKESU_SOCKET_PATH"], Mode: a.Config.EffectiveMode()}

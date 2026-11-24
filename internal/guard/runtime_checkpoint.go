@@ -201,6 +201,7 @@ func (a *Assets) restoreCheckpointLocked(c *RuntimeCheckpoint) error {
 	a.native = c.state.Native
 	a.Executable, a.active, a.Config, a.meta = c.state.Executable, c.state.Active, c.state.Config, c.state.Meta
 	a.injected, a.prompt, a.mode, a.unsupported, a.issue = c.state.Injected, c.state.Prompt, c.state.Mode, c.state.Unsupported, c.state.Issue
+	a.publishIssue()
 	return nil
 }
 func (a *Assets) RestoreCheckpoint(c *RuntimeCheckpoint) error {

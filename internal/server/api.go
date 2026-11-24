@@ -295,6 +295,14 @@ func (s *Server) dispatchContext(ctx context.Context, req *api.Request) (respons
 		s.app.DoContext(ctx, func() {
 			resp = s.dispatchOnLoop(req)
 		})
+		if len(resp.Result) != 0 && resp.Err == nil {
+			switch req.Method {
+			case api.MethodServerReloadConfig, api.MethodPaneReportAgent:
+				// These RPCs acknowledge the applied guard state. The wait
+				// belongs to the caller goroutine so other app jobs can run.
+				s.sup.FlushGuardSync()
+			}
+		}
 		return resp
 	}
 }

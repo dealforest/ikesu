@@ -56,6 +56,7 @@ func (a *Assets) intact() bool {
 	return true
 }
 func (a *Assets) setIssue(reason string) error {
+	defer a.publishIssue()
 	if err := a.validateManaged(false); err != nil {
 		if reason != "" {
 			a.issue = reason
@@ -113,13 +114,21 @@ func (a *Assets) Reconfigure(c Config) error {
 	a.Config = c
 	return a.sync(a.active)
 }
-func (a *Assets) Issue() string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+func (a *Assets) publishIssue() {
 	if a.issue == "" {
-		return ""
+		a.issueText.Store(nil)
+		return
 	}
-	return (CoverageIssue{a.meta.Pane, a.issue, "新しい pane で agent を起動し直してください"}).String()
+	text := (CoverageIssue{a.meta.Pane, a.issue, "新しい pane で agent を起動し直してください"}).String()
+	a.issueText.Store(&text)
+}
+
+// Issue reads the last published coverage warning without waiting for asset I/O.
+func (a *Assets) Issue() string {
+	if text := a.issueText.Load(); text != nil {
+		return *text
+	}
+	return ""
 }
 func CoverageIssues(root string) ([]CoverageIssue, error) {
 	dir := filepath.Join(root, "guard", "uncovered")

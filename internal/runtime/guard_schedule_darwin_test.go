@@ -24,6 +24,7 @@ func TestGuardScheduleRepairsWithoutPeriodicTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.SetAgent("codex")
+	s.FlushGuardSync()
 	wait := func(check func() bool) {
 		t.Helper()
 		until := time.Now().Add(5 * time.Second)
@@ -43,7 +44,7 @@ func TestGuardScheduleRepairsWithoutPeriodicTargets(t *testing.T) {
 		defer s.processMu.Unlock()
 		return !s.processTicks[p] && !s.processDue[p].IsZero() && len(s.processWork) == 0
 	})
-	for _, path := range []string{p.guard.MarkerPath, filepath.Join(p.guard.Bin, "git")} {
+	for _, path := range []string{p.GuardMarkerPath(), filepath.Join(p.guard.Transfer().Bin, "git")} {
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
@@ -51,7 +52,7 @@ func TestGuardScheduleRepairsWithoutPeriodicTargets(t *testing.T) {
 	}
 	s.Kill(p.ID)
 	s.PollPendingProcesses(time.Now())
-	if _, err := os.Stat(p.guard.MarkerPath); !os.IsNotExist(err) {
+	if _, err := os.Stat(p.GuardMarkerPath()); !os.IsNotExist(err) {
 		t.Fatal("closed guard resurrected", err)
 	}
 }
@@ -78,6 +79,7 @@ func TestQuietGuardChecksUnwatchedAncestorWithinDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.SetAgent("codex")
+	s.FlushGuardSync()
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()
 	setupDeadline := time.NewTimer(5 * time.Second)
