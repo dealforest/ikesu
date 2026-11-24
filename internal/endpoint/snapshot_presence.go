@@ -11,6 +11,8 @@ import (
 type snapshotPresence struct {
 	Selected, Drop          bool
 	ConfigBools, ConfigInts uint64
+	ConfigLoadedFromFile    bool
+	ConfigProvenanceKnown   bool
 	Tokens                  []tokenPresence
 	Jobs                    []jobPresence
 }
@@ -28,24 +30,28 @@ type tokenPresence struct {
 	Bold, Dim   bool
 }
 
-func configPointers(c *config.Config) ([21]**bool, [11]**int) {
-	return [21]**bool{
+func configPointers(c *config.Config) ([23]**bool, [12]**int) {
+	return [23]**bool{
 		&c.Onboarding, &c.Remote.ManageSSHConfig, &c.Update.VersionCheck, &c.Update.ManifestCheck,
 		&c.UI.MouseCapture, &c.UI.CopyOnSelect, &c.UI.RedrawOnFocusGained, &c.UI.ConfirmClose,
 		&c.UI.PromptNewTabName, &c.UI.PaneGaps, &c.UI.Sound.Enabled, &c.UI.Toast.Clipboard.Enabled,
 		&c.UI.Toast.Enabled, &c.UI.ShowTabBar, &c.UI.HideTabBarWhenSingleTab, &c.UI.PaneBorders,
 		&c.Session.ResumeAgentsOnRestore, &c.AgentRestore.Enabled, &c.Guard.Enabled,
-		&c.Decisions.ScreenPrompts, &c.UI.Koi,
-	}, [11]**int{
+		&c.Decisions.ScreenPrompts, &c.UI.Koi, &c.UI.SidebarPlugins.Enabled, &c.Integrations.ClaudeTeams,
+	}, [12]**int{
 		&c.Advanced.ScrollbackLimitBytes, &c.UI.MouseScrollLines, &c.UI.MobileWidthThreshold,
 		&c.UI.SidebarWidth, &c.UI.SidebarMinWidth, &c.UI.SidebarMaxWidth,
 		&c.UI.Toast.DelaySeconds, &c.AgentRestore.RestoreDelayMs, &c.Guard.AskTimeoutSeconds, &c.UI.RightSidebarWidth,
-		&c.UI.PaneScrollbarHideDelayMs,
+		&c.UI.PaneScrollbarHideDelayMs, &c.ConfigVersion,
 	}
 }
 
 func optionalPresence(in render.Input) snapshotPresence {
-	p := snapshotPresence{Selected: in.SelectedWorkspace != nil, Drop: in.DropIndex != nil}
+	p := snapshotPresence{
+		Selected: in.SelectedWorkspace != nil, Drop: in.DropIndex != nil,
+		ConfigLoadedFromFile:  in.SidebarConfig.LoadedFromFile(),
+		ConfigProvenanceKnown: true,
+	}
 	for index, row := range in.Jobs {
 		age, exit := row.AgeSinceMs != nil && *row.AgeSinceMs == 0, row.ExitCode != nil && *row.ExitCode == 0
 		if age || exit {
@@ -110,6 +116,11 @@ func (p snapshotPresence) restore(in *render.Input) error {
 		if p.ConfigInts&(1<<i) != 0 {
 			*field = new(int)
 		}
+	}
+	if p.ConfigProvenanceKnown {
+		in.SidebarConfig.SetLoadedFromFile(p.ConfigLoadedFromFile)
+	} else if in.SidebarConfig.ConfigVersion == nil {
+		in.SidebarConfig.SetLoadedFromFile(true)
 	}
 	for _, token := range p.Tokens {
 		panel := &in.SidebarConfig.UI.Sidebar.Spaces

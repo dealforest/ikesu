@@ -6,6 +6,10 @@ import (
 )
 
 func (c *Config) validateValues() {
+	if c.ConfigVersion != nil && (*c.ConfigVersion < ConfigVersionV1 || *c.ConfigVersion > CurrentConfigVersion) {
+		c.warn("config_version", "unsupported value; using default")
+		c.ConfigVersion = nil
+	}
 	enums := []struct {
 		key     string
 		value   *string

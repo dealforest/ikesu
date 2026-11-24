@@ -79,8 +79,10 @@ func TestKoiPreview(t *testing.T) {
 			panes[pid] = &PaneSnap{Agent: []string{"claude", "codex"}[i%2], Status: StatusGlyph{Key: "working", Rune: "●", Color: Green}}
 		}
 		var frames []string
+		enabled := true
 		for t0 := 0; t0 < 160; t0++ {
 			in := Input{State: s, Panes: panes, Spin: t0, Koi: true}
+			in.SidebarConfig.UI.Koi = &enabled
 			frames = append(frames, frameHTML(Compose(in).Frame))
 		}
 		var sb strings.Builder

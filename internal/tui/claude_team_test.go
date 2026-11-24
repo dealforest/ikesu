@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -8,7 +9,9 @@ import (
 	"time"
 
 	"github.com/kazuph/ikesu/internal/claudeteam"
+	"github.com/kazuph/ikesu/internal/config"
 	"github.com/kazuph/ikesu/internal/detect"
+	"github.com/kazuph/ikesu/internal/model"
 	"github.com/kazuph/ikesu/internal/runtime"
 	"github.com/kazuph/ikesu/internal/status"
 )
@@ -109,6 +112,7 @@ func judgeClaudeTeam(t *testing.T, screen string, title string, active bool) det
 		claudeTeams:     claudeteam.NewWatcher(),
 		claudeTeamRoots: map[int]claudeTeamRoot{9: {pid: leadPID, root: root}},
 	}
+	a.sidebarConfig.SetLoadedFromFile(true)
 	sn := runtime.Snapshot{AgentID: "claude", FgPID: leadPID}
 	in := detect.Input{Screen: screen, OSCTitle: title}
 	d := detect.Detect("claude", in)
@@ -181,6 +185,7 @@ func TestClaudeTeamOverrideLeavesOtherVerdictsAlone(t *testing.T) {
 	root := t.TempDir()
 	writeClaudeTeam(t, root, 4242, false)
 	a := &App{claudeTeams: claudeteam.NewWatcher(), claudeTeamRoots: map[int]claudeTeamRoot{9: {pid: 4242, root: root}}}
+	a.sidebarConfig.SetLoadedFromFile(true)
 	in := detect.Input{Screen: claudeTeamLeadWorking, OSCTitle: "✳ task"}
 	d := detect.Detect("claude", in)
 	got := a.claudeTeamIdle(9, nil, runtime.Snapshot{AgentID: "claude", FgPID: 4242}, in, d)
@@ -207,6 +212,7 @@ func TestForgetClaudeTeamStopsWatching(t *testing.T) {
 	root := t.TempDir()
 	writeClaudeTeam(t, root, 4242, false)
 	a := &App{claudeTeams: claudeteam.NewWatcher(), claudeTeamRoots: map[int]claudeTeamRoot{9: {pid: 4242, root: root}}}
+	a.sidebarConfig.SetLoadedFromFile(true)
 	in := detect.Input{Screen: claudeTeamPanelIdle, OSCTitle: "◐ task"}
 	a.claudeTeamIdle(9, nil, runtime.Snapshot{AgentID: "claude", FgPID: 4242}, in, detect.Detect("claude", in))
 	a.claudeTeams.Refresh(time.Unix(1001, 0))
@@ -216,5 +222,40 @@ func TestForgetClaudeTeamStopsWatching(t *testing.T) {
 	a.forgetClaudeTeam(9)
 	if _, ok := a.claudeTeamRoots[9]; ok || a.claudeTeams.Idle(4242) {
 		t.Fatal("closed pane still tracked")
+	}
+}
+
+func TestClaudeTeamsOptInAndDisableClearsWatch(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	const paneID, leadPID = 9, 4242
+	writeClaudeTeam(t, root, leadPID, false)
+	a := NewApp(model.New(t.TempDir(), 120, 40), runtime.NewSupervisor(), io.Discard, "")
+	in := detect.Input{Screen: claudeTeamPanelIdle, OSCTitle: "◐ task"}
+	d := detect.Detect("claude", in)
+	sn := runtime.Snapshot{AgentID: "claude", FgPID: leadPID}
+	now := time.Unix(1001, 0)
+	if got := a.claudeTeamIdle(paneID, nil, sn, in, d); got != d || len(a.claudeTeamRoots) != 0 {
+		t.Fatalf("disabled detection changed the verdict or started tracking: %+v", got)
+	}
+
+	var c config.Config
+	enabled := true
+	c.Integrations.ClaudeTeams = &enabled
+	a.SetSidebarConfig(c, false)
+	a.claudeTeamRoots[paneID] = claudeTeamRoot{pid: leadPID, root: root}
+	a.claudeTeamIdle(paneID, nil, sn, in, d)
+	if changed := a.claudeTeams.Refresh(now); len(changed) != 1 || changed[0] != paneID {
+		t.Fatalf("enabled watch did not detect idle teammate: %v", changed)
+	}
+	if got := a.claudeTeamIdle(paneID, nil, sn, in, d); got.RuleID != "claude_team_idle" {
+		t.Fatalf("enabled watcher verdict: %+v", got)
+	}
+	a.SetSidebarConfig(config.Config{}, false)
+	if len(a.claudeTeamRoots) != 0 || a.claudeTeams.Idle(leadPID) {
+		t.Fatal("disabling did not clear watched PID")
+	}
+	if got := a.claudeTeamIdle(paneID, nil, sn, in, d); got != d {
+		t.Fatalf("disabled detection changed verdict: %+v", got)
 	}
 }

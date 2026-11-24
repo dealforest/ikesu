@@ -43,7 +43,7 @@ func TestGuardLogStatusAndCompareCLI(t *testing.T) {
 	if e := json.Unmarshal([]byte(out), &status); e != nil || code != 0 {
 		t.Fatal(code, out, e)
 	}
-	if len(status) != 7 || status["log_records"] != float64(25) || status["ask_timeout_seconds"] != float64(300) || status["marker"] != nil || status["mode"] != "enforce" || status["log_path"] != path {
+	if len(status) != 7 || status["log_records"] != float64(25) || status["ask_timeout_seconds"] != float64(300) || status["marker"] != nil || status["mode"] != "record" || status["enabled"] != false || status["log_path"] != path {
 		t.Fatal(status)
 	}
 	code, out = run("log", "--json")

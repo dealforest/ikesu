@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/kazuph/ikesu/internal/api"
-	"github.com/kazuph/ikesu/internal/config"
 	"github.com/kazuph/ikesu/internal/platform"
 
 	"github.com/kazuph/ikesu/internal/teststate"
@@ -143,7 +142,7 @@ func TestClaudeRestoreAnsweredWithoutVisibleScreen(t *testing.T) {
 		t.Fatal(err)
 	}
 	paintScreen(pane, "ordinary idle screen")
-	s.app.Do(func() { s.app.SetReported(1, "claude", "idle"); s.screenPromptConfig(config.Config{}) })
+	s.app.Do(func() { s.app.SetReported(1, "claude", "idle"); s.screenPromptConfig(s.cfg) })
 	waitPromptCondition(t, func() bool {
 		scanScreen(s)
 		d, e := s.store.Decision(answered.DecisionID)

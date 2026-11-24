@@ -210,7 +210,7 @@ type App struct {
 	resizeCh            chan winsize
 	jobs                chan appJob
 	doneCh              chan struct{}
-	processPollRequests chan struct{}
+	processPollRequests chan bool
 	processPollResults  chan []int
 	processPollPermit   chan struct{}
 	// claudeTeams tells a Claude lead waiting for input apart from one
@@ -436,7 +436,7 @@ func NewApp(st *model.AppState, sup *runtime.Supervisor, out io.Writer, cwd stri
 		resizeCh:            make(chan winsize, 8),
 		jobs:                make(chan appJob),
 		doneCh:              make(chan struct{}),
-		processPollRequests: make(chan struct{}, 1),
+		processPollRequests: make(chan bool, 1),
 		processPollResults:  make(chan []int, 1),
 		processPollPermit:   make(chan struct{}, 1),
 		claudeTeams:         claudeteam.NewWatcher(),
@@ -721,7 +721,7 @@ func (a *App) Run() {
 			select {
 			case <-processCtx.Done():
 				return
-			case <-a.processPollRequests:
+			case refreshClaudeTeams := <-a.processPollRequests:
 				select {
 				case <-a.processPollPermit:
 				case <-processCtx.Done():
@@ -729,7 +729,9 @@ func (a *App) Run() {
 				}
 				changed := a.sup.PollPendingProcesses(time.Now())
 				a.processPollPermit <- struct{}{}
-				changed = append(changed, a.claudeTeams.Refresh(time.Now())...)
+				if refreshClaudeTeams {
+					changed = append(changed, a.claudeTeams.Refresh(time.Now())...)
+				}
 				select {
 				case a.processPollResults <- changed:
 				case <-processCtx.Done():

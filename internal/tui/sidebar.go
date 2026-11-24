@@ -19,13 +19,26 @@ func (a *App) SetSidebarConfig(c config.Config, startup bool) {
 	if root == "" {
 		root = api.StateDir()
 	}
-	a.sup.SetGuard(c.Guard, root)
+	a.sup.SetGuard(c.GuardConfig(), root)
 	a.sup.SetScrollbackBytes(c)
 	a.setSidebarConfig(c, startup)
 }
 
 func (a *App) setSidebarConfig(c config.Config, startup bool) {
+	teamsChanged := c.ClaudeTeamsEnabled() != a.sidebarConfig.ClaudeTeamsEnabled()
 	a.sidebarConfig = c
+	if a.viewerOwner == nil {
+		a.updateSidebarPanel()
+		if !c.ClaudeTeamsEnabled() {
+			for pid := range a.claudeTeamRoots {
+				a.forgetClaudeTeam(pid)
+			}
+		}
+		if teamsChanged {
+			// Re-evaluate leads that have produced no output since the reload.
+			a.paneActivity().initialized = false
+		}
+	}
 	a.st.PhoneTabRows = c.UI.NativeMenus
 	if enabled := c.UI.Toast.Clipboard.Enabled; enabled != nil && !*enabled {
 		a.copied = ""

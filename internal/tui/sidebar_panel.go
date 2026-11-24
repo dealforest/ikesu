@@ -15,7 +15,8 @@ import (
 // the left sidebar, and which plugin sections are folded. It is shared by
 // every viewer of the App.
 type sidebarPanelState struct {
-	started   bool
+	done      <-chan struct{}
+	cancel    context.CancelFunc
 	plugins   []sidebarplugin.Item
 	collapsed map[string]bool // by plugin file name
 	columns   atomic.Int64    // the sidebar's content width, passed to scripts
@@ -29,27 +30,59 @@ type sidebarPanelState struct {
 const widthRerunGap = 30 * time.Second
 
 // startSidebarPanel starts running the sidebar plugins until done closes. It
-// runs once per App.
+// can be restarted when the config enables them again.
 func (a *App) startSidebarPanel(done <-chan struct{}) {
 	if a.panel == nil {
 		a.panel = &sidebarPanelState{}
 	}
-	if a.panel.started {
+	panel := a.panel
+	panel.done = done
+	if panel.runner != nil || !a.sidebarConfig.SidebarPluginsEnabled() {
 		return
 	}
-	a.panel.started = true
-	panel := a.panel
 	// 最初の実行の前に幅を決める（サイドバーを閉じて起動しても、開いたときの幅を渡す）。
 	panel.columns.Store(int64(max(0, a.st.ExpandedSidebarWidth()-2)))
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() { <-done; cancel() }()
+	panel.cancel = cancel
+	go func() {
+		select {
+		case <-done:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	runner := &sidebarplugin.Runner{Dir: sidebarplugin.Dir(config.Path()), Columns: func() int { return int(panel.columns.Load()) }}
 	// 結果は画面に反映する時点で読む。通知が前後しても、古い結果で新しい結果を上書きしない。
 	runner.OnChange = func() {
-		a.Do(func() { panel.plugins = runner.Items(); a.dirty = true })
+		a.Do(func() {
+			if panel.runner == runner {
+				panel.plugins = runner.Items()
+				a.dirty = true
+			}
+		})
 	}
 	panel.runner = runner
 	go runner.Run(ctx)
+}
+
+func (a *App) updateSidebarPanel() {
+	panel := a.panel
+	if panel == nil || panel.done == nil {
+		return
+	}
+	if a.sidebarConfig.SidebarPluginsEnabled() {
+		a.startSidebarPanel(panel.done)
+		return
+	}
+	if panel.cancel != nil {
+		panel.cancel()
+		panel.cancel = nil
+		panel.runner = nil
+		panel.plugins = nil
+		panel.rerunDue = false
+		panel.rerunAt = time.Time{}
+		a.dirty = true
+	}
 }
 
 // sidebarPanel builds the render input for the panel; nil without plugins.

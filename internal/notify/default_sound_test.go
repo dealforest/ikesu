@@ -23,6 +23,9 @@ import (
 const noMacSounds = "/nonexistent/ikesu-test-no-mac-sounds"
 
 func TestMacSystemSoundsWhenPresentElseEmbedded(t *testing.T) {
+	var c config.Config
+	enabled := true
+	c.UI.Sound.Enabled = &enabled
 	t.Setenv("IKESU_DISABLE_SOUND", "")
 	dir := t.TempDir()
 	for _, name := range []string{"Blow.aiff", "Hero.aiff"} {
@@ -40,7 +43,7 @@ func TestMacSystemSoundsWhenPresentElseEmbedded(t *testing.T) {
 			calls = append(calls, append([]string{name}, args...))
 			return nil
 		}}
-		if err := d.Deliver(endpoint.Notification{Kind: tc.kind, Agent: "codex"}, config.Config{}, "local", ""); err != nil {
+		if err := d.Deliver(endpoint.Notification{Kind: tc.kind, Agent: "codex"}, c, "local", ""); err != nil {
 			t.Fatal(err)
 		}
 		want := filepath.Join(cache, api.ExecutableNamespace(d.Executable), "sounds", fmt.Sprintf("%x.wav", sha256.Sum256(tc.embedded)))
@@ -75,6 +78,9 @@ func TestMacSystemSoundsWhenPresentElseEmbedded(t *testing.T) {
 }
 
 func TestBundledSoundsNumericWAVAndPlaybackPaths(t *testing.T) {
+	var c config.Config
+	enabled := true
+	c.UI.Sound.Enabled = &enabled
 	t.Setenv("IKESU_DISABLE_SOUND", "")
 	cache := t.TempDir()
 	for _, tc := range []struct {
@@ -107,7 +113,7 @@ func TestBundledSoundsNumericWAVAndPlaybackPaths(t *testing.T) {
 			calls = append(calls, append([]string{name}, args...))
 			return nil
 		}}
-		if err := d.Deliver(endpoint.Notification{Kind: tc.kind, Agent: "codex"}, config.Config{}, "local", ""); err != nil {
+		if err := d.Deliver(endpoint.Notification{Kind: tc.kind, Agent: "codex"}, c, "local", ""); err != nil {
 			t.Fatal(err)
 		}
 		want := filepath.Join(cache, api.ExecutableNamespace(d.Executable), "sounds", fmt.Sprintf("%x.wav", sha256.Sum256(b)))
@@ -152,6 +158,9 @@ func TestBundledSoundsNumericWAVAndPlaybackPaths(t *testing.T) {
 }
 
 func TestDefaultSoundCacheFailureKeepsNotificationAndWarnsOnce(t *testing.T) {
+	var c config.Config
+	enabled := true
+	c.UI.Sound.Enabled = &enabled
 	t.Setenv("IKESU_DISABLE_SOUND", "")
 	base := filepath.Join(t.TempDir(), "not-a-directory")
 	if err := os.WriteFile(base, []byte("occupied"), 0600); err != nil {
@@ -170,7 +179,7 @@ func TestDefaultSoundCacheFailureKeepsNotificationAndWarnsOnce(t *testing.T) {
 		return nil
 	}}
 	for _, kind := range []string{"finished", "needs_attention"} {
-		if err := d.Deliver(endpoint.Notification{Kind: kind, SystemToast: true, TargetPaneID: "p1"}, config.Config{}, "test", ""); err != nil {
+		if err := d.Deliver(endpoint.Notification{Kind: kind, SystemToast: true, TargetPaneID: "p1"}, c, "test", ""); err != nil {
 			t.Fatal("cache failure escaped notification handler", err)
 		}
 	}
