@@ -27,6 +27,7 @@ type screenPromptHub struct {
 	claudeRestoring     bool
 	claudeCapturing     map[string]bool
 	timer               *time.Timer
+	timerGen            uint64
 }
 
 // Waiting screens use the review's one-second bound; preview navigation keeps
@@ -105,7 +106,6 @@ func (s *Server) readScreenPrompt(pid int) *screenprompt.Prompt {
 	}
 	return current
 }
-
 func (s *Server) cancelScreenPrompt(w *screenPromptWatch) {
 	if w.decisionID == "" || w.resolved {
 		return

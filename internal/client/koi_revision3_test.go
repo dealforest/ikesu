@@ -18,6 +18,8 @@ func koiRev3Client(t *testing.T) (*machineClient, *os.File) {
 	state.SidebarSize = 26
 	state.RightSidebarSize = 30
 	snapshot := render.Input{State: state, Panes: map[int]*render.PaneSnap{1: {Agent: "codex", Status: render.StatusGlyph{Key: "idle"}}}}
+	koi := true
+	snapshot.SidebarConfig.UI.Koi = &koi
 	file, err := os.CreateTemp(t.TempDir(), "output")
 	if err != nil {
 		t.Fatal(err)

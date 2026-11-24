@@ -121,6 +121,8 @@ func newTestServer(t *testing.T, session string) *Server {
 		app:          app,
 		sup:          sup,
 	}
+	// These fixtures model an established installation with unversioned settings.
+	s.cfg.SetLoadedFromFile(true)
 	// 台帳への書き込みは別の goroutine で後から走る。TempDir を消す前に終わるのを待つ
 	// （待たないと、消している途中に書かれて「directory not empty」で落ちる。2026-11-17 mini の race で発生）。
 	t.Cleanup(s.ledgerWG.Wait)

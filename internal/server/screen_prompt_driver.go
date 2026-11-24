@@ -109,31 +109,35 @@ func (h *screenPromptHub) schedule(s *Server) {
 
 func (h *screenPromptHub) armTimer(s *Server) {
 	s.initDecisionHub()
-	var timer *time.Timer
-	timer = time.AfterFunc(s.screenPromptPollInterval(), func() {
+	h.timerGen++
+	gen := h.timerGen
+	h.timer = time.AfterFunc(s.screenPromptPollInterval(), func() {
 		select {
 		case <-s.decisions.stopped:
 			return
 		default:
 		}
-		s.app.Do(func() {
-			if h.timer != timer {
-				return
-			}
-			h.timer = nil
-			select {
-			case <-s.decisions.stopped:
-				return
-			default:
-			}
-			s.scanScreenPrompts()
-			s.scheduleScreenPrompts()
-		})
+		s.app.Do(func() { s.runScreenPromptTimer(gen) })
 	})
-	h.timer = timer
+}
+
+// runScreenPromptTimer runs on the app loop, where reloads also change the timer.
+func (s *Server) runScreenPromptTimer(gen uint64) {
+	if gen != s.screenPrompts.timerGen {
+		return
+	}
+	s.screenPrompts.timer = nil
+	select {
+	case <-s.decisions.stopped:
+		return
+	default:
+	}
+	s.scanScreenPrompts()
+	s.scheduleScreenPrompts()
 }
 
 func (s *Server) stopScreenPromptTimer() {
+	s.screenPrompts.timerGen++
 	if s.screenPrompts.timer != nil {
 		s.screenPrompts.timer.Stop()
 		s.screenPrompts.timer = nil

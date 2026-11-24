@@ -32,7 +32,7 @@ var claudeSubagentRunning = regexp.MustCompile(`(?m)^\s*◯\s+\S.*·\s+[↓↑]\
 // still counting tokens, and the screen without the title is the plain
 // input prompt; anything else keeps the title's verdict.
 func (a *App) claudeTeamIdle(pid int, p *runtime.Pane, sn runtime.Snapshot, in detect.Input, d detect.Detection) detect.Detection {
-	if sn.AgentID != "claude" || d.RuleID != "osc_title_working" || sn.FgPID <= 0 || a.claudeTeams == nil {
+	if !a.sidebarConfig.ClaudeTeamsEnabled() || sn.AgentID != "claude" || d.RuleID != "osc_title_working" || sn.FgPID <= 0 || a.claudeTeams == nil {
 		return d
 	}
 	if a.claudeTeamRoots == nil {

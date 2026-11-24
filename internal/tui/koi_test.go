@@ -19,6 +19,8 @@ import (
 func TestKoiStandaloneClockCannotTriggerSnapshotSink(t *testing.T) {
 	teststate.Lock(t)
 	a := specRuntimeApp(t)
+	enabled := true
+	a.sidebarConfig.UI.Koi = &enabled
 	if err := a.StartInitialPane(); err != nil {
 		t.Fatal(err)
 	}
@@ -47,6 +49,8 @@ func TestKoiStandaloneClockCannotTriggerSnapshotSink(t *testing.T) {
 func TestKoiServerFrameViewerDoesNotOwnDecorationClock(t *testing.T) {
 	teststate.Lock(t)
 	a := specRuntimeApp(t)
+	enabled := true
+	a.sidebarConfig.UI.Koi = &enabled
 	if err := a.StartInitialPane(); err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +94,7 @@ func TestKoiRev3MainMenuTogglePersists(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	teststate.Setenv(t, config.EnvVar, path)
 	a := specRuntimeApp(t)
-	for _, label := range []string{"koi: on", "koi: off"} {
+	for _, label := range []string{"koi: off", "koi: on"} {
 		a.openMainMenu(0, 0)
 		index := -1
 		for i, item := range a.menu.m.Items {
@@ -113,6 +117,8 @@ func TestKoiRev3MainMenuTogglePersists(t *testing.T) {
 func TestKoiRev3StandaloneEmptyClickHasNoAnimationSideEffect(t *testing.T) {
 	teststate.Lock(t)
 	a := specRuntimeApp(t)
+	enabled := true
+	a.sidebarConfig.UI.Koi = &enabled
 	a.draw()
 	r := a.koiScene.Pond
 	if r.W == 0 || r.H == 0 {
@@ -138,6 +144,8 @@ func TestKoiRev3MenuSaveFailureKeepsVisibleSetting(t *testing.T) {
 	}
 	teststate.Setenv(t, config.EnvVar, path)
 	a := specRuntimeApp(t)
+	enabled := true
+	a.sidebarConfig.UI.Koi = &enabled
 	a.openMainMenu(0, 0)
 	index := -1
 	for i, item := range a.menu.m.Items {

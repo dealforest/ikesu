@@ -55,7 +55,10 @@ func TestDisabledScreenPromptReloadSkipsPendingScan(t *testing.T) {
 	if got, err := store.Decision(d.DecisionID); err != nil || got.Status != "pending" {
 		t.Fatalf("disabled reload scanned external pending rows: %+v, err=%v", got, err)
 	}
-	s.screenPromptConfig(config.Config{})
+	enabled := true
+	onCfg := config.Config{}
+	onCfg.Decisions.ScreenPrompts = &enabled
+	s.screenPromptConfig(onCfg)
 	s.screenPromptConfig(cfg)
 	if got, err := store.Decision(d.DecisionID); err != nil || got.Status != "cancelled" {
 		t.Fatalf("ON to OFF did not clean pending screen decisions: %+v, err=%v", got, err)
@@ -78,8 +81,11 @@ func TestScreenPromptReenableStartsFreshFlowAndPreview(t *testing.T) {
 		disabled := false
 		cfg := config.Config{}
 		cfg.Decisions.ScreenPrompts = &disabled
+		enabled := true
+		onCfg := config.Config{}
+		onCfg.Decisions.ScreenPrompts = &enabled
 		s.screenPromptConfig(cfg)
-		s.screenPromptConfig(config.Config{})
+		s.screenPromptConfig(onCfg)
 		s.scanScreenPrompts()
 		if s.screenPrompts.flows[1] != nil {
 			t.Error("same-name final screen reused old answers")

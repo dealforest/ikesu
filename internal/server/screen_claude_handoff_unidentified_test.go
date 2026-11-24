@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/kazuph/ikesu/internal/api"
-	"github.com/kazuph/ikesu/internal/config"
 	"github.com/kazuph/ikesu/internal/teststate"
 )
 
@@ -80,7 +79,7 @@ func TestClaudeUnidentifiedQuestionAfterHandoff(t *testing.T) {
 			} else {
 				paintScreen(pane, strings.ReplaceAll(picture, "Which output format should the temporary report use?", "A completely different question?"))
 			}
-			s.app.Do(func() { s.screenPromptConfig(config.Config{}) })
+			s.app.Do(func() { s.screenPromptConfig(s.cfg) })
 			options := []map[string]string{}
 			for _, o := range old.Options {
 				desc := ""

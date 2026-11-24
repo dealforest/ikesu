@@ -35,3 +35,44 @@ func TestLoadReloadedPreservesUIAndDisablesInvalidBinding(t *testing.T) {
 		t.Fatal(start, err)
 	}
 }
+
+func TestLoadReloadedKeepsV2UIDefaultsWhenFallbackConfigIsV1(t *testing.T) {
+	teststate.Lock(t)
+	path := filepath.Join(t.TempDir(), "config.toml")
+	teststate.Setenv(t, EnvVar, path)
+	current, err := Decode([]byte("config_version = 2\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("[ui]\nsidebar_width = 'bad'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadReloaded(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.EffectiveConfigVersion() != ConfigVersionV1 || !strings.Contains(c.Warning(), "keeping current ui settings") {
+		t.Fatalf("expected a partial v1 reload, version=%d warnings=%v", c.EffectiveConfigVersion(), c.Warnings)
+	}
+	if c.UI.Koi == nil || c.UI.Sound.Enabled == nil || c.UI.SidebarPlugins.Enabled == nil ||
+		c.KoiEnabled() || c.SoundEnabled() || c.SidebarPluginsEnabled() {
+		t.Fatal("partial reload did not pin the previous disabled UI defaults")
+	}
+	if current.UI.Koi != nil || current.UI.Sound.Enabled != nil || current.UI.SidebarPlugins.Enabled != nil {
+		t.Fatal("partial reload mutated the prior config")
+	}
+	if err := os.WriteFile(path, []byte("ui = 'bad'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	topBad, err := LoadReloaded(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if topBad.EffectiveConfigVersion() != ConfigVersionV1 || !strings.Contains(topBad.Warning(), "keeping current ui settings") {
+		t.Fatalf("expected top-level ui type error to keep ui settings, version=%d warnings=%v", topBad.EffectiveConfigVersion(), topBad.Warnings)
+	}
+	if topBad.UI.Koi == nil || topBad.UI.Sound.Enabled == nil || topBad.UI.SidebarPlugins.Enabled == nil ||
+		topBad.KoiEnabled() || topBad.SoundEnabled() || topBad.SidebarPluginsEnabled() {
+		t.Fatal("top-level ui type error did not pin the previous disabled UI defaults")
+	}
+}

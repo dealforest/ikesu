@@ -38,8 +38,19 @@ func (d ToastDelivery) Valid() bool {
 	return false
 }
 
+const (
+	ConfigVersionV1      = 1
+	ConfigVersionV2      = 2
+	CurrentConfigVersion = ConfigVersionV2
+)
+
 // Config is the parsed config file.
 type Config struct {
+	ConfigVersion  *int `toml:"config_version"`
+	loadedFromFile bool `toml:"-"`
+	Integrations   struct {
+		ClaudeTeams *bool `toml:"claude_teams"`
+	} `toml:"integrations"`
 	Decisions struct {
 		ScreenPrompts *bool `toml:"screen_prompts"`
 	} `toml:"decisions"`
@@ -93,7 +104,10 @@ type Config struct {
 		WorkspacePanelDensity         string        `toml:"workspace_panel_density"`
 		AgentPanelScope               string        `toml:"agent_panel_scope"`
 		AgentPanelSort                string        `toml:"agent_panel_sort"`
-		Sound                         struct {
+		SidebarPlugins                struct {
+			Enabled *bool `toml:"enabled"`
+		} `toml:"sidebar_plugins"`
+		Sound struct {
 			Enabled     *bool             `toml:"enabled"`
 			Path        string            `toml:"path"`
 			DonePath    string            `toml:"done_path"`
@@ -165,7 +179,7 @@ type Config struct {
 	} `toml:"agent_start"`
 	Session struct {
 		// ResumeAgentsOnRestore resumes recorded agent sessions after a
-		// session.json restore. Default on.
+		// session.json restore. Defaults to on for v1.
 		ResumeAgentsOnRestore *bool `toml:"resume_agents_on_restore"`
 	} `toml:"session"`
 	AgentRestore struct {
@@ -200,12 +214,80 @@ func Load() (Config, error) {
 	data, err := os.ReadFile(Path())
 	if err != nil {
 		if os.IsNotExist(err) {
+			c.syncGuardDefaults()
 			return c, nil
 		}
 		return c, err
 	}
-	return Decode(data)
+	c, err = Decode(data)
+	if err != nil {
+		return c, err
+	}
+	c.syncGuardDefaults()
+	return c, nil
 }
+
+// EffectiveConfigVersion selects the defaults for this config.
+func (c Config) EffectiveConfigVersion() int {
+	if c.ConfigVersion != nil {
+		if *c.ConfigVersion <= ConfigVersionV1 {
+			return ConfigVersionV1
+		}
+		return ConfigVersionV2
+	}
+	if c.loadedFromFile {
+		return ConfigVersionV1
+	}
+	return ConfigVersionV2
+}
+
+// WithEffectiveVersion makes the version explicit before crossing a JSON boundary.
+func (c Config) WithEffectiveVersion() Config {
+	if c.ConfigVersion == nil {
+		version := c.EffectiveConfigVersion()
+		c.ConfigVersion = &version
+	}
+	return c
+}
+
+func (c Config) isV2() bool { return c.EffectiveConfigVersion() >= ConfigVersionV2 }
+
+// LoadedFromFile reports whether the config was decoded from file contents.
+func (c Config) LoadedFromFile() bool { return c.loadedFromFile }
+
+// SetLoadedFromFile restores file provenance when receiving a config snapshot.
+func (c *Config) SetLoadedFromFile(loaded bool) { c.loadedFromFile = loaded }
+
+func (c Config) SidebarPluginsEnabled() bool {
+	if c.UI.SidebarPlugins.Enabled != nil {
+		return *c.UI.SidebarPlugins.Enabled
+	}
+	return !c.isV2()
+}
+
+func (c Config) ClaudeTeamsEnabled() bool {
+	if c.Integrations.ClaudeTeams != nil {
+		return *c.Integrations.ClaudeTeams
+	}
+	return !c.isV2()
+}
+
+// GuardConfig resolves the version-dependent defaults for runtime callers.
+func (c Config) GuardConfig() guard.Config {
+	g := c.Guard
+	if c.isV2() {
+		if g.Enabled == nil {
+			off := false
+			g.Enabled = &off
+		}
+		if g.Mode == "" {
+			g.Mode = "record"
+		}
+	}
+	return g
+}
+
+func (c *Config) syncGuardDefaults() { c.Guard = c.GuardConfig() }
 
 // ToastDelivery resolves the effective delivery mode. Invalid values fall
 // back to off (notifications must fail closed, not surprise the user).
@@ -364,12 +446,12 @@ func (c Config) RestoreTemplate(agent string) string {
 }
 
 // ResumeAgentsOnRestore reports whether agent panes resume automatically
-// after a session.json restore; it defaults to on.
+// after a session.json restore.
 func (c Config) ResumeAgentsOnRestore() bool {
-	if c.Session.ResumeAgentsOnRestore == nil {
-		return true
+	if c.Session.ResumeAgentsOnRestore != nil {
+		return *c.Session.ResumeAgentsOnRestore
 	}
-	return *c.Session.ResumeAgentsOnRestore
+	return !c.isV2()
 }
 
 // RestoreDelay is the configured post-startup auto-resume delay.

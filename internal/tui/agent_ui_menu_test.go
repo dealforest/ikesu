@@ -115,6 +115,9 @@ func TestReview1SlowLoginShellDoesNotBlockRightClick(t *testing.T) {
 	var cfg config.Config
 	cfg.AgentStart.Commands = map[string][]string{"codex": {"/bin/sh", "-c", "printf 'REVIEW1_MENU PATH=%s\n' \"$PATH\"; exec /bin/sleep 60"}}
 	cfg.Agent.Env = map[string]string{"PATH": "/menu"}
+	guardEnabled := true
+	cfg.Guard.Enabled = &guardEnabled
+	cfg.Guard.Mode = "enforce"
 	a.SetSidebarConfig(cfg, false)
 	done := make(chan struct{})
 	go func() { a.Run(); close(done) }()
