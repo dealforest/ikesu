@@ -2,13 +2,18 @@ package tui
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/kazuph/ikesu/internal/config"
 	"github.com/kazuph/ikesu/internal/model"
 	"github.com/kazuph/ikesu/internal/render"
 	"github.com/kazuph/ikesu/internal/runtime"
 	"github.com/kazuph/ikesu/internal/sidebarplugin"
+	"github.com/kazuph/ikesu/internal/teststate"
 )
 
 // プラグインごとに見出しが付き、クリックしたプラグインの節だけが閉じたり開いたりする。
@@ -72,6 +77,7 @@ func TestSidebarPanelRowsFollowEachViewer(t *testing.T) {
 func TestSidebarPanelWidthKnownBeforeFirstRun(t *testing.T) {
 	a := NewApp(model.New(t.TempDir(), 120, 40), runtime.NewSupervisor(), &bytes.Buffer{}, "")
 	a.st.SidebarVisible = false
+	a.sidebarConfig.SetLoadedFromFile(true)
 	done := make(chan struct{})
 	defer close(done)
 	a.startSidebarPanel(done)
@@ -96,4 +102,54 @@ func TestSidebarPanelRerunsForLatestWidth(t *testing.T) {
 	if a.panel.rerunDue || a.panel.rerunAt.Equal(first.Add(-widthRerunGap)) {
 		t.Fatal("held width change was never run")
 	}
+}
+
+func TestSidebarPanelOptInOnReload(t *testing.T) {
+	teststate.Lock(t)
+	path := filepath.Join(t.TempDir(), "config.toml")
+	teststate.Setenv(t, config.EnvVar, path)
+	dir := sidebarplugin.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "probe.30s.sh"), []byte("#!/bin/sh\nprintf 'real script output\\n'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	a := NewApp(model.New(t.TempDir(), 120, 40), runtime.NewSupervisor(), &bytes.Buffer{}, "")
+	defer close(a.doneCh)
+	a.startSidebarPanel(a.doneCh)
+	if a.panel.runner != nil || a.sidebarPanel() != nil {
+		t.Fatal("plugins started with a fresh config")
+	}
+	enabled := true
+	var c config.Config
+	c.UI.SidebarPlugins.Enabled = &enabled
+	a.SetSidebarConfig(c, false)
+	first := a.panel.runner
+	if first == nil || a.panel.cancel == nil {
+		t.Fatal("plugins did not start after enabling")
+	}
+	timeout := time.NewTimer(3 * time.Second)
+	defer timeout.Stop()
+	for len(a.panel.plugins) != 1 || !a.panel.plugins[0].Ran {
+		select {
+		case job := <-a.jobs:
+			job.fn()
+			close(job.done)
+		case <-timeout.C:
+			t.Fatal("enabled sidebar plugin did not run")
+		}
+	}
+	if got := a.panel.plugins[0].Lines; len(got) != 1 || got[0] != "real script output" {
+		t.Fatalf("unexpected script output: %v", got)
+	}
+	a.SetSidebarConfig(config.Config{}, false)
+	if a.panel.runner != nil || a.panel.cancel != nil || a.sidebarPanel() != nil {
+		t.Fatal("disabled plugins still running or displayed")
+	}
+	a.SetSidebarConfig(c, false)
+	if a.panel.runner == nil || a.panel.runner == first {
+		t.Fatal("re-enabling did not start a new runner")
+	}
+	a.SetSidebarConfig(config.Config{}, false)
 }

@@ -23,12 +23,11 @@ func TestKoiClockStopsWhenOffEmptyHiddenOrFull(t *testing.T) {
 		state.RightSidebarSize = 30
 		panes := map[int]*render.PaneSnap{1: {Agent: "codex", Status: render.StatusGlyph{Key: "working"}}}
 		var cfg config.Config
+		koi := condition != "off"
+		cfg.UI.Koi = &koi
 		switch condition {
 		case "idle":
 			panes[1].Status.Key = "idle"
-		case "off":
-			off := false
-			cfg.UI.Koi = &off
 		case "empty":
 			panes = nil
 		case "hidden":
@@ -84,6 +83,8 @@ func TestKoiDecorationTickDoesNotComposeOrAcknowledge(t *testing.T) {
 	state.SidebarSize = 26
 	state.RightSidebarSize = 30
 	snapshot := render.Input{State: state, Panes: map[int]*render.PaneSnap{1: {Agent: "codex", Status: render.StatusGlyph{Key: "working"}}}}
+	koi := true
+	snapshot.SidebarConfig.UI.Koi = &koi
 	file, err := os.CreateTemp(t.TempDir(), "output")
 	if err != nil {
 		t.Fatal(err)
@@ -160,6 +161,8 @@ func TestKoiRev3PendingResizeHoldsDecorations(t *testing.T) {
 	state.SidebarSize = 26
 	state.RightSidebarSize = 30
 	snapshot := render.Input{State: state, Panes: map[int]*render.PaneSnap{1: {Agent: "codex", Status: render.StatusGlyph{Key: "working"}}}}
+	koi := true
+	snapshot.SidebarConfig.UI.Koi = &koi
 	file, err := os.CreateTemp(t.TempDir(), "output")
 	if err != nil {
 		t.Fatal(err)
@@ -201,6 +204,8 @@ func TestKoiRev3EmptyClicksNeverStartAnimation(t *testing.T) {
 			state.SidebarSize = 26
 			state.RightSidebarSize = 30
 			var cfg config.Config
+			koi := condition != "off"
+			cfg.UI.Koi = &koi
 			snapshot := render.Input{State: state, Panes: map[int]*render.PaneSnap{}, SidebarConfig: cfg}
 			if condition != "empty" {
 				snapshot.Panes[1] = &render.PaneSnap{Agent: "codex", Status: render.StatusGlyph{Key: "idle"}}
@@ -210,11 +215,6 @@ func TestKoiRev3EmptyClicksNeverStartAnimation(t *testing.T) {
 			}
 			if condition == "jobs" {
 				snapshot.JobsPanel = true
-			}
-			if condition == "off" {
-				off := false
-				cfg.UI.Koi = &off
-				snapshot.SidebarConfig = cfg
 			}
 			file, err := os.CreateTemp(t.TempDir(), "output")
 			if err != nil {

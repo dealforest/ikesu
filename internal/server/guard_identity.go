@@ -139,7 +139,7 @@ func (s *Server) guardIdentity(req *api.Request) api.Response {
 			return api.Failure(req.ID, "guard_identity_unknown", "cannot inspect pane marker")
 		}
 	}
-	policy := api.MarshalParams(s.cfg.Guard)
+	policy := api.MarshalParams(s.cfg.GuardConfig())
 	digest := sha256.Sum256(policy)
 	return api.Success(req.ID, api.GuardIdentityResult{Type: "guard_identity", Match: match, Policy: policy, PolicyDigest: hex.EncodeToString(digest[:])})
 }

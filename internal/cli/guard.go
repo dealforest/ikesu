@@ -146,7 +146,7 @@ func (r *runner) guardCLI(a []string) int {
 		}
 		if len(a) != 1 {
 			i.Command, i.Args = "ikesu", append([]string{"guard", "claude-prefix", "--"}, a...)
-			guard.Authorize(c.Guard, root, i, "line", r.errOut(), await)
+			guard.Authorize(c.GuardConfig(), root, i, "line", r.errOut(), await)
 			return usageErr(r, "guard claude-prefix requires exactly one command line")
 		}
 		line := a[0]
@@ -168,13 +168,13 @@ func (r *runner) guardCLI(a []string) int {
 		}
 		i = guard.PrepareClaudeBashEnv(i)
 		i.Command, i.Args = line, nil
-		if !guard.AuthorizeLine(c.Guard, root, i, guard.ClaudePrefixLine(i, line), r.errOut(), await) {
+		if !guard.AuthorizeLine(c.GuardConfig(), root, i, guard.ClaudePrefixLine(i, line), r.errOut(), await) {
 			return 1
 		}
 		if prefix := i.Env["IKESU_GUARD_CLAUDE_PREFIX_ORIG"]; prefix != "" {
 			i.Command, i.Args = prefix, []string{line}
 			i.OpaquePrefix = true
-			if !guard.AuthorizeLine(c.Guard, root, i, shellQuote(prefix)+" "+shellQuote(line), r.errOut(), await) {
+			if !guard.AuthorizeLine(c.GuardConfig(), root, i, shellQuote(prefix)+" "+shellQuote(line), r.errOut(), await) {
 				return 1
 			}
 		} else {
@@ -191,7 +191,7 @@ func (r *runner) guardCLI(a []string) int {
 		return 0
 	}
 	if sub == "status" {
-		v, e := guard.Status(c.Guard, root, i)
+		v, e := guard.Status(c.GuardConfig(), root, i)
 		if e != nil {
 			fmt.Fprintln(r.errOut(), e)
 			return 1
@@ -241,7 +241,7 @@ func (r *runner) guardCLI(a []string) int {
 		return code
 	}
 	if sub == "audit" {
-		return r.guardAudit(c.Guard, root, a)
+		return r.guardAudit(c.GuardConfig(), root, a)
 	}
 	if sub == "log" {
 		defaultLines := 20
@@ -313,7 +313,7 @@ func (r *runner) guardCLI(a []string) int {
 	i.Command = argv[0]
 	i.Args = argv[1:]
 	if sub == "check" {
-		return writeJSON(guard.Evaluate(c.Guard, i))
+		return writeJSON(guard.Evaluate(c.GuardConfig(), i))
 	}
 	if sub == "line" {
 		if viaGiven {
@@ -327,7 +327,7 @@ func (r *runner) guardCLI(a []string) int {
 		if len(argv) != 1 {
 			return usageErr(r, "guard line requires one command line")
 		}
-		if !guard.AuthorizeLine(c.Guard, root, i, argv[0], r.errOut(), await) {
+		if !guard.AuthorizeLine(c.GuardConfig(), root, i, argv[0], r.errOut(), await) {
 			return 1
 		}
 		return 0
@@ -338,7 +338,7 @@ func (r *runner) guardCLI(a []string) int {
 			return 1
 		}
 	}
-	if !guard.Authorize(c.Guard, root, i, via, r.errOut(), await) {
+	if !guard.Authorize(c.GuardConfig(), root, i, via, r.errOut(), await) {
 		return 1
 	}
 	if e = guard.Execute(i); e != nil {

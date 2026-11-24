@@ -279,7 +279,7 @@ func (a *App) onTick() {
 	a.expireToast()
 	a.expireCopied(now)
 	select {
-	case a.processPollRequests <- struct{}{}:
+	case a.processPollRequests <- a.sidebarConfig.ClaudeTeamsEnabled():
 	default:
 	}
 	a.popupSelectionAutoScroll()

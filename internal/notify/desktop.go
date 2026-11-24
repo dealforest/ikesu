@@ -139,7 +139,7 @@ func SoundPath(c config.Config, agent, kind string) (string, bool) {
 	if kind != "finished" && kind != "needs_attention" {
 		return "", false
 	}
-	enabled := c.UI.Sound.Enabled == nil || *c.UI.Sound.Enabled
+	enabled := c.SoundEnabled()
 	if agent == "droid" {
 		enabled = false
 	}

@@ -37,6 +37,8 @@ func koiFixture(t *testing.T, n int) Input {
 		in.Panes[i] = &PaneSnap{Agent: "codex", Status: StatusGlyph{Key: "idle"}}
 	}
 	in.Koi = true
+	enabled := true
+	in.SidebarConfig.UI.Koi = &enabled
 	return in
 }
 

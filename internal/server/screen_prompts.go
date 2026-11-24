@@ -26,6 +26,7 @@ type screenPromptHub struct {
 	claudeRestoring     bool
 	claudeCapturing     map[string]bool
 	timer               *time.Timer
+	timerGen            uint64
 }
 
 // Waiting screens use the review's one-second bound; preview navigation keeps
@@ -172,26 +173,35 @@ func (s *Server) scheduleScreenPrompts() {
 
 func (s *Server) armScreenPromptTimer() {
 	s.initDecisionHub()
+	s.screenPrompts.timerGen++
+	gen := s.screenPrompts.timerGen
 	s.screenPrompts.timer = time.AfterFunc(s.screenPromptPollInterval(), func() {
 		select {
 		case <-s.decisions.stopped:
 			return
 		default:
 		}
-		s.app.Do(func() {
-			s.screenPrompts.timer = nil
-			select {
-			case <-s.decisions.stopped:
-				return
-			default:
-			}
-			s.scanScreenPrompts()
-			s.scheduleScreenPrompts()
-		})
+		s.app.Do(func() { s.runScreenPromptTimer(gen) })
 	})
 }
 
+// runScreenPromptTimer runs on the app loop, where reloads also change the timer.
+func (s *Server) runScreenPromptTimer(gen uint64) {
+	if gen != s.screenPrompts.timerGen {
+		return
+	}
+	s.screenPrompts.timer = nil
+	select {
+	case <-s.decisions.stopped:
+		return
+	default:
+	}
+	s.scanScreenPrompts()
+	s.scheduleScreenPrompts()
+}
+
 func (s *Server) stopScreenPromptTimer() {
+	s.screenPrompts.timerGen++
 	if s.screenPrompts.timer != nil {
 		s.screenPrompts.timer.Stop()
 		s.screenPrompts.timer = nil

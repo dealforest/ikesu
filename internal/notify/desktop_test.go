@@ -73,8 +73,10 @@ func TestSoundPathsAgentOverridesAndDefaults(t *testing.T) {
 			t.Fatal(tc, p, on)
 		}
 	}
-	if _, on := SoundPath(config.Config{}, "droid", "finished"); on {
-		t.Fatal("droid default must be muted")
+	for _, agent := range []string{"codex", "droid"} {
+		if _, on := SoundPath(config.Config{}, agent, "finished"); on {
+			t.Errorf("%s must be muted with a fresh config", agent)
+		}
 	}
 }
 

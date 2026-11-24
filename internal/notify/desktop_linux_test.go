@@ -44,7 +44,9 @@ func TestLinuxSoundSelectionAndMissingPlayerKeepsNotification(t *testing.T) {
 				},
 				Warn: func(err error) { warnings = append(warnings, err.Error()) },
 			}
-			c := config.Config{}
+			var c config.Config
+			enabled := true
+			c.UI.Sound.Enabled = &enabled
 			c.UI.Sound.Path = "custom.mp3"
 			n := endpoint.Notification{SystemToast: true, Title: "title", Body: "body", Agent: "codex", Kind: "finished"}
 			for range 2 {

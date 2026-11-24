@@ -470,6 +470,10 @@ func (w *writer) sendLocked(m msg) error {
 	if m.Type != "hello" && !endpoint.Allows(w.available, endpoint.RequiredGeneration(m.Type), w.methods, m.Type) {
 		return fmt.Errorf("endpoint_action_unsupported: %s", m.Type)
 	}
+	if m.Config != nil {
+		wireConfig := m.Config.WithEffectiveVersion()
+		m.Config = &wireConfig
+	}
 	err := json.NewEncoder(w.conn).Encode(m)
 	if m.Type == "rendered" && errors.Is(err, syscall.EPIPE) {
 		return &closedRenderAck{err}

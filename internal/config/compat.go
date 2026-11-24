@@ -113,6 +113,7 @@ func Decode(data []byte) (Config, error) {
 	c.resolveKeyBindings()
 	c.unsupportedValues()
 	sort.Strings(c.Warnings)
+	c.loadedFromFile = true
 	return c, nil
 }
 func legacyBindingField(s string) bool {

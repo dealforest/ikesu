@@ -61,6 +61,9 @@ func saveValues(section []string, values map[string]any) error {
 		}
 	} else if !os.IsNotExist(err) {
 		return err
+	} else {
+		// A settings edit that creates the file must keep fresh-install defaults.
+		m["config_version"] = CurrentConfigVersion
 	}
 	target := m
 	for _, name := range section {
@@ -73,6 +76,29 @@ func saveValues(section []string, values map[string]any) error {
 	}
 	for key, value := range values {
 		target[key] = value
+	}
+	return writeConfigValues(p, m)
+}
+
+// resolveWritePath preserves the link itself when replacing an existing config.
+func resolveWritePath(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return path, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return filepath.EvalSymlinks(path)
+	}
+	return path, nil
+}
+
+func writeConfigValues(p string, m map[string]any) error {
+	p, err := resolveWritePath(p)
+	if err != nil {
+		return err
 	}
 	var b bytes.Buffer
 	if err := toml.NewEncoder(&b).Encode(m); err != nil {
@@ -119,7 +145,12 @@ func (c Config) ThemeName() string {
 	}
 	return c.Theme.Name
 }
-func (c Config) SoundEnabled() bool { return c.UI.Sound.Enabled == nil || *c.UI.Sound.Enabled }
+func (c Config) SoundEnabled() bool {
+	if c.UI.Sound.Enabled != nil {
+		return *c.UI.Sound.Enabled
+	}
+	return !c.isV2()
+}
 
 func SaveTheme(name string) error {
 	if err := ValidateTheme(name); err != nil {
@@ -146,4 +177,9 @@ func SaveOnboarding(enabled bool) error {
 }
 
 // KoiEnabled follows the existing optional-boolean convention: unset means on.
-func (c Config) KoiEnabled() bool { return c.UI.Koi == nil || *c.UI.Koi }
+func (c Config) KoiEnabled() bool {
+	if c.UI.Koi != nil {
+		return *c.UI.Koi
+	}
+	return !c.isV2()
+}

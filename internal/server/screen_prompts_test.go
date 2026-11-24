@@ -273,3 +273,40 @@ func TestScreenPreviewOneTraversalAndRestoration(t *testing.T) {
 		t.Fatal("cursor not restored")
 	}
 }
+
+func TestScreenPromptTimerIgnoresOldCallbackAfterReload(t *testing.T) {
+	teststate.Lock(t)
+	s, _, _ := screenTerminal(t, "claude-single", "claude")
+	started, finished := make(chan struct{}), make(chan struct{})
+	var replacement *time.Timer
+	var replacementGen uint64
+	s.app.Do(func() {
+		enabled := s.cfg
+		s.scheduleScreenPrompts()
+		if s.screenPrompts.timer == nil || !s.screenPrompts.timer.Stop() {
+			t.Error("could not reserve the old scheduled callback")
+			close(finished)
+			return
+		}
+		gen := s.screenPrompts.timerGen
+		go func() {
+			close(started)
+			s.app.Do(func() { s.runScreenPromptTimer(gen) })
+			close(finished)
+		}()
+		// The old callback cannot enter the app loop until this job returns.
+		<-started
+		s.screenPromptConfig(config.Config{})
+		s.screenPromptConfig(enabled)
+		replacement, replacementGen = s.screenPrompts.timer, s.screenPrompts.timerGen
+		if replacement == nil || replacementGen == gen || !replacement.Stop() {
+			t.Error("OFF → ON did not arm a new timer generation")
+		}
+	})
+	<-finished
+	s.app.Do(func() {
+		if s.screenPrompts.timer != replacement || s.screenPrompts.timerGen != replacementGen || s.screenPrompts.watches != nil {
+			t.Error("stale callback scanned prompts or modified the replacement timer")
+		}
+	})
+}

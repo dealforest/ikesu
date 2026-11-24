@@ -1,8 +1,20 @@
 package config
 
 // DefaultExample contains supported settings and is shared with --default-config.
-const DefaultExample = `[decisions]
-screen_prompts = true
+const DefaultExample = `config_version = 2
+
+[guard]
+enabled = false # opt in with true
+# mode = "record" # default when enabled; set "enforce" to enforce
+
+[decisions]
+screen_prompts = false # opt in with true
+
+[session]
+resume_agents_on_restore = false # opt in with true
+
+[integrations]
+claude_teams = false # opt in with true
 
 [theme]
 name = "catppuccin"
@@ -18,12 +30,16 @@ name = "catppuccin"
 # Colors accept hex, names, rgb(r,g,b), reset/default/none/transparent.
 
 [ui.sound]
-enabled = true
+enabled = false # opt in with true
+
+[ui.sidebar_plugins]
+enabled = false # opt in with true
 
 [ui.toast]
 delivery = "off"
 
 [ui]
+koi = false # opt in with true
 pane_scrollbars = "auto" # auto / always / off; legacy true / false also accepted
 pane_scrollbar_hide_delay_ms = 1500
 window_title = "summary"
