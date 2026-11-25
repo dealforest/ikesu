@@ -3,15 +3,93 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+	"github.com/kazuph/ikesu/internal/config"
 	"github.com/kazuph/ikesu/internal/endpoint"
 	"github.com/kazuph/ikesu/internal/input"
 	"github.com/kazuph/ikesu/internal/machine"
+	"github.com/kazuph/ikesu/internal/model"
+	"github.com/kazuph/ikesu/internal/render"
+	"github.com/kazuph/ikesu/internal/tui"
 )
+
+func TestMachineConnectButtonStartsAttempt(t *testing.T) {
+	t.Setenv("IKESU_STATE_DIR", t.TempDir())
+	configPath := filepath.Join(t.TempDir(), "invalid.toml")
+	if err := os.WriteFile(configPath, []byte("["), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Stop the real connection worker at config loading, before it starts SSH.
+	t.Setenv(config.EnvVar, configPath)
+	out, err := os.CreateTemp(t.TempDir(), "viewer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	m := &machineClient{session: "catalog-test", active: "local", out: out, ctx: ctx, events: make(chan endpointEvent, 1),
+		settings: &localSettings{}, size: tui.Winsize{Cols: 120, Rows: 45}, endpoints: map[string]*managedEndpoint{
+			"local": {profile: machine.Profile{ID: "local", Label: "Local", Enabled: true}, snapshot: &render.Input{State: model.New(t.TempDir(), 120, 45)}},
+		}}
+	defer func() { cancel(); m.workers.Wait() }()
+	catalog := machine.Catalog{Path: m.catalogPath()}
+	profile, err := catalog.AddVerified("host", "Remote", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.Change(profile.ID, "disable", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.refreshMachineCatalog(); err != nil {
+		t.Fatal(err)
+	}
+	remote := m.endpoints[profile.ID]
+	var header, connect render.MachineHit
+	for _, hit := range m.sidebar.Hits {
+		if hit.Machine != profile.ID || hit.Right {
+			continue
+		}
+		switch {
+		case hit.Header:
+			header = hit
+		case hit.Connect:
+			connect = hit
+		case hit.New:
+			t.Fatal("disconnected machine still has a new workspace button")
+		}
+	}
+	drawn, err := os.ReadFile(out.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if header.Rect.W == 0 || connect.Rect.W == 0 || !strings.Contains(ansi.Strip(string(drawn)), "[connect]") {
+		t.Fatal("missing disconnected machine heading or connect button")
+	}
+	click := func(x, y int) {
+		t.Helper()
+		for _, suffix := range []string{"M", "m"} {
+			if err := m.input(mouseEvent(t, fmt.Sprintf("\x1b[<0;%d;%d%s", x+1, y+1, suffix))); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	click(header.Rect.X, header.Rect.Y)
+	if !m.sidebar.Collapsed[profile.ID] || remote.profile.Enabled || remote.attempt != 0 {
+		t.Fatal("disconnected heading click did not just collapse the group")
+	}
+	remote.retry = retryPolicy{delay: remoteRetryLimit, next: time.Now().Add(remoteRetryLimit)}
+	click(connect.Rect.X+connect.Rect.W-1, connect.Rect.Y)
+	if !catalog.Load()[0].Enabled || !remote.profile.Enabled || remote.status != "connecting" || remote.attempt != 1 || remote.retry != (retryPolicy{}) || m.pending != nil {
+		t.Fatalf("connect did not start a fresh background attempt: %+v", remote)
+	}
+}
 
 func TestMachineCatalogDisconnectReturnsToLocalAndStopsRetry(t *testing.T) {
 	t.Setenv("IKESU_STATE_DIR", t.TempDir())

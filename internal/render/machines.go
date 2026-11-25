@@ -21,6 +21,7 @@ type MachineHit struct {
 	Row           SidebarRow
 	Rect          layout.Rect
 	Header, New   bool
+	Connect       bool
 	Right         bool
 	Oyagoi        bool
 	OfflineOyagoi bool
@@ -36,10 +37,10 @@ type MachineSidebar struct {
 	RightScroll    int
 	RightMaxScroll int
 	Hits           []MachineHit
-	PaneStatus  []string
-	DropMachine string
-	DropIndex   *int
-	DropSection model.Section
+	PaneStatus     []string
+	DropMachine    string
+	DropIndex      *int
+	DropSection    model.Section
 	// Collapsed hides a machine's space rows; only the client remembers it.
 	Collapsed map[string]bool
 }
@@ -204,15 +205,24 @@ func (m *MachineSidebar) drawExpanded(f *Frame, active Input) {
 				glyph = "▸"
 			}
 			f.Text(area.X, y, glyph, uv.Style{Fg: f.Palette.Accent}, area.X+width)
-			newRect := SectionNewRect(area.X, y, width)
+			button, buttonRect := "[new]", SectionNewRect(area.X, y, width)
+			disconnected := group.Status == "disconnected"
+			if disconnected {
+				button = "[connect]"
+				buttonRect = layout.Rect{}
+				// Leave the last column available for dragging the sidebar divider.
+				if width >= len(button)+2 {
+					buttonRect = layout.Rect{X: area.X + width - 1 - len(button), Y: y, W: len(button), H: 1}
+				}
+			}
 			labelEnd := area.X + width
-			if newRect.W > 0 {
-				labelEnd = newRect.X
+			if buttonRect.W > 0 {
+				labelEnd = buttonRect.X
 			}
 			f.Text(area.X+2, y, truncate(group.Label, max(0, labelEnd-area.X-2)), style, labelEnd)
-			if newRect.W > 0 {
-				f.Text(newRect.X, y, "[new]", uv.Style{Fg: f.Palette.Text, Attrs: uv.AttrBold, Underline: uv.UnderlineSingle}, area.X+width)
-				m.Hits = append(m.Hits, MachineHit{Machine: group.ID, Rect: newRect, New: true})
+			if buttonRect.W > 0 {
+				f.Text(buttonRect.X, y, button, uv.Style{Fg: f.Palette.Text, Attrs: uv.AttrBold, Underline: uv.UnderlineSingle}, area.X+width)
+				m.Hits = append(m.Hits, MachineHit{Machine: group.ID, Rect: buttonRect, New: !disconnected, Connect: disconnected})
 			}
 			machineRowBackground(f, area.X, y, width)
 		} else if entry.row.Kind == RowRule {

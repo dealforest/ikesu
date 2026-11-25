@@ -145,7 +145,7 @@ func KoiSceneFor(f *Frame, in Input, machines *MachineSidebar) KoiScene {
 		}
 		if machines != nil && len(machines.Groups) > 1 {
 			for _, hit := range machines.Hits {
-				if hit.Right || hit.New {
+				if hit.Right || hit.New || hit.Connect {
 					continue
 				}
 				for _, g := range machines.Groups {

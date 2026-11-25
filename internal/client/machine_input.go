@@ -341,9 +341,18 @@ func (m *machineClient) input(event input.Event) error {
 				if event.Kind == input.KindMouseWheel {
 					return nil
 				}
-				if (hit.Header || hit.New) && hit.Machine != "local" && event.Kind == input.KindMouseClick && event.Mouse.Button == uv.MouseRight {
+				if (hit.Header || hit.New || hit.Connect) && hit.Machine != "local" && event.Kind == input.KindMouseClick && event.Mouse.Button == uv.MouseRight {
 					m.forms.OpenMachine(m.endpoints[hit.Machine].profile, active.snapshot.State, event.Mouse.X, event.Mouse.Y)
 					return m.paint()
+				}
+				if hit.Connect && event.Kind == input.KindMouseClick && event.Mouse.Button == uv.MouseLeft {
+					m.suppressRelease = true
+					profile := m.endpoints[hit.Machine].profile
+					catalog := machine.Catalog{Path: m.catalogPath()}
+					if _, err := catalog.Change(profile.ID, "enable", "", &profile); err != nil {
+						return err
+					}
+					return m.refreshMachineCatalog()
 				}
 				if hit.New && event.Kind == input.KindMouseClick && event.Mouse.Button == uv.MouseLeft {
 					m.suppressRelease = true
