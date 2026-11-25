@@ -66,7 +66,9 @@ func (m *machineClient) dragInput(event input.Event) error {
 				state := m.endpoints[d.id].snapshot.State
 				if state.Workspaces[hit.Row.Ws].SidebarSection() == d.section {
 					d.drop = hit.Row.Ws
-					if event.Mouse.Y > d.y {
+					// A reconnect can move the entire machine section during the drag.
+					// HQ is always drawn above the machine sections.
+					if !hit.Oyagoi && hit.Row.Ws > d.source {
 						d.drop++
 					}
 				} else {
