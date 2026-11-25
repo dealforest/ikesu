@@ -12,7 +12,7 @@ ikesu の機能仕様の正は herdr fork の `~/src/github.com/kazuph/herdr/SPE
 ### SSH マシンの接続と切断
 
 - 保存済みマシンの `machines.json` の `enabled` で接続するかどうかを管理する。利用者が切った状態は `disconnected`、理由は `machine is disconnected` と表示する。接続中や再試行中の状態名は従来どおり。
-- 左サイドバーのリモートマシン見出しを右クリックすると、接続が有効なら `disconnect`、切断中なら `connect` を選べる。見出しの ▾/▸ でスペース一覧を折りたたむ。
+- 左サイドバーのリモートマシン見出しの右クリックメニューでは、接続が有効なら `disconnect`、切断中なら `connect` を先頭に表示し、開いたときに選択する。区切り線の下に `add machine...`、`remove machine...` をこの順で表示する。見出しの ▾/▸ でスペース一覧を折りたたむ。
 - 左サイドバーのリモートマシン見出しには、接続してスペース一覧を受信すると `[new]`、接続が有効で表示の準備ができるまでは `[disconnect]`、切断中は `[connect]` を表示する。`[new]` はそのマシンにスペースを作る。`[disconnect]` と `[connect]` は右クリックメニューと同じ接続操作を行う。描画のたびに表示とクリック範囲を更新し、狭いサイドバーではボタン全体が収まる幅で表示する。Local の作成ボタンは `[new]` のまま。
 - `ikesu machine connect <label-or-id>` と `ikesu machine disconnect <label-or-id>` で同じ操作を行う。既存の `enable` と `disable` も使える。`machine list` は切断中の状態を `disconnected` と表示する。
 - 切断すると表示用の接続を閉じ、再試行を止める。切断したマシンのスペースを表示していた場合は Local に戻る。リモート側の ikesu・ペイン・ジョブは稼働を続ける。
