@@ -17,6 +17,7 @@ ikesu の機能仕様の正は herdr fork の `~/src/github.com/kazuph/herdr/SPE
 - `ikesu machine connect <label-or-id>` と `ikesu machine disconnect <label-or-id>` で同じ操作を行う。既存の `enable` と `disable` も使える。`machine list` は切断中の状態を `disconnected` と表示する。
 - 切断すると表示用の接続を閉じ、再試行を止める。切断したマシンのスペースを表示していた場合は Local に戻る。リモート側の ikesu・ペイン・ジョブは稼働を続ける。
 - 接続を有効にすると、再試行の待ち時間を 0 に戻してすぐに接続を始める。
+- `[remote] auto_disconnect_after` に期間（例 `"10m"`）を設定すると、接続が途切れてからその期間つながらない時点で自動的に切断する。一度もつながっていなければ、最初に接続を試みた時点から測る。`enabled=false` を保存して再試行を止め、直近の失敗理由を含めて通知する。既定の `0` では従来どおり再試行する。設定の読み込み・再読み込み・値の検証には既存の設定処理を使う。
 - 同じマシンへの個別経路（例 `m4-local` と `m4-remote`）は個別に接続を管理し、両方を同時に接続できる。
 
 ## HQ の置き場所（🎏 HQ）
