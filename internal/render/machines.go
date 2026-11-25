@@ -210,9 +210,8 @@ func (m *MachineSidebar) drawExpanded(f *Frame, active Input) {
 			if disconnected {
 				button = "[connect]"
 				buttonRect = layout.Rect{}
-				// Leave the last column available for dragging the sidebar divider.
-				if width >= len(button)+2 {
-					buttonRect = layout.Rect{X: area.X + width - 1 - len(button), Y: y, W: len(button), H: 1}
+				if width > len(button) {
+					buttonRect = layout.Rect{X: area.X + width - len(button), Y: y, W: len(button), H: 1}
 				}
 			}
 			labelEnd := area.X + width
