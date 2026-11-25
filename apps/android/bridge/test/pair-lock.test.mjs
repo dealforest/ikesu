@@ -7,9 +7,10 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import pty from 'node-pty';
-import { b64u, loadDevices, saveRelay } from '../devices.mjs';
+import { addDevice, b64u, loadDevices, loadNoiseKey, saveRelay } from '../devices.mjs';
 import { startMobile } from '../mobile-runtime.mjs';
-import { FakeApp, FakeRelay, until } from './mobile-harness.mjs';
+import { Pairing } from '../pairing.mjs';
+import { FakeApp, FakeRelay, allowFor, allowHeader, startDisconnectingPairControl, until } from './mobile-harness.mjs';
 
 const exec = promisify(execFile);
 const cwd = fileURLToPath(new URL('../', import.meta.url));
@@ -27,6 +28,7 @@ async function fixture(t) {
   const relayKey = randomBytes(32), room = b64u(randomBytes(32));
   const relay = await FakeRelay.start(relayKey, room);
   const terminals = [];
+  const logs = [];
   let daemon;
   t.after(async () => {
     for (const term of terminals) term.kill();
@@ -37,16 +39,16 @@ async function fixture(t) {
   });
   await saveRelay(configDir, { url: relay.url, room, relayKey });
   return {
-    configDir, lockPath, relay,
+    configDir, stateDir, lockPath, relay, logs,
     async startDaemon(decisions = {}) {
-      daemon = await startMobile({ configDir, stateDir, log: () => {}, decisions: {
+      daemon = await startMobile({ configDir, stateDir, log: message => logs.push(message), decisions: {
         snapshot: async () => [], answer: async () => ({}), later: async () => {}, ...decisions,
       } });
       await relay.bridgeUp();
       return daemon.hub;
     },
-    open(cols = 160, rows = 60) {
-      const terminal = pty.spawn(process.execPath, args, { cwd, env, cols, rows });
+    open(cols = 160, rows = 60, nodeOptions = []) {
+      const terminal = pty.spawn(process.execPath, [...nodeOptions, ...args], { cwd, env, cols, rows });
       let output = '', exited = false;
       terminal.onData(data => { output += data; });
       const result = new Promise(resolve => terminal.onExit(event => { exited = true; resolve(event); }));
@@ -184,5 +186,112 @@ test('B8 確定後の読込に失敗すると paired を送らず、PC の pair 
   assert.deepEqual(hub.devices, []);
   await until(() => app.conn.closed);
   assert.ok(!f.relay.frames.some(frame => frame[0] === 0x02 && frame.subarray(1, 17).equals(app.conn.key)));
+  await assert.rejects(fs.stat(f.lockPath), { code: 'ENOENT' });
+});
+
+test('B16 paired を送れないと PC の pair は失敗し、端末登録を取り消す', async t => {
+  const f = await fixture(t);
+  const existingApp = new FakeApp(f.relay, 'app', randomBytes(16));
+  const existing = {
+    device: b64u(existingApp.id16), noise_pub: b64u(existingApp.noiseKey.publicKey), operate_pub: existingApp.operatePub,
+    name: '登録済み端末', permissions: ['notify'], created: new Date().toISOString(),
+  };
+  await addDevice(f.configDir, existing);
+  const hub = await f.startDaemon();
+  const term = f.open();
+  await until(() => term.output.includes('6桁:'));
+  const pairing = hub.pairing;
+  const app = new FakeApp(f.relay, 'pair', pairing.id, hub.noiseKey.publicKey);
+  assert.ok(await app.handshake());
+  app.sendJson(app.pairMessage(pairing.secret));
+  await until(() => pairing.candidates.length === 1);
+  const sendData = hub.transport.sendData.bind(hub.transport);
+  const pairKey = app.conn.key.toString('hex');
+  hub.transport.sendData = (key, bytes) => key === pairKey ? false : sendData(key, bytes);
+  f.relay.frames = [];
+
+  term.terminal.write(`${app.sas(pairing.secret)}\r`);
+  await until(() => term.exited);
+  assert.equal((await term.result).exitCode, 1);
+  assert.match(term.output, /登録に失敗しました: 登録の知らせをスマホへ送れませんでした/);
+  assert.doesNotMatch(term.output, /登録しました/);
+  assert.deepEqual(await loadDevices(f.configDir), [existing]);
+  assert.deepEqual(hub.devices, [existing]);
+  await until(() => app.conn.closed);
+  const expected = allowFor(existing);
+  await until(() => f.relay.frames.findLast(frame => frame[0] === 0x04)?.equals(expected));
+  assert.ok(f.relay.frames.some(frame => frame[0] === 0x04 && frame.length === expected.length + 16 &&
+    frame.subarray(0, expected.length).equals(expected)));
+  await assert.rejects(fs.stat(f.lockPath), { code: 'ENOENT' });
+});
+
+test('B17 端末登録の取り消しにも失敗すると PC の pair が端末 ID と外し方を表示する', async t => {
+  const f = await fixture(t);
+  const file = path.join(f.configDir, 'devices.json');
+  let failedDevice;
+  const hub = await f.startDaemon({
+    async loadDevices(dir) {
+      if (failedDevice) return loadDevices(dir);
+      const devices = await loadDevices(dir);
+      if (!devices.length) return devices;
+      await fs.chmod(file, 0o000);
+      failedDevice = devices[0].device;
+      return loadDevices(dir);
+    },
+  });
+  const term = f.open();
+  await until(() => term.output.includes('6桁:'));
+  const pairing = hub.pairing;
+  const app = new FakeApp(f.relay, 'pair', pairing.id, hub.noiseKey.publicKey);
+  assert.ok(await app.handshake());
+  app.sendJson(app.pairMessage(pairing.secret));
+  await until(() => pairing.candidates.length === 1);
+  f.relay.frames = [];
+
+  try {
+    term.terminal.write(`${app.sas(pairing.secret)}\r`);
+    await until(() => term.exited);
+    assert.equal((await term.result).exitCode, 1);
+    assert.ok(failedDevice);
+    assert.ok(term.output.includes(`取り消しにも失敗したため、端末 ID ${failedDevice} が devices.json に残っているかもしれません`));
+    assert.ok(term.output.includes(`main.mjs revoke ${failedDevice}`));
+    assert.match(term.output, /EACCES/);
+    const rollback = f.logs.find(message => message.includes(`端末 ID ${failedDevice}`) &&
+      message.includes(`main.mjs revoke ${failedDevice}`));
+    assert.ok(rollback, '常駐ログに端末 ID と解除コマンドが必要');
+    assert.ok(term.output.includes(`登録に失敗しました: ${rollback}`));
+    await until(() => f.relay.frames.some(frame => frame.equals(allowHeader)));
+    await until(() => app.conn.closed);
+    await assert.rejects(fs.stat(f.lockPath), { code: 'ENOENT' });
+  } finally {
+    if (failedDevice) await fs.chmod(file, 0o600);
+  }
+  assert.deepEqual((await loadDevices(f.configDir)).map(device => device.device), [failedDevice]);
+});
+
+test('B19 確定中に制御ソケットが切れると PC の pair は失敗し、ロックを解放する', async t => {
+  const f = await fixture(t);
+  const { publicKey } = await loadNoiseKey(f.configDir);
+  const pairing = new Pairing({ relay: f.relay, bridgePublic: publicKey, name: 'pair-test', permissions: ['notify'] });
+  const requests = await startDisconnectingPairControl(t, f.stateDir, pairing.qr());
+  // exit ハンドラによる回収と区別するため、試験側でロック解放を確認するまでプロセスを生かす。
+  const keepAlive = `
+    const timer = setInterval(() => {}, 60_000);
+    process.once('SIGUSR2', () => clearInterval(timer));
+  `;
+  const term = f.open(160, 60, [`--import=data:text/javascript,${encodeURIComponent(keepAlive)}`]);
+  await until(() => term.output.includes('6桁:'));
+  assert.equal((await f.readLock()).pid, term.terminal.pid);
+
+  term.terminal.write('123456\r');
+  await until(() => term.output.includes('登録に失敗しました: 接続が切れました'));
+  await until(async () => {
+    try { await fs.stat(f.lockPath); return false; }
+    catch (error) { if (error.code === 'ENOENT') return true; throw error; }
+  });
+  term.kill('SIGUSR2');
+  await until(() => term.exited);
+  assert.equal((await term.result).exitCode, 1);
+  assert.deepEqual(requests.map(request => request.op), ['pair_start', 'pair_confirm']);
   await assert.rejects(fs.stat(f.lockPath), { code: 'ENOENT' });
 });

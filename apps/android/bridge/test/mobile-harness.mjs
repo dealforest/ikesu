@@ -1,9 +1,11 @@
 // 試験用のにせの中継（2.2 の枠を話す）と、にせのアプリ（Noise の initiator）。
 import { createHmac, generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp } from 'node:fs/promises';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { createInterface } from 'node:readline';
 import Noise from 'noise-handshake';
 import Cipher from 'noise-handshake/cipher.js';
 import dh from 'noise-handshake/dh.js';
@@ -14,9 +16,35 @@ import { sasCode, pairProof } from '../pairing.mjs';
 
 export const tmpDir = () => mkdtemp(path.join(os.tmpdir(), 'ikesu-mobile-'));
 export const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+export const allowHeader = Buffer.concat([Buffer.of(0x04), Buffer.alloc(16)]);
+export const allowFor = (...devices) => Buffer.concat([allowHeader, ...devices.map(device => Buffer.from(device.device, 'base64url'))]);
 export async function until(check, ms = 3000) {
   const end = Date.now() + ms;
   for (;;) { const value = await check(); if (value) return value; if (Date.now() > end) throw Error('until: 時間切れ'); await sleep(5); }
+}
+
+export async function startDisconnectingPairControl(t, stateDir, qr) {
+  await mkdir(stateDir, { recursive: true, mode: 0o700 });
+  const requests = [];
+  const sockets = new Set();
+  const server = net.createServer(socket => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+    const lines = createInterface({ input: socket });
+    lines.on('line', line => {
+      const request = JSON.parse(line);
+      requests.push(request);
+      if (request.op === 'pair_start') socket.write(`${JSON.stringify({ ok: true, qr })}\n`);
+      if (request.op === 'pair_confirm') socket.destroy();
+    });
+  });
+  server.listen(path.join(stateDir, 'pair.sock'));
+  await once(server, 'listening');
+  t.after(async () => {
+    for (const socket of sockets) socket.destroy();
+    await new Promise(resolve => server.close(resolve));
+  });
+  return requests;
 }
 
 export class FakeRelay {

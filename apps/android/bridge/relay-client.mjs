@@ -68,7 +68,9 @@ export class RelayClient {
   frame(kind, key, body = Buffer.alloc(0)) { return Buffer.concat([Buffer.from([kind]), Buffer.from(key, 'hex'), body]); }
   sendData(key, buffer) {
     if (buffer.length > MAX_FRAME) throw Error('1通が 65,535 バイトを超えています');
-    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(this.frame(DATA, key, buffer));
+    if (this.ws?.readyState !== WebSocket.OPEN) return false;
+    this.ws.send(this.frame(DATA, key, buffer));
+    return true;
   }
   // 送信待ちが limit を下回るまで待つ（動画のように大きなものを積み上げないため）。
   async drain(limit = 1024 * 1024) {
