@@ -5,6 +5,7 @@ import (
 	"golang.org/x/sys/unix"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -271,15 +272,11 @@ func TestScriptFileAggregateOrder(t *testing.T) {
 	// Permutations exercise actual parsing/policy, including unknown expansion
 	// and an opaque delegated program. Hard blocks must always win.
 	pieces := []string{"git reset\n", "rm /outside/victim\n", "source unparsed\n", "read CMD; \"$CMD\"\n", "printf okay\n"}
+	var bodies []string
 	var permutations func([]string, int)
 	permutations = func(parts []string, n int) {
 		if n == len(parts) {
-			path := filepath.Join(i.Cwd, "order.sh")
-			os.WriteFile(path, []byte(strings.Join(parts, "")), 0600)
-			_, v, _ := lineVerdict(Config{}, i, "bash "+quote(path))
-			if v.Decision != "block" {
-				t.Fatalf("%q: %+v", parts, v)
-			}
+			bodies = append(bodies, strings.Join(parts, ""))
 			return
 		}
 		for k := n; k < len(parts); k++ {
@@ -289,6 +286,23 @@ func TestScriptFileAggregateOrder(t *testing.T) {
 		}
 	}
 	permutations(pieces, 0)
+	// The 120 orders are independent, so each runs as its own parallel subtest
+	// with its own script file; one after another they took over 6 seconds.
+	t.Run("permutations", func(t *testing.T) {
+		for n, body := range bodies {
+			t.Run(strconv.Itoa(n), func(t *testing.T) {
+				t.Parallel()
+				path := filepath.Join(i.Cwd, "order-"+strconv.Itoa(n)+".sh")
+				if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+					t.Fatal(err)
+				}
+				_, v, _ := lineVerdict(Config{}, i, "bash "+quote(path))
+				if v.Decision != "block" {
+					t.Fatalf("%q: %+v", body, v)
+				}
+			})
+		}
+	})
 	for _, body := range []string{"source opaque\nrm /outside/victim\nread CMD; \"$CMD\"", "read CMD; \"$CMD\"\nrm /outside/victim\nsource opaque"} {
 		path := filepath.Join(i.Cwd, "order.sh")
 		os.WriteFile(path, []byte(body), 0600)
