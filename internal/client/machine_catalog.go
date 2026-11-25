@@ -16,6 +16,13 @@ func (m *machineClient) catalogPath() string {
 }
 
 func (m *machineClient) refreshMachineCatalog() error {
+	if err := m.syncMachineCatalog(); err != nil {
+		return err
+	}
+	return m.paint()
+}
+
+func (m *machineClient) syncMachineCatalog() error {
 	data, err := os.ReadFile(m.catalogPath())
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("machine catalog: %w", err)
@@ -108,7 +115,7 @@ func (m *machineClient) refreshMachineCatalog() error {
 			m.notify(err.Error())
 		}
 	}
-	return m.paint()
+	return nil
 }
 
 func (m *machineClient) showLocalAfterDisconnect() {

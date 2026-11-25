@@ -42,6 +42,7 @@ func (m *machineClient) start(id string, supplied io.ReadWriteCloser) {
 	e.attempt++
 	attempt := e.attempt
 	e.connection = nil
+	e.retry.started(time.Now())
 	if e.reason == "" {
 		e.status = "connecting"
 	} else {
@@ -249,6 +250,7 @@ func (m *machineClient) event(event endpointEvent) (pumpResult, bool) {
 		}
 		e.reason = event.err.Error()
 		if strings.HasPrefix(e.reason, "SSH approval expired:") {
+			e.retry.started(time.Now())
 			e.status = machine.ApprovalStopped
 			e.retry.approvalExpired()
 		} else {
@@ -579,6 +581,10 @@ func (m *machineClient) configureOtherEndpoints(source string) {
 }
 
 func (m *machineClient) fail(id string, err error) {
+	m.failAt(id, err, time.Now())
+}
+
+func (m *machineClient) failAt(id string, err error, now time.Time) {
 	m.idleDisconnect(id, err)
 	m.pruneDisconnect(id)
 	m.runawayDisconnect(id)
@@ -599,5 +605,5 @@ func (m *machineClient) fail(id string, err error) {
 	}
 	e.status = "reconnecting"
 	e.reason = err.Error()
-	e.retry.failed(time.Now(), id == "local", needsAttention(e.reason))
+	e.retry.failed(now, id == "local", needsAttention(e.reason))
 }

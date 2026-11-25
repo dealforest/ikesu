@@ -2,10 +2,17 @@ package client
 
 import (
 	"fmt"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/x/ansi"
 	"github.com/kazuph/ikesu/internal/endpoint"
 	"github.com/kazuph/ikesu/internal/render"
-	"time"
 )
+
+func machineFailureToast(title, reason string) render.Toast {
+	return render.Toast{Title: title, Body: strings.Join(strings.Fields(ansi.Strip(reason)), " ")}
+}
 
 func (m *machineClient) requestPending() {
 	if m.pending == nil {

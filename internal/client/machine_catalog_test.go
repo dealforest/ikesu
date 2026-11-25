@@ -89,7 +89,7 @@ func TestMachineConnectionButtonsStartAndStopAttempt(t *testing.T) {
 	}
 	remote.retry = retryPolicy{delay: remoteRetryLimit, next: time.Now().Add(remoteRetryLimit)}
 	click(connect.Rect.X+connect.Rect.W-1, connect.Rect.Y)
-	if !catalog.Load()[0].Enabled || !remote.profile.Enabled || remote.status != "connecting" || remote.attempt != 1 || remote.retry != (retryPolicy{}) || m.pending != nil {
+	if !catalog.Load()[0].Enabled || !remote.profile.Enabled || remote.status != "connecting" || remote.attempt != 1 || remote.retry.delay != 0 || !remote.retry.next.IsZero() || m.pending != nil {
 		t.Fatalf("connect did not start a fresh background attempt: %+v", remote)
 	}
 	attemptContext := remote.ctx
