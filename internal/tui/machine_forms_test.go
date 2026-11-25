@@ -143,6 +143,37 @@ func TestClientMachineHeaderConnectionMenu(t *testing.T) {
 	}
 }
 
+func TestClientMachineHeaderSeparatorMatchesPaneMenu(t *testing.T) {
+	t.Parallel()
+	state := model.New(t.TempDir(), 100, 30)
+	forms := NewMachineForms(context.Background(), "", nil)
+	defer forms.Close()
+	forms.app.st = state
+	forms.app.openPaneMenu(45, 5, int(state.FocusedPane()))
+	in := render.Input{State: state, Menu: &forms.app.menu.m}
+	in.SidebarConfig.Theme.Name = "tokyo-night"
+	local := render.Input{State: state, SidebarConfig: in.SidebarConfig}
+	sidebar := &render.MachineSidebar{Active: "local", Groups: []render.MachineGroup{
+		{ID: "local", Label: "Local", Status: "online", Input: &local},
+		{ID: "remote", Label: "Remote", Status: "disconnected"},
+	}}
+	pane := render.ComposeClient(in, sidebar, "", false)
+	paneRule := pane.MenuItemRows[2]
+	for _, enabled := range []bool{false, true} {
+		forms.OpenMachine(machine.Profile{ID: "remote", Enabled: enabled}, state, 2, 8)
+		forms.Overlay(&in)
+		machine := render.ComposeClient(in, sidebar, "", false)
+		rule := machine.MenuItemRows[1]
+		for dx := 2; dx < 4; dx++ {
+			want := pane.Frame.Cell(paneRule.X+dx, paneRule.Y)
+			got := machine.Frame.Cell(rule.X+dx, rule.Y)
+			if want.Content != "-" || got.Content != want.Content || got.Style.Fg != want.Style.Fg || got.Style.Bg != want.Style.Bg || got.Style.Fg == got.Style.Bg {
+				t.Fatalf("enabled=%t separator cell %d: got %q (%v on %v), want pane menu hyphen %q (%v on %v)", enabled, dx, got.Content, got.Style.Fg, got.Style.Bg, want.Content, want.Style.Fg, want.Style.Bg)
+			}
+		}
+	}
+}
+
 func TestClientMachineHeaderSeparator(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -170,8 +201,10 @@ func TestClientMachineHeaderSeparator(t *testing.T) {
 	}
 	out := render.Compose(in)
 	row := out.MenuItemRows[1]
-	if got := out.Frame.Cell(row.X, row.Y).Content; got != "─" {
-		t.Fatalf("mobile menu separator cell = %q", got)
+	for dx := 2; dx < 4; dx++ {
+		if got := out.Frame.Cell(row.X+dx, row.Y).Content; got != "-" {
+			t.Fatalf("mobile menu separator cell %d = %q, want hyphen", dx, got)
+		}
 	}
 	for _, step := range []struct {
 		code rune
