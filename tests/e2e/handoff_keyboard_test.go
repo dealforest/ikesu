@@ -64,12 +64,21 @@ func liveKeyboardHandoff(t *testing.T, old string) {
 		raw, first = "\x1b[97;5u", "\x1b[97;5u"
 	}
 	check(raw, first)
+	// The outer terminal only sees the client's output when the test pumps it,
+	// so keep pumping until the forwarded keyboard mode arrives. A single read
+	// failed under load with flags=7 while the pane had already requested 31.
 	hostFlags := func(want int) {
 		t.Helper()
-		s.text()
-		flags, _ := s.emu.KeyboardModes()
-		if flags != want {
-			t.Fatalf("outer host flags=%d want=%d", flags, want)
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			s.pump(time.Now().Add(100 * time.Millisecond))
+			flags, _ := s.emu.KeyboardModes()
+			if flags == want {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("outer host flags=%d want=%d", flags, want)
+			}
 		}
 	}
 	if old == "" {
