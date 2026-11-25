@@ -1,6 +1,7 @@
 package guard
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -37,7 +38,10 @@ func copyGuardBinary(dst string) error {
 		}
 		sharedGuardBinary.dir = dir
 		path := filepath.Join(dir, "ikesu")
-		if out, err := exec.Command("go", "build", "-o", path, "../../cmd/ikesu").CombinedOutput(); err != nil {
+		// The same 2-minute cap the CLI tests used to put on their own builds.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if out, err := exec.CommandContext(ctx, "go", "build", "-o", path, "../../cmd/ikesu").CombinedOutput(); err != nil {
 			sharedGuardBinary.err = fmt.Errorf("build real guard CLI: %w: %s", err, out)
 			return
 		}
@@ -126,6 +130,14 @@ func realGuardFixture(t *testing.T) string {
 func TestMain(m *testing.M) {
 	probeTimeout, ghProbeTimeout = 30*time.Second, 30*time.Second
 	code := m.Run()
+	// The fixture server runs its own copy, so the shared build can go now even
+	// if stopping the server below hangs.
+	if sharedGuardBinary.dir != "" {
+		if err := os.RemoveAll(sharedGuardBinary.dir); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			code = 1
+		}
+	}
 	if guardFixture.server != nil {
 		if conn, err := net.DialTimeout("unix", guardFixture.socket, time.Second); err == nil {
 			_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
@@ -135,12 +147,6 @@ func TestMain(m *testing.M) {
 		}
 		if err := guardFixture.server.Wait(); err != nil {
 			fmt.Fprintln(os.Stderr, "isolated guard server:", err)
-			code = 1
-		}
-	}
-	if sharedGuardBinary.dir != "" {
-		if err := os.RemoveAll(sharedGuardBinary.dir); err != nil {
-			fmt.Fprintln(os.Stderr, err)
 			code = 1
 		}
 	}
