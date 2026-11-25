@@ -9,7 +9,7 @@ import { MobileHub } from '../mobile-hub.mjs';
 import { addDevice, addDeviceByHand, saveDevices, saveRelay, loadDevices, loadRelay, revokeDevice, b64u, writeJson } from '../devices.mjs';
 import { pairTag, appTag } from '../relay-client.mjs';
 import { sasCode, pairProof, proofMatches, verifyOperate, PAIR_TTL_SECONDS } from '../pairing.mjs';
-import { FakeApp, FakeRelay, sleep, tmpDir, until } from './mobile-harness.mjs';
+import { FakeApp, FakeRelay, allowFor, allowHeader, sleep, tmpDir, until } from './mobile-harness.mjs';
 import { encodeMessage } from '../noise-channel.mjs';
 
 async function setup(t, overrides = {}) {
@@ -240,6 +240,29 @@ test('operate: 正しい署名で operate_ok・snapshot、answer と later が�
   await c.handshake();
   c.sendJson(a.operateMessage());
   assert.equal((await c.recv(m => m.type === 'error')).message, 'operate rejected');
+});
+
+test('B20 operate_ok を送れない接続は閉じ、心拍タイマーを作らない', async t => {
+  const beatMs = 10;
+  const env = await setup(t, { beatMs });
+  const { app, paired } = await pairDevice(env);
+  const connected = await connectApp(env, paired, app);
+  assert.ok(await connected.handshake());
+  await connected.recv(message => message.type === 'notice');
+  const key = connected.conn.key.toString('hex');
+  const session = env.hub.sessions.get(key);
+  assert.ok(session);
+  t.after(() => clearInterval(session.beatTimer));
+  const sendData = env.hub.transport.sendData.bind(env.hub.transport);
+  env.hub.transport.sendData = (target, bytes) => target === key ? false : sendData(target, bytes);
+  env.relay.frames = [];
+
+  connected.sendJson(connected.operateMessage());
+  await until(() => connected.conn.closed);
+  await sleep(beatMs * 3);
+  assert.equal(session.beatTimer, undefined);
+  assert.equal(session.beatN, 0);
+  assert.ok(!env.relay.frames.some(frame => frame[0] === 0x02 && frame.subarray(1, 17).equals(connected.conn.key)));
 });
 
 test('operate の hashes: 複数の PC の h を1つの署名に入れられる。自分の h が無い・0個・9個・32バイトでないものは拒否', async t => {
@@ -766,8 +789,6 @@ test('監査: 接続を作り直しても、サーバーの確認は bridge 全�
   await apps[2].recv(m => m.type === 'screen_opened');
 });
 
-const allowHeader = Buffer.concat([Buffer.of(0x04), Buffer.alloc(16)]);
-const allowFor = (...devices) => Buffer.concat([allowHeader, ...devices.map(device => Buffer.from(device.device, 'base64url'))]);
 
 test('B3 重なった読み直しは直列で進み、最後の一覧に B が戻らない', async () => {
   const a = { device: b64u(randomBytes(16)) };

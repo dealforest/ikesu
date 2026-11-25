@@ -136,7 +136,7 @@ class Session {
   startOperating() {
     this.stopOperating(false);
     this.operating = true; this.touch();
-    this.send({ type: 'operate_ok', until: this.until });
+    if (this.send({ type: 'operate_ok', until: this.until }) === false) return;
     this.beatTimer = setInterval(() => this.send({ type: 'beat', n: ++this.beatN }), this.hub.beatMs);
     this.beatTimer.unref?.();
     void this.sendSnapshot().catch(() => this.close());
@@ -395,8 +395,9 @@ export class MobileHub {
       await revokeDevice(this.configDir, id);
       await this.reloadDevices();
     } catch (error) {
-      this.log(`登録できなかった端末の取り消しに失敗しました: ${error.message}`);
-      throw Error(`${reason}。取り消しにも失敗したため、端末 ID ${id} が devices.json に残っているかもしれません。devices.json を読めるように直してから「main.mjs revoke ${id}」で外してください（${error.message}）`);
+      const message = `${reason}。取り消しにも失敗したため、端末 ID ${id} が devices.json に残っているかもしれません。devices.json を読めるように直してから「main.mjs revoke ${id}」で外してください（${error.message}）`;
+      this.log(message);
+      throw Error(message);
     }
     throw Error(reason);
   }

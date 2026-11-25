@@ -16,6 +16,8 @@ import { sasCode, pairProof } from '../pairing.mjs';
 
 export const tmpDir = () => mkdtemp(path.join(os.tmpdir(), 'ikesu-mobile-'));
 export const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+export const allowHeader = Buffer.concat([Buffer.of(0x04), Buffer.alloc(16)]);
+export const allowFor = (...devices) => Buffer.concat([allowHeader, ...devices.map(device => Buffer.from(device.device, 'base64url'))]);
 export async function until(check, ms = 3000) {
   const end = Date.now() + ms;
   for (;;) { const value = await check(); if (value) return value; if (Date.now() > end) throw Error('until: 時間切れ'); await sleep(5); }
