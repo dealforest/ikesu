@@ -2,6 +2,7 @@ package render
 
 import (
 	"fmt"
+
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/kazuph/ikesu/internal/layout"
@@ -22,10 +23,15 @@ type MachineHit struct {
 	Rect          layout.Rect
 	Header, New   bool
 	Connect       bool
+	Disconnect    bool
 	Right         bool
 	Oyagoi        bool
 	OfflineOyagoi bool
 	OyagoiHeading bool
+}
+
+func (h MachineHit) IsHeaderButton() bool {
+	return h.New || h.Connect || h.Disconnect
 }
 
 type MachineSidebar struct {
@@ -194,34 +200,33 @@ func (m *MachineSidebar) drawExpanded(f *Frame, active Input) {
 			f.Text(area.X, y, label, uv.Style{Fg: f.Palette.Dim}, area.X+width)
 			machineRowBackground(f, area.X, y, width)
 		} else if entry.header {
-			if width <= 1 {
-				m.Hits = append(m.Hits, hit)
-				y++
-				continue
-			}
 			style := uv.Style{Fg: f.Palette.Dim, Attrs: uv.AttrBold}
 			glyph := "▾"
 			if m.Collapsed[group.ID] {
 				glyph = "▸"
 			}
 			f.Text(area.X, y, glyph, uv.Style{Fg: f.Palette.Accent}, area.X+width)
-			button, buttonRect := "[new]", SectionNewRect(area.X, y, width)
-			disconnected := group.Status == "disconnected"
-			if disconnected {
-				button = "[connect]"
-				buttonRect = layout.Rect{}
-				if width > len(button) {
-					buttonRect = layout.Rect{X: area.X + width - len(button), Y: y, W: len(button), H: 1}
-				}
+			var button string
+			buttonHit := MachineHit{Machine: group.ID}
+			switch {
+			case group.ID == "local":
+				button, buttonHit.New = "[new]", true
+			case group.Status == "disconnected":
+				button, buttonHit.Connect = "[connect]", true
+			case group.Status == "online" && group.Input != nil:
+				button, buttonHit.New = "[new]", true
+			default:
+				button, buttonHit.Disconnect = "[disconnect]", true
 			}
 			labelEnd := area.X + width
-			if buttonRect.W > 0 {
-				labelEnd = buttonRect.X
+			if width > len(button) {
+				labelEnd -= len(button)
+				buttonHit.Rect = layout.Rect{X: labelEnd, Y: y, W: len(button), H: 1}
 			}
 			f.Text(area.X+2, y, truncate(group.Label, max(0, labelEnd-area.X-2)), style, labelEnd)
-			if buttonRect.W > 0 {
-				f.Text(buttonRect.X, y, button, uv.Style{Fg: f.Palette.Text, Attrs: uv.AttrBold, Underline: uv.UnderlineSingle}, area.X+width)
-				m.Hits = append(m.Hits, MachineHit{Machine: group.ID, Rect: buttonRect, New: !disconnected, Connect: disconnected})
+			if buttonHit.Rect.W > 0 {
+				f.Text(buttonHit.Rect.X, y, button, uv.Style{Fg: f.Palette.Text, Attrs: uv.AttrBold, Underline: uv.UnderlineSingle}, area.X+width)
+				m.Hits = append(m.Hits, buttonHit)
 			}
 			machineRowBackground(f, area.X, y, width)
 		} else if entry.row.Kind == RowRule {

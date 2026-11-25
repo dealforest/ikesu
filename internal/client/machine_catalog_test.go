@@ -20,7 +20,7 @@ import (
 	"github.com/kazuph/ikesu/internal/tui"
 )
 
-func TestMachineConnectButtonStartsAttempt(t *testing.T) {
+func TestMachineConnectionButtonsStartAndStopAttempt(t *testing.T) {
 	t.Setenv("IKESU_STATE_DIR", t.TempDir())
 	configPath := filepath.Join(t.TempDir(), "invalid.toml")
 	if err := os.WriteFile(configPath, []byte("["), 0600); err != nil {
@@ -51,25 +51,28 @@ func TestMachineConnectButtonStartsAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote := m.endpoints[profile.ID]
-	var header, connect render.MachineHit
-	for _, hit := range m.sidebar.Hits {
-		if hit.Machine != profile.ID || hit.Right {
-			continue
+	button := func() render.MachineHit {
+		t.Helper()
+		var target render.MachineHit
+		for _, hit := range m.sidebar.Hits {
+			if hit.Machine == profile.ID && hit.IsHeaderButton() {
+				if target.Rect.W != 0 {
+					t.Fatalf("machine has multiple buttons: %+v and %+v", target, hit)
+				}
+				target = hit
+			}
 		}
-		switch {
-		case hit.Header:
-			header = hit
-		case hit.Connect:
-			connect = hit
-		case hit.New:
-			t.Fatal("disconnected machine still has a new workspace button")
+		if target.Rect.W == 0 {
+			t.Fatal("missing machine header button")
 		}
+		return target
 	}
+	connect := button()
 	drawn, err := os.ReadFile(out.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if header.Rect.W == 0 || connect.Rect.W == 0 || !strings.Contains(ansi.Strip(string(drawn)), "[connect]") {
+	if !connect.Connect || !strings.Contains(ansi.Strip(string(drawn)), "[connect]") {
 		t.Fatal("missing disconnected machine heading or connect button")
 	}
 	click := func(x, y int) {
@@ -80,7 +83,7 @@ func TestMachineConnectButtonStartsAttempt(t *testing.T) {
 			}
 		}
 	}
-	click(header.Rect.X, header.Rect.Y)
+	click(0, connect.Rect.Y)
 	if !m.sidebar.Collapsed[profile.ID] || remote.profile.Enabled || remote.attempt != 0 {
 		t.Fatal("disconnected heading click did not just collapse the group")
 	}
@@ -88,6 +91,24 @@ func TestMachineConnectButtonStartsAttempt(t *testing.T) {
 	click(connect.Rect.X+connect.Rect.W-1, connect.Rect.Y)
 	if !catalog.Load()[0].Enabled || !remote.profile.Enabled || remote.status != "connecting" || remote.attempt != 1 || remote.retry != (retryPolicy{}) || m.pending != nil {
 		t.Fatalf("connect did not start a fresh background attempt: %+v", remote)
+	}
+	attemptContext := remote.ctx
+	remote.retry = retryPolicy{delay: initialRetryDelay, next: time.Now()}
+	disconnect := button()
+	if !disconnect.Disconnect {
+		t.Fatalf("connecting machine has wrong button: %+v", disconnect)
+	}
+	click(disconnect.Rect.X+disconnect.Rect.W-1, disconnect.Rect.Y)
+	if saved := catalog.Load(); len(saved) != 1 || saved[0].Enabled {
+		t.Fatalf("disconnect was not saved: %+v", saved)
+	}
+	m.advance(time.Now())
+	if remote.profile.Enabled || remote.status != "disconnected" || remote.attempt != 2 ||
+		attemptContext.Err() == nil || remote.retry != (retryPolicy{}) {
+		t.Fatalf("disconnect did not stop the attempt and retries: %+v", remote)
+	}
+	if after := button(); !after.Connect {
+		t.Fatalf("disconnected machine has wrong button: %+v", after)
 	}
 }
 

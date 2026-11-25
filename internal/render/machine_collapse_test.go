@@ -3,6 +3,9 @@ package render
 import (
 	"strings"
 	"testing"
+
+	"github.com/kazuph/ikesu/internal/layout"
+	"github.com/kazuph/ikesu/internal/machine"
 )
 
 // At every sidebar width the remote machine header that keeps a click target
@@ -35,35 +38,65 @@ func TestMachineHeaderGlyphVisibleAtEveryWidth(t *testing.T) {
 	}
 }
 
-func TestMachineConnectButtonMatchesNarrowHeaderHit(t *testing.T) {
+func TestMachineHeaderButtonMatchesConnectionAndWidth(t *testing.T) {
 	t.Parallel()
 	in := continuousInput(t, true, false)
 	m := MachineSidebar{Groups: []MachineGroup{
 		{ID: "local", Label: "LOCAL", Input: &in},
-		{ID: "remote", Label: "REMOTE", Status: "disconnected"},
+		{ID: "remote", Label: "REMOTE"},
 	}, Active: "local"}
-	for _, width := range []int{26, 18, 17, 14, 11, 10, 5} {
+	for _, width := range []int{26, 18, 17, 14, 13, 11, 10, 7, 6, 2} {
 		continuousWidth(in, width)
-		frame := ComposeMachines(in, &m).Frame
-		found := false
-		for _, hit := range m.Hits {
-			if hit.Machine != "remote" || hit.Right || !(hit.Header || hit.Connect) {
+		for _, tc := range []struct {
+			status, button string
+			snapshot       *Input
+		}{
+			{"disconnected", "[connect]", nil},
+			{"connecting", "[disconnect]", nil},
+			{"online", "[disconnect]", nil},
+			{"online", "[new]", &in},
+			{"reconnecting", "[disconnect]", &in},
+			{"needs attention", "[disconnect]", &in},
+			{"awaiting approval", "[disconnect]", nil},
+			{machine.ApprovalStopped, "[disconnect]", nil},
+			{"disconnected", "[connect]", nil},
+		} {
+			remote := &m.Groups[1]
+			remote.Status, remote.Input = tc.status, tc.snapshot
+			frame := ComposeMachines(in, &m).Frame
+			var header, button layout.Rect
+			for _, hit := range m.Hits {
+				if hit.Machine != remote.ID || hit.Right {
+					continue
+				}
+				if hit.Header {
+					header = hit.Rect
+				}
+				if hit.IsHeaderButton() {
+					if button.W != 0 || hit.New != (tc.button == "[new]") ||
+						hit.Connect != (tc.button == "[connect]") || hit.Disconnect != (tc.button == "[disconnect]") {
+						t.Fatalf("width=%d status=%q unexpected button hit %+v", width, tc.status, hit)
+					}
+					button = hit.Rect
+				}
+			}
+			if header.W != width-1 {
+				t.Fatalf("width=%d status=%q unexpected header %+v", width, tc.status, header)
+			}
+			var label strings.Builder
+			for x := header.X; x < header.X+header.W; x++ {
+				label.WriteString(frame.Cell(x, header.Y).Content)
+			}
+			if header.W <= len(tc.button) {
+				if button.W != 0 || strings.ContainsAny(label.String(), "[]") {
+					t.Fatalf("width=%d status=%q shows a button that doesn't fit: %q, hit=%+v", width, tc.status, label.String(), button)
+				}
 				continue
 			}
-			var text strings.Builder
-			for x := hit.Rect.X; x < hit.Rect.X+hit.Rect.W; x++ {
-				text.WriteString(frame.Cell(x, hit.Rect.Y).Content)
+			want := layout.Rect{X: header.X + header.W - len(tc.button), Y: header.Y, W: len(tc.button), H: 1}
+			if button != want || !strings.HasSuffix(label.String(), tc.button) {
+				t.Fatalf("width=%d status=%q header=%q hit=%+v, want %q at %+v", width, tc.status, label.String(), button, tc.button, want)
 			}
-			if hit.Header && width < 11 && strings.Contains(text.String(), "[") {
-				t.Fatalf("sidebar width %d draws a partial button in %q", width, text.String())
-			}
-			if hit.Connect && text.String() != "[connect]" {
-				t.Fatalf("sidebar width %d draws %q at the connect target", width, text.String())
-			}
-			found = found || hit.Connect
-		}
-		if found != (width >= 11) {
-			t.Fatalf("sidebar width %d: connect target present = %t", width, found)
 		}
 	}
 }

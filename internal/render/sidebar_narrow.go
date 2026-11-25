@@ -127,20 +127,16 @@ func (m *MachineSidebar) draw(f *Frame, in Input) {
 		}
 		rows := map[int]SidebarRow{}
 		for _, hit := range vm.Hits {
-			if hit.Right == right && !hit.Header && !hit.New && !hit.Connect {
+			if hit.Right == right && !hit.Header && !hit.IsHeaderButton() {
 				rows[hit.Rect.Y] = hit.Row
 			}
 		}
 		var keepRows map[int]bool
 		if !right && in.State.SidebarArea().W < model.SidebarMinDefault {
-			// The connect button must use the same columns as its hit target.
-			disconnected := map[string]bool{}
-			for _, group := range m.Groups {
-				disconnected[group.ID] = group.Status == "disconnected"
-			}
+			// Machine header buttons and their hit targets use the actual width.
 			keepRows = map[int]bool{}
 			for _, hit := range m.Hits {
-				if !hit.Right && hit.Header && disconnected[hit.Machine] {
+				if !hit.Right && hit.Header {
 					keepRows[hit.Rect.Y] = true
 				}
 			}
