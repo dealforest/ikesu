@@ -2,13 +2,52 @@ package client
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/kazuph/ikesu/internal/endpoint"
+	"github.com/kazuph/ikesu/internal/input"
 	"github.com/kazuph/ikesu/internal/machine"
 )
+
+func TestMachineCatalogDisconnectReturnsToLocalAndStopsRetry(t *testing.T) {
+	t.Setenv("IKESU_STATE_DIR", t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	now := time.Now()
+	peer := endpoint.Current()
+	local := &endpointConnection{writer: &writer{available: peer.Generation, methods: peer.Methods}}
+	m := &machineClient{session: "catalog-test", endpoints: map[string]*managedEndpoint{
+		"local": {connection: local},
+	}}
+	catalog := machine.Catalog{Path: m.catalogPath()}
+	profile, err := catalog.AddVerified("host", "Remote", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.active = profile.ID
+	m.pending = &pendingMachine{id: profile.ID, keys: []input.Event{{Kind: input.KindKey}}}
+	remote := &managedEndpoint{profile: profile, cancel: cancel, attempt: 1, retry: retryPolicy{next: now, delay: initialRetryDelay}}
+	m.endpoints[profile.ID] = remote
+	if _, err := catalog.Change(profile.ID, "disable", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	m.event(endpointEvent{catalogChanged: true})
+	m.event(endpointEvent{id: profile.ID, attempt: 1, err: errors.New("late SSH error")})
+	m.advance(now)
+	if m.active != "local" || m.pending != nil || ctx.Err() == nil || remote.connection != nil || remote.retry != (retryPolicy{}) || remote.attempt != 2 {
+		t.Fatalf("disconnect left active=%s pending=%+v cancelled=%v remote=%+v", m.active, m.pending, ctx.Err(), remote)
+	}
+	if remote.profile.Enabled || remote.status != "disconnected" || remote.reason != "machine is disconnected" {
+		t.Fatalf("unexpected disconnected state: %+v", remote)
+	}
+	if len(local.queue) != 2 || local.queue[0].Type != "resize" || local.queue[1].Type != "visibility" || local.queue[1].Visible == nil || !*local.queue[1].Visible {
+		t.Fatalf("Local viewer was not restored: %+v", local.queue)
+	}
+}
 
 func TestMachineCatalogRemovalCancelsPendingSwitchAndOwnedAttempt(t *testing.T) {
 	t.Setenv("IKESU_STATE_DIR", t.TempDir())

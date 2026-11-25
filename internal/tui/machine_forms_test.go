@@ -82,7 +82,7 @@ func TestClientMachineHeaderRemovalRejectsChangedProfileAndKeepsOtherMachine(t *
 	forms.OpenMachine(selected, state, 2, 8)
 	var in render.Input
 	forms.Overlay(&in)
-	if in.Menu == nil || len(in.Menu.Items) != 2 || in.Menu.Items[0].Label != "add machine..." || in.Menu.Items[1].Label != "remove machine..." || in.Menu.X != 2 || in.Menu.Y != 8 {
+	if in.Menu == nil || len(in.Menu.Items) != 3 || in.Menu.Items[0].Label != "add machine..." || in.Menu.Items[1].Label != "remove machine..." || in.Menu.X != 2 || in.Menu.Y != 8 {
 		t.Fatal(in.Menu)
 	}
 	for _, key := range []uv.Key{{Code: uv.KeyDown}, {Code: uv.KeyEnter}} {
@@ -105,5 +105,38 @@ func TestClientMachineHeaderRemovalRejectsChangedProfileAndKeepsOtherMachine(t *
 	got := catalog.Load()
 	if len(got) != 2 || got[0].ID != selected.ID || got[0].Label != "Renamed" || got[1] != other {
 		t.Fatal("stale header deletion changed the catalog", got)
+	}
+}
+
+func TestClientMachineHeaderConnectionMenu(t *testing.T) {
+	state := specRuntimeApp(t).st
+	catalog := machine.Catalog{Path: filepath.Join(t.TempDir(), "machines.json")}
+	profile, err := catalog.AddVerified("host", "Remote", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	forms := NewMachineForms(context.Background(), catalog.Path, nil)
+	defer forms.Close()
+	for _, item := range []string{"disconnect", "connect"} {
+		forms.OpenMachine(profile, state, 2, 8)
+		var in render.Input
+		forms.Overlay(&in)
+		if in.Menu == nil || len(in.Menu.Items) != 3 || in.Menu.Items[2].Label != item {
+			t.Fatalf("expected %s, got %+v", item, in.Menu)
+		}
+		for _, code := range []rune{uv.KeyDown, uv.KeyDown, uv.KeyEnter} {
+			forms.Input(input.Event{Kind: input.KindKey, Key: uv.Key{Code: code}}, state)
+		}
+		saved := catalog.Load()
+		if len(saved) != 1 || saved[0].ID != profile.ID || saved[0].Enabled == profile.Enabled {
+			t.Fatalf("%s did not update saved machine: %+v", item, saved)
+		}
+		profile = saved[0]
+	}
+	forms.OpenMachine(machine.Profile{ID: "local", Enabled: true}, state, 2, 8)
+	var in render.Input
+	forms.Overlay(&in)
+	if in.Menu == nil || len(in.Menu.Items) != 2 {
+		t.Fatalf("Local offered a connection action: %+v", in.Menu)
 	}
 }
