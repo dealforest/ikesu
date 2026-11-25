@@ -35,10 +35,18 @@ class Session {
     if (notifyRelay) this.hub.transport.closeConn(this.key);
   }
   send(value) {
-    if (this.closed || !this.ready) return;
-    if (this.noise.needsRenewal) { this.close(); return; }
-    try { for (const part of encodeMessage(value, () => (this.messageId = ((this.messageId ?? 0) + 1) >>> 0))) this.hub.transport.sendData(this.key, this.noise.encrypt(part)); }
-    catch (error) { this.hub.log(`送信に失敗: ${error.message}`); this.close(); }
+    if (this.closed || !this.ready) return false;
+    if (this.noise.needsRenewal) { this.close(); return false; }
+    try {
+      for (const part of encodeMessage(value, () => (this.messageId = ((this.messageId ?? 0) + 1) >>> 0))) {
+        if (this.hub.transport.sendData(this.key, this.noise.encrypt(part)) === false) throw Error('中継につながっていません');
+      }
+      return true;
+    } catch (error) {
+      this.hub.log(`送信に失敗: ${error.message}`);
+      this.close();
+      return false;
+    }
   }
   async onData(buffer) {
     if (this.closed) return;
@@ -369,19 +377,28 @@ export class MobileHub {
     await this.reloadDevices();
     const session = candidate.session;
     if (session.closed || !this.devices.some(current => current.device === device.device)) {
-      try {
-        await revokeDevice(this.configDir, device.device);
-        await this.reloadDevices();
-      } catch (error) {
-        this.log(`登録できなかった端末の取り消しに失敗しました: ${error.message}`);
-      }
-      throw Error('登録を反映できませんでした');
+      return this.rollback(device, '登録を反映できませんでした');
     }
-    session.send({ type: 'paired', device: device.device, tag: this.appTag(Buffer.from(device.device, 'base64url')), name: pairing.name, permissions: pairing.permissions });
+    const sent = session.send({ type: 'paired', device: device.device, tag: this.appTag(Buffer.from(device.device, 'base64url')), name: pairing.name, permissions: pairing.permissions });
+    if (sent === false) {
+      session.close();
+      return this.rollback(device, '登録の知らせをスマホへ送れませんでした');
+    }
     session.paired = true;
     if (this.pairing === pairing) this.closePairing(session);
     const linger = setTimeout(() => session.close(), 10_000); linger.unref?.();
     return device;
+  }
+  async rollback(device, reason) {
+    const id = device.device;
+    try {
+      await revokeDevice(this.configDir, id);
+      await this.reloadDevices();
+    } catch (error) {
+      this.log(`登録できなかった端末の取り消しに失敗しました: ${error.message}`);
+      throw Error(`${reason}。取り消しにも失敗したため、端末 ID ${id} が devices.json に残っているかもしれません。devices.json を読めるように直してから「main.mjs revoke ${id}」で外してください（${error.message}）`);
+    }
+    throw Error(reason);
   }
   closePairing(except) {
     const pairing = this.pairing; this.pairing = null; clearTimeout(this.pairingTimer);

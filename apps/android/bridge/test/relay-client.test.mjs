@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
+import { once } from 'node:events';
 import { WebSocketServer } from 'ws';
 import { RelayClient } from '../relay-client.mjs';
 import { b64u } from '../devices.mjs';
@@ -99,4 +100,23 @@ test('B2 CLOSE 16・17・18バイトのうち17バイトだけを処理する', 
     await until(() => receivedData);
     assert.deepEqual(closed, [id.toString('hex')]);
   } finally { client.stop(); server.close(); }
+});
+
+test('B15 DATA は OPEN の接続にだけ送信し、送信できたかを返す', async t => {
+  const { server, connections, relay } = await relayServer({ autoPong: true });
+  const client = new RelayClient({ relay });
+  t.after(() => { client.stop(); server.close(); });
+  const id = randomBytes(16);
+  const key = id.toString('hex');
+  const body = Buffer.of(42);
+
+  assert.equal(client.sendData(key, body), false);
+  client.start();
+  await once(client.ws, 'open');
+  const received = once(connections[0], 'message');
+  assert.equal(client.sendData(key, body), true);
+  assert.deepEqual((await received)[0], Buffer.concat([Buffer.of(0x02), id, body]));
+  client.stop();
+  assert.equal(client.sendData(key, body), false);
+  assert.throws(() => client.sendData(key, Buffer.alloc(65_536)), /65,535 バイトを超えています/);
 });

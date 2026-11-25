@@ -91,6 +91,8 @@ export async function remotePairing(stateDir) {
   let socket;
   try { socket = await connect(path.join(stateDir, 'pair.sock')); } catch { return null; }
   const waiting = []; const listeners = []; let buffer = '';
+  let closed = false;
+  const disconnected = { ok: false, error: '接続が切れました' };
   socket.on('data', chunk => {
     buffer += chunk;
     let index;
@@ -99,8 +101,15 @@ export async function remotePairing(stateDir) {
       if (message.event === 'candidate') listeners.forEach(listener => listener(message)); else waiting.shift()?.(message);
     }
   });
-  socket.on('close', () => waiting.splice(0).forEach(resolve => resolve({ ok: false, error: '接続が切れました' })));
-  const call = value => new Promise(resolve => { waiting.push(resolve); socket.write(`${JSON.stringify(value)}\n`); });
+  socket.on('close', () => {
+    closed = true;
+    waiting.splice(0).forEach(resolve => resolve(disconnected));
+  });
+  const call = value => new Promise(resolve => {
+    if (closed || socket.destroyed) { resolve(disconnected); return; }
+    waiting.push(resolve);
+    socket.write(`${JSON.stringify(value)}\n`);
+  });
   return {
     async start(options) { const reply = await call({ op: 'pair_start', ...options }); if (!reply.ok) throw Error(reply.error); return reply.qr; },
     async confirm(code) {
