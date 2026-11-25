@@ -127,6 +127,18 @@ func TestMachineCatalogDisconnectReturnsToLocalAndStopsRetry(t *testing.T) {
 	}
 }
 
+func TestLocalReconnectThatStartedHiddenRestoresVisibleViewer(t *testing.T) {
+	t.Parallel()
+	peer := endpoint.Current()
+	local := &endpointConnection{writer: &writer{available: peer.Generation, methods: peer.Methods}}
+	m := &machineClient{active: "remote", order: []string{"local"}, settings: &localSettings{}, endpoints: map[string]*managedEndpoint{"local": {}}}
+	m.showLocalAfterDisconnect()
+	m.event(endpointEvent{id: "local", connection: local, hidden: true})
+	if len(local.queue) != 2 || local.queue[0].Type != "resize" || local.queue[1].Type != "visibility" || local.queue[1].Visible == nil || !*local.queue[1].Visible {
+		t.Fatalf("Local viewer stayed hidden after reconnect: %+v", local.queue)
+	}
+}
+
 func TestMachineCatalogRemovalCancelsPendingSwitchAndOwnedAttempt(t *testing.T) {
 	t.Setenv("IKESU_STATE_DIR", t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())
