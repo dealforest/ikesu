@@ -23,9 +23,11 @@ var sharedGuardBinary struct {
 	err       error
 }
 
-// copyGuardBinary places the package's one build of cmd/ikesu at dst. A hard
-// link is used when possible; otherwise the file is copied. dst stays inside the
-// caller's own directory, so tests keep their existing directory layout.
+// copyGuardBinary copies the package's one build of cmd/ikesu to dst. It copies
+// rather than hard-links: a new link changes the shared file's ctime, which is
+// part of the identity the guard trusts, so a running server would see its
+// executable as replaced. dst stays inside the caller's own directory, so tests keep their
+// existing directory layout.
 func copyGuardBinary(dst string) error {
 	sharedGuardBinary.once.Do(func() {
 		dir, err := os.MkdirTemp("/tmp", "ikesu-guard-bin-")
@@ -43,9 +45,6 @@ func copyGuardBinary(dst string) error {
 	})
 	if sharedGuardBinary.err != nil {
 		return sharedGuardBinary.err
-	}
-	if err := os.Link(sharedGuardBinary.path, dst); err == nil {
-		return nil
 	}
 	src, err := os.Open(sharedGuardBinary.path)
 	if err != nil {
