@@ -14,18 +14,23 @@ export async function startMobile({ configDir, stateDir, decisions, log, control
   const client = new RelayClient({ relay, log, onOpen: (...args) => hub.onOpen(...args), onData: (...args) => hub.onData(...args), onClose: key => hub.onClose(key) });
   client.onReset = () => hub.onReset();
   hub.transport = client;
-  const reload = async () => {
-    try { await hub.reloadDevices(); }
-    catch (error) { log(`devices.json を読めません。すべての接続を切ります: ${error.message}`); hub.devices = []; hub.onReset(); }
-  };
-  await hub.reloadDevices();
+  hub.onDevices = devices => client.setAllow(devices.map(device => Buffer.from(device.device, 'base64url')));
+  const reload = () => hub.reloadDevices();
   let watcher = null;
   try { watcher = fs.watch(configDir, (_event, name) => { if (name === 'devices.json') void reload(); }); } catch { /* 下の定期確認で補う */ }
-  let lastMtime = 0;
+  await reload();
+  const devicesFile = path.join(configDir, 'devices.json');
+  let lastVersion;
   const poll = setInterval(() => {
-    let mtime = 0;
-    try { mtime = fs.statSync(path.join(configDir, 'devices.json')).mtimeMs; } catch { /* 無ければ 0 */ }
-    if (mtime !== lastMtime) { lastMtime = mtime; void reload(); }
+    let version = 'missing';
+    try {
+      const { mtimeMs, ino, size } = fs.statSync(devicesFile);
+      version = `${mtimeMs}:${ino}:${size}`;
+    } catch { /* 読めない場合も reload で確認する */ }
+    if (version !== lastVersion) {
+      lastVersion = version;
+      void reload();
+    }
   }, pollMs);
   poll.unref?.();
   client.start();
@@ -98,7 +103,11 @@ export async function remotePairing(stateDir) {
   const call = value => new Promise(resolve => { waiting.push(resolve); socket.write(`${JSON.stringify(value)}\n`); });
   return {
     async start(options) { const reply = await call({ op: 'pair_start', ...options }); if (!reply.ok) throw Error(reply.error); return reply.qr; },
-    async confirm(code) { const reply = await call({ op: 'pair_confirm', code }); return reply.ok ? { device: reply.device } : { device: null, active: reply.active }; },
+    async confirm(code) {
+      const reply = await call({ op: 'pair_confirm', code });
+      if (reply.error) throw Error(reply.error);
+      return reply.ok ? { device: reply.device } : { device: null, active: reply.active };
+    },
     onCandidate(listener) { listeners.push(listener); },
     async cancel() { await call({ op: 'pair_cancel' }); },
     close() { socket.destroy(); },

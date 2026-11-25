@@ -5,8 +5,9 @@ import os from 'node:os';
 import { constants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import dh from 'noise-handshake/dh.js';
-import { appTag } from './relay-client.mjs';
+import { appTag, MAX_ALLOW } from './relay-client.mjs';
 
 export const b64u = bytes => Buffer.from(bytes).toString('base64url');
 // 鍵の指紋: SHA-256 の先頭8バイト（アプリの RelayMath.fingerprint と同じ形）。
@@ -94,19 +95,52 @@ export async function loadDevices(configDir) {
 
 export async function saveDevices(configDir, devices) { await writeJson(path.join(configDir, 'devices.json'), { devices }); }
 
-export async function addDevice(configDir, device) {
-  const devices = await loadDevices(configDir);
-  devices.push(device);
-  await saveDevices(configDir, devices);
-  return device;
+// macOS open(2) flag. Node does not expose O_EXLOCK in fs.constants.
+const O_EXLOCK = 0x20;
+const DEVICE_LOCK_FLAGS = constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW | O_EXLOCK | constants.O_NONBLOCK;
+const DEVICE_LOCK_WAIT_MS = 10_000;
+const DEVICE_LOCK_RETRY_MS = 20;
+
+export async function withDevicesLock(configDir, fn) {
+  if (process.platform !== 'darwin') throw Error('devices.json の排他は macOS だけに対応しています');
+  await fs.mkdir(configDir, { recursive: true, mode: 0o700 });
+  const file = path.join(configDir, 'devices.lock');
+  const deadline = performance.now() + DEVICE_LOCK_WAIT_MS;
+  while (performance.now() < deadline) {
+    let lock;
+    try { lock = await fs.open(file, DEVICE_LOCK_FLAGS, 0o600); }
+    catch (error) {
+      if (error.code !== 'EAGAIN' && error.code !== 'EWOULDBLOCK') throw error;
+      await delay(Math.min(DEVICE_LOCK_RETRY_MS, Math.max(0, deadline - performance.now())));
+      continue;
+    }
+    try {
+      return await fn();
+    } finally {
+      await lock.close();
+    }
+  }
+  throw Error('devices.json の更新が混み合っています。もう一度試してください');
 }
 
-export async function revokeDevice(configDir, id) {
-  const devices = await loadDevices(configDir);
-  const kept = devices.filter(device => device.device !== id);
-  if (kept.length === devices.length) return false;
-  await saveDevices(configDir, kept);
-  return true;
+export function addDevice(configDir, device) {
+  return withDevicesLock(configDir, async () => {
+    const devices = await loadDevices(configDir);
+    if (devices.length >= MAX_ALLOW) throw Error(`登録できる端末は ${MAX_ALLOW} 台までです`);
+    devices.push(device);
+    await saveDevices(configDir, devices);
+    return device;
+  });
+}
+
+export function revokeDevice(configDir, id) {
+  return withDevicesLock(configDir, async () => {
+    const devices = await loadDevices(configDir);
+    const kept = devices.filter(device => device.device !== id);
+    if (kept.length === devices.length) return false;
+    await saveDevices(configDir, kept);
+    return true;
+  });
 }
 
 // 公開鍵を手で登録する（アプリを QR で読めないとき）。接続情報（1行の JSON）を返す。秘密は含めない。

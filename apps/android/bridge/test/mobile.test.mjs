@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, generateKeyPairSync, sign } from 'node:crypto';
+import { renameSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { startMobile, remotePairing, connect } from '../mobile-runtime.mjs';
-import { addDeviceByHand, saveRelay, loadDevices, loadRelay, revokeDevice, b64u, writeJson } from '../devices.mjs';
+import { MobileHub } from '../mobile-hub.mjs';
+import { addDevice, addDeviceByHand, saveDevices, saveRelay, loadDevices, loadRelay, revokeDevice, b64u, writeJson } from '../devices.mjs';
 import { pairTag, appTag } from '../relay-client.mjs';
 import { sasCode, pairProof, proofMatches, verifyOperate, PAIR_TTL_SECONDS } from '../pairing.mjs';
 import { FakeApp, FakeRelay, sleep, tmpDir, until } from './mobile-harness.mjs';
@@ -79,20 +81,21 @@ test('保存中に古い QR を閉じて新しい QR を開始しても、新し
   oldApp.sendJson(oldApp.pairMessage(old.secret));
   await until(() => old.candidates.length === 1);
   // confirmPairing reaches the real asynchronous devices.json write before returning.
-  const saving = env.hub.confirmPairing(oldApp.sas(old.secret));
+  const failed = assert.rejects(env.hub.confirmPairing(oldApp.sas(old.secret)), { message: '登録を反映できませんでした' });
   env.hub.closePairing();
   const current = env.hub.startPairing({ name: 'new', permissions: ['notify'] });
   const newApp = new FakeApp(env.relay, 'pair', current.id, env.bridgePublic);
   assert.ok(await newApp.handshake());
-  const saved = await saving;
-  assert.ok(saved);
+  await failed;
+  assert.deepEqual(await loadDevices(env.configDir), []);
   assert.ok(env.hub.pairing === current, 'new QR remains current');
   assert.equal(current.active, true);
   newApp.sendJson(newApp.pairMessage(current.secret));
   await until(() => current.candidates.length === 1);
-  assert.ok(await env.hub.confirmPairing(newApp.sas(current.secret)));
+  const registered = await env.hub.confirmPairing(newApp.sas(current.secret));
+  assert.ok(registered);
   assert.equal(env.hub.pairing, null);
-  assert.equal((await loadDevices(env.configDir)).length, 2);
+  assert.deepEqual(await loadDevices(env.configDir), [registered]);
 });
 
 test('ペアリング: 6桁が違うと許可リストに入らない。5回外れると QR が無効になる', async t => {
@@ -761,4 +764,157 @@ test('監査: 接続を作り直しても、サーバーの確認は bridge 全�
   assert.equal(checks, 1);
   answer(true);
   await apps[2].recv(m => m.type === 'screen_opened');
+});
+
+const allowHeader = Buffer.concat([Buffer.of(0x04), Buffer.alloc(16)]);
+const allowFor = (...devices) => Buffer.concat([allowHeader, ...devices.map(device => Buffer.from(device.device, 'base64url'))]);
+
+test('B3 重なった読み直しは直列で進み、最後の一覧に B が戻らない', async () => {
+  const a = { device: b64u(randomBytes(16)) };
+  const b = { device: b64u(randomBytes(16)) };
+  const firstRead = Promise.withResolvers();
+  const releaseFirst = Promise.withResolvers();
+  let fileDevices = [a, b];
+  let reads = 0;
+  const published = [];
+  const hub = new MobileHub({
+    relay: { room: b64u(randomBytes(32)) },
+    loadDevices: async () => {
+      const snapshot = fileDevices;
+      if (++reads === 1) {
+        firstRead.resolve();
+        await releaseFirst.promise;
+      }
+      return snapshot;
+    },
+  });
+  hub.onDevices = devices => published.push(devices);
+  const older = hub.reloadDevices();
+  await firstRead.promise;
+  fileDevices = [a];
+  const newer = hub.reloadDevices();
+  const coalesced = hub.reloadDevices();
+  assert.equal(reads, 1);
+  releaseFirst.resolve();
+  await Promise.all([older, newer, coalesced]);
+  assert.equal(reads, 2);
+  assert.deepEqual(hub.devices, [a]);
+  assert.deepEqual(published, [[a, b], [a]]);
+});
+
+test('B4 壊れた devices.json でも起動して最初に空の ALLOW を送り、修復後に A を送る', async t => {
+  const configDir = await tmpDir();
+  const relayKey = randomBytes(32), room = b64u(randomBytes(32));
+  const relay = await FakeRelay.start(relayKey, room);
+  relay.frames = [];
+  let mobile;
+  t.after(async () => {
+    await mobile?.stop();
+    await relay.stop();
+    await fs.rm(configDir, { recursive: true, force: true });
+  });
+  await saveRelay(configDir, { url: relay.url, room, relayKey });
+  await fs.writeFile(path.join(configDir, 'devices.json'), '{broken', { mode: 0o600 });
+  const logs = [];
+  mobile = await startMobile({ configDir, stateDir: configDir, decisions: {}, control: false, pollMs: 20, log: message => logs.push(message) });
+  await until(() => relay.frames.length);
+  assert.deepEqual(relay.frames[0], allowHeader);
+  assert.ok(logs.some(message => message.startsWith('devices.json を読めません。')));
+
+  const a = {
+    device: b64u(randomBytes(16)), noise_pub: b64u(mobile.hub.noiseKey.publicKey),
+    operate_pub: new FakeApp(relay, 'app', randomBytes(16), mobile.hub.noiseKey.publicKey).operatePub,
+    name: 'A', permissions: ['notify'], created: new Date().toISOString(),
+  };
+  await saveDevices(configDir, [a]);
+  await until(() => relay.frames.some(frame => frame.equals(allowFor(a))));
+});
+
+test('B5 revoke は空の ALLOW を送ってから対象セッションの CLOSE を送る', async t => {
+  const env = await setup(t);
+  const { app, paired, device } = await pairDevice(env);
+  const connected = await connectApp(env, paired, app);
+  assert.ok(await connected.handshake());
+  await connected.recv(message => message.type === 'notice');
+  env.relay.frames = [];
+  const close = Buffer.concat([Buffer.of(0x03), connected.conn.key]);
+
+  assert.equal(await revokeDevice(env.configDir, device.device), true);
+  await until(() => connected.conn.closed);
+  const allowAt = env.relay.frames.findIndex(frame => frame.equals(allowHeader));
+  const closeAt = env.relay.frames.findIndex(frame => frame.equals(close));
+  assert.ok(allowAt >= 0 && closeAt > allowAt);
+});
+
+test('B6 confirmPairing は新端末を含む ALLOW を paired の DATA より先に送る', async t => {
+  const env = await setup(t);
+  const pairing = env.hub.startPairing({ name: 'PC', permissions: ['notify'] });
+  const app = new FakeApp(env.relay, 'pair', pairing.id, env.bridgePublic);
+  assert.ok(await app.handshake());
+  app.sendJson(app.pairMessage(pairing.secret));
+  await until(() => pairing.candidates.length === 1);
+  env.relay.frames = [];
+
+  const device = await env.hub.confirmPairing(app.sas(pairing.secret));
+  assert.equal((await app.recv(message => message.type === 'paired')).device, device.device);
+  const allowAt = env.relay.frames.findIndex(frame => frame.equals(allowFor(device)));
+  const dataAt = env.relay.frames.findIndex(frame => frame[0] === 0x02 && frame.subarray(1, 17).equals(app.conn.key));
+  assert.ok(allowAt >= 0 && dataAt > allowAt);
+});
+
+test('B7 初回読込後に devices.json が消えると、最初の定期確認で空の ALLOW を送る', async t => {
+  const root = await tmpDir();
+  const configDir = path.join(root, 'config');
+  const relayKey = randomBytes(32), room = b64u(randomBytes(32));
+  const relay = await FakeRelay.start(relayKey, room);
+  let mobile;
+  t.after(async () => {
+    await mobile?.stop();
+    await relay.stop();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  relay.frames = [];
+  await saveRelay(configDir, { url: relay.url, room, relayKey });
+  const device = {
+    device: b64u(randomBytes(16)), noise_pub: b64u(randomBytes(32)), operate_pub: b64u(randomBytes(32)),
+    name: 'A', permissions: ['notify'], created: new Date().toISOString(),
+  };
+  await saveDevices(configDir, [device]);
+  let reads = 0;
+  mobile = await startMobile({ configDir, stateDir: root, control: false, pollMs: 250, log: () => {}, decisions: {
+    loadDevices(dir) { reads++; return loadDevices(dir); },
+  } });
+  assert.deepEqual(mobile.hub.devices, [device]);
+  assert.equal(reads, 1);
+  // 親ディレクトリの rename は devices.json 名の監視イベントを発生させず、元のパスからファイルを消す。
+  renameSync(configDir, path.join(root, 'moved'));
+  await until(() => relay.frames.length >= 2);
+  assert.equal(reads, 2);
+  assert.deepEqual(relay.frames, [allowFor(device), allowHeader]);
+  assert.deepEqual(mobile.hub.devices, []);
+});
+
+test('B9 登録は4094台から4095台まで成功し、満杯で失敗してもファイルは変わらない', async t => {
+  const configDir = await tmpDir();
+  t.after(() => fs.rm(configDir, { recursive: true, force: true }));
+  const file = path.join(configDir, 'devices.json');
+  const deviceAt = index => {
+    const id = Buffer.alloc(16);
+    id.writeUInt32BE(index);
+    return {
+      device: b64u(id), noise_pub: b64u(Buffer.alloc(32)), operate_pub: b64u(Buffer.of(1)),
+      name: String(index), permissions: ['notify'], created: '2026-11-25T00:00:00.000Z',
+    };
+  };
+  await saveDevices(configDir, Array.from({ length: 4094 }, (_, index) => deviceAt(index)));
+
+  const last = deviceAt(4094);
+  assert.deepEqual(await addDevice(configDir, last), last);
+  const devices = await loadDevices(configDir);
+  assert.equal(devices.length, 4095);
+  assert.deepEqual(devices.at(-1), last);
+
+  const before = await fs.readFile(file);
+  await assert.rejects(addDevice(configDir, deviceAt(4095)), { message: '登録できる端末は 4095 台までです' });
+  assert.deepEqual(await fs.readFile(file), before);
 });
