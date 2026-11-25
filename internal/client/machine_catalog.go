@@ -61,7 +61,7 @@ func (m *machineClient) refreshMachineCatalog() error {
 			e.retry = retryPolicy{}
 			e.removed = !exists
 			if exists {
-				e.status, e.reason = "disabled", "machine is disabled"
+				e.status, e.reason = "disconnected", "machine is disconnected"
 			} else {
 				e.status, e.reason = "removed", "machine was removed"
 			}
@@ -77,19 +77,19 @@ func (m *machineClient) refreshMachineCatalog() error {
 	for _, profile := range profiles {
 		e := m.endpoints[profile.ID]
 		if e == nil {
-			e = &managedEndpoint{profile: profile, status: "disabled"}
+			e = &managedEndpoint{profile: profile, status: "disconnected", reason: "machine is disconnected"}
 			m.endpoints[profile.ID] = e
 		}
 		wasEnabled := e.profile.Enabled
 		e.profile = profile
 		e.removed = false
-		if profile.Enabled && (!wasEnabled || e.status == "disabled") {
+		if profile.Enabled && (!wasEnabled || e.status == "disconnected") {
 			if !m.legacyLocal() {
 				m.start(profile.ID, nil)
 			}
 		}
 		if !profile.Enabled {
-			e.status = "disabled"
+			e.status = "disconnected"
 		}
 	}
 	for id := range m.endpoints {

@@ -58,7 +58,7 @@ func (r *runner) machineCLI(args []string) int {
 			fmt.Fprintln(r.out(), "No saved SSH machines.")
 		}
 		for _, p := range profiles {
-			state := "disabled"
+			state := "disconnected"
 			if p.Enabled {
 				state = "enabled"
 			}
