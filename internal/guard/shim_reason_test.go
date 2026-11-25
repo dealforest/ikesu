@@ -28,9 +28,8 @@ func TestShimRequestReasonWithRealServer(t *testing.T) {
 	binary := filepath.Join(root, "ikesu")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	build := exec.CommandContext(ctx, "go", "build", "-o", binary, "../../cmd/ikesu")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build: %v: %s", err, out)
+	if err := guard.CopyGuardBinaryForTest(binary); err != nil {
+		t.Fatal(err)
 	}
 	config := filepath.Join(root, "config.toml")
 	if err := os.WriteFile(config, []byte("[experimental]\nallow_nested=true\n"), 0600); err != nil {

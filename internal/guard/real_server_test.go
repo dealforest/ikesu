@@ -15,6 +15,61 @@ import (
 	"github.com/kazuph/ikesu/internal/childenv"
 )
 
+// Building cmd/ikesu takes seconds per build, so the package builds it once and
+// every test that runs the real CLI gets its own copy of that one binary.
+var sharedGuardBinary struct {
+	once      sync.Once
+	dir, path string
+	err       error
+}
+
+// copyGuardBinary places the package's one build of cmd/ikesu at dst. A hard
+// link is used when possible; otherwise the file is copied. dst stays inside the
+// caller's own directory, so tests keep their existing directory layout.
+func copyGuardBinary(dst string) error {
+	sharedGuardBinary.once.Do(func() {
+		dir, err := os.MkdirTemp("/tmp", "ikesu-guard-bin-")
+		if err != nil {
+			sharedGuardBinary.err = err
+			return
+		}
+		sharedGuardBinary.dir = dir
+		path := filepath.Join(dir, "ikesu")
+		if out, err := exec.Command("go", "build", "-o", path, "../../cmd/ikesu").CombinedOutput(); err != nil {
+			sharedGuardBinary.err = fmt.Errorf("build real guard CLI: %w: %s", err, out)
+			return
+		}
+		sharedGuardBinary.path = path
+	})
+	if sharedGuardBinary.err != nil {
+		return sharedGuardBinary.err
+	}
+	if err := os.Link(sharedGuardBinary.path, dst); err == nil {
+		return nil
+	}
+	src, err := os.Open(sharedGuardBinary.path)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o755)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, src); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+func guardBinary(t *testing.T, dst string) {
+	t.Helper()
+	if err := copyGuardBinary(dst); err != nil {
+		t.Fatal(err)
+	}
+}
+
 var guardFixture struct {
 	once         sync.Once
 	root, socket string
@@ -34,8 +89,8 @@ func realGuardFixture(t *testing.T) string {
 		}
 		guardFixture.root = root
 		binary := filepath.Join(root, "ikesu")
-		if out, err := exec.Command("go", "build", "-o", binary, "../../cmd/ikesu").CombinedOutput(); err != nil {
-			guardFixture.err = fmt.Errorf("build: %w: %s", err, out)
+		if err := copyGuardBinary(binary); err != nil {
+			guardFixture.err = err
 			return
 		}
 		cfg := filepath.Join(root, "config.toml")
@@ -81,6 +136,12 @@ func TestMain(m *testing.M) {
 		}
 		if err := guardFixture.server.Wait(); err != nil {
 			fmt.Fprintln(os.Stderr, "isolated guard server:", err)
+			code = 1
+		}
+	}
+	if sharedGuardBinary.dir != "" {
+		if err := os.RemoveAll(sharedGuardBinary.dir); err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			code = 1
 		}
 	}

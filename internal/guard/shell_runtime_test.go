@@ -44,10 +44,7 @@ func TestShellRuntimeHelper(t *testing.T) {
 // This covers many real shell processes on both installed Bash versions.
 func TestBashRuntimeSnapshotAndFailureStops(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "ikesu")
-	build := exec.Command("go", "build", "-o", binary, "../../cmd/ikesu")
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build real guard CLI: %v: %s", err, output)
-	}
+	guardBinary(t, binary)
 	for name, shell := range map[string]string{"system": "/bin/bash", "homebrew": "/opt/homebrew/bin/bash"} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := os.Stat(shell); err != nil {
