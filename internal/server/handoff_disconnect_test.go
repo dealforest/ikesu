@@ -41,7 +41,13 @@ func TestLiveHandoffContinuesAfterFinalNoticeDisconnect(t *testing.T) {
 	}
 	launcherDir := t.TempDir()
 	importer := filepath.Join(launcherDir, "importer")
-	if err := os.Link(exe, importer); err != nil {
+	// A hard link changes the original inode's ctime, which is part of
+	// the guard's executable identity and is shared by parallel tests.
+	binary, err := os.ReadFile(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(importer, binary, 0700); err != nil {
 		t.Fatal(err)
 	}
 	launcher := filepath.Join(launcherDir, "disconnect-final")
