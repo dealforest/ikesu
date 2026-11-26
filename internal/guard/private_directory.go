@@ -248,6 +248,18 @@ func (d *privateDirectory) lock(exclusive bool) (func(), error) {
 }
 
 func (d *privateDirectory) lockFile(name string, mode int) (func(), error) {
+	f, err := d.openLockFile(name)
+	if err != nil {
+		return nil, err
+	}
+	if err = unix.Flock(int(f.Fd()), mode); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return func() { f.Close() }, nil
+}
+
+func (d *privateDirectory) openLockFile(name string) (*os.File, error) {
 	fd, err := unix.Openat(d.fd(), name, unix.O_RDWR|unix.O_CREAT|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
 	if err != nil {
 		return nil, err
@@ -258,11 +270,7 @@ func (d *privateDirectory) lockFile(name string, mode int) (func(), error) {
 		f.Close()
 		return nil, fmt.Errorf("untrusted guard generation lock")
 	}
-	if err = unix.Flock(fd, mode); err != nil {
-		f.Close()
-		return nil, err
-	}
-	return func() { unix.Flock(fd, unix.LOCK_UN); f.Close() }, nil
+	return f, nil
 }
 func generationName(name string) bool {
 	return strings.HasPrefix(name, "generation-") && filepath.Base(name) == name

@@ -285,10 +285,18 @@ func (a *Assets) trustedSource() (string, os.FileInfo, error) {
 // HoldGenerationPruning keeps older senders' on-disk generations available
 // until the importer receives confirmation that the sender has committed.
 func HoldGenerationPruning(root string) (func(), error) {
-	return lockHandoffPruning(root, unix.LOCK_EX)
+	file, err := openHandoffPruneFile(root)
+	if err != nil {
+		return nil, err
+	}
+	if err = unix.Flock(int(file.Fd()), unix.LOCK_EX); err != nil {
+		file.Close()
+		return nil, err
+	}
+	return func() { file.Close() }, nil
 }
 
-func lockHandoffPruning(root string, mode int) (func(), error) {
+func openHandoffPruneFile(root string) (*os.File, error) {
 	state, err := openPrivateState(root, false)
 	if err != nil {
 		return nil, err
@@ -299,29 +307,42 @@ func lockHandoffPruning(root string, mode int) (func(), error) {
 		return nil, err
 	}
 	defer dir.close()
-	return dir.lockFile("handoff-prune.lock", mode)
+	return dir.openLockFile("handoff-prune.lock")
 }
 
 const generationPruneBatch = 500
 
-func pruneRuntimeGenerations(root, pane string) {
-	a := Assets{Root: root, Pane: pane}
-	shell, err := a.privateShell(false)
-	if err != nil {
-		return
-	}
-	defer shell.close()
-	pruneGenerations(root, shell, time.Now().Add(-generationRetention))
+type generationPruner struct {
+	handoff, publication *os.File
+	releaseSweep         func()
 }
 
-// The separate prune lock coalesces concurrent sweeps. Directory enumeration
-// and pauses between batches leave the publication lock available to shells.
-func pruneGenerations(root string, shell *privateDirectory, cutoff time.Time) {
-	unlock, err := shell.lockFile("generation-prune.lock", unix.LOCK_EX|unix.LOCK_NB)
+// Prepare descriptors synchronously. Once scheduled, a sweep only reads and
+// removes entries, so it cannot recreate lock files during pane teardown.
+func prepareGenerationPruner(root string, shell *privateDirectory) (*generationPruner, error) {
+	releaseSweep, err := shell.lockFile("generation-prune.lock", unix.LOCK_EX|unix.LOCK_NB)
 	if err != nil {
-		return
+		return nil, err
 	}
-	defer unlock()
+	publication, err := shell.openLockFile("generation.lock")
+	if err != nil {
+		releaseSweep()
+		return nil, err
+	}
+	handoff, err := openHandoffPruneFile(root)
+	if err != nil {
+		publication.Close()
+		releaseSweep()
+		return nil, err
+	}
+	return &generationPruner{handoff, publication, releaseSweep}, nil
+}
+
+// Enumeration and the gaps between batches leave publication available.
+func (p *generationPruner) prune(shell *privateDirectory, cutoff time.Time) {
+	defer p.releaseSweep()
+	defer p.handoff.Close()
+	defer p.publication.Close()
 	fd, err := unix.Openat(shell.fd(), ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return
@@ -333,37 +354,39 @@ func pruneGenerations(root string, shell *privateDirectory, cutoff time.Time) {
 		return
 	}
 	for batch := range slices.Chunk(names, generationPruneBatch) {
-		if !pruneGenerationBatch(root, shell, batch, cutoff) {
+		if !p.pruneBatch(shell, batch, cutoff) {
 			return
 		}
 	}
 }
 
-func lockPruneBatch(root string, shell *privateDirectory) (func(), error) {
+func (p *generationPruner) lockBatch() (func(), error) {
+	publication, handoff := int(p.publication.Fd()), int(p.handoff.Fd())
 	for {
-		unlock, err := shell.lock(true)
-		if err != nil {
+		if err := unix.Flock(publication, unix.LOCK_EX); err != nil {
 			return nil, err
 		}
-		releaseHandoff, err := lockHandoffPruning(root, unix.LOCK_SH|unix.LOCK_NB)
+		err := unix.Flock(handoff, unix.LOCK_SH|unix.LOCK_NB)
 		if err == nil {
-			return func() { releaseHandoff(); unlock() }, nil
+			return func() {
+				unix.Flock(handoff, unix.LOCK_UN)
+				unix.Flock(publication, unix.LOCK_UN)
+			}, nil
 		}
-		unlock()
+		unix.Flock(publication, unix.LOCK_UN)
 		if err != unix.EWOULDBLOCK {
 			return nil, err
 		}
 		// Wait for the importer without obstructing generation publication.
-		releaseHandoff, err = lockHandoffPruning(root, unix.LOCK_SH)
-		if err != nil {
+		if err = unix.Flock(handoff, unix.LOCK_SH); err != nil {
 			return nil, err
 		}
-		releaseHandoff()
+		unix.Flock(handoff, unix.LOCK_UN)
 	}
 }
 
-func pruneGenerationBatch(root string, shell *privateDirectory, names []string, cutoff time.Time) bool {
-	unlock, err := lockPruneBatch(root, shell)
+func (p *generationPruner) pruneBatch(shell *privateDirectory, names []string, cutoff time.Time) bool {
+	unlock, err := p.lockBatch()
 	if err != nil {
 		return false
 	}

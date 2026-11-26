@@ -86,7 +86,15 @@ func TestEnsureGenerationPrunesExpiredGenerations(t *testing.T) {
 	}
 	unlock()
 	locked = false
-	pruneGenerations(a.Root, shell, time.Now().Add(-generationRetention))
+	prune := func(cutoff time.Time) {
+		t.Helper()
+		pruner, err := prepareGenerationPruner(a.Root, shell)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pruner.prune(shell, cutoff)
+	}
+	prune(time.Now().Add(-generationRetention))
 	if _, err := os.Lstat(old); !os.IsNotExist(err) {
 		t.Errorf("expired generation remains: %s (%v)", filepath.Base(old), err)
 	}
@@ -103,7 +111,7 @@ func TestEnsureGenerationPrunesExpiredGenerations(t *testing.T) {
 	if err := os.Chtimes(current, expired, expired); err != nil {
 		t.Fatal(err)
 	}
-	pruneGenerations(a.Root, shell, now.Add(-time.Hour))
+	prune(now.Add(-time.Hour))
 	if _, err := os.Stat(filepath.Join(current, "manifest.json")); err != nil {
 		t.Fatalf("current generation was pruned: %v", err)
 	}

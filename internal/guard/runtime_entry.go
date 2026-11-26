@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // RuntimePath is outside PATH. Only the owning server publishes its native
@@ -22,17 +23,24 @@ func (a *Assets) publishRuntime() error {
 	if err != nil {
 		return err
 	}
-	defer shell.close()
 	unlock, err := shell.lock(true)
 	if err != nil {
+		shell.close()
 		return err
 	}
 	previous, _ := shell.readlink("current")
 	path, err := a.ensureGeneration(shell, true)
 	unlock()
 	if err == nil && previous != filepath.Base(path) {
-		go pruneRuntimeGenerations(a.Root, a.Pane)
+		if pruner, pruneErr := prepareGenerationPruner(a.Root, shell); pruneErr == nil {
+			go func() {
+				defer shell.close()
+				pruner.prune(shell, time.Now().Add(-generationRetention))
+			}()
+			return nil
+		}
 	}
+	shell.close()
 	return err
 }
 
