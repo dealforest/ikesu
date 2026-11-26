@@ -40,6 +40,19 @@ class CopyTextTest {
         assertEquals("短い行\n次の行", CopyText.unwrap(rows, 40))
     }
 
+    @Test fun aUrlCutByTheWidthJoinsWithoutASpace() {
+        assertEquals("https://a.co/x", CopyText.unwrap(listOf("https://a.co", "/x"), 12))
+        assertEquals("see https://example.com/a/b/c/d", CopyText.unwrap(listOf("see https://example", ".com/a/b/c/d"), 19))
+    }
+
+    @Test fun tablesCodeFencesAndMarkdownMarkersKeepTheirBreaks() {
+        val table = listOf("| a    | b    |", "| 1    | 2    |")
+        assertEquals(table.joinToString("\n"), CopyText.unwrap(table, 15))
+        val fence = listOf("```kotlin", "val x = 1")
+        assertEquals(fence.joinToString("\n"), CopyText.unwrap(fence, 9))
+        assertEquals("長い行がちょうどここで終わる\n+ 項目\n> 引用", CopyText.unwrap(listOf("長い行がちょうどここで終わる", "+ 項目", "> 引用"), 28))
+    }
+
     @Test fun aDifferentIndentStartsANewLine() {
         val rows = listOf("  あいうえおかきくけこさしすせそ", "      コードの行")
         assertEquals("あいうえおかきくけこさしすせそ\n    コードの行", CopyText.unwrap(rows, 32))

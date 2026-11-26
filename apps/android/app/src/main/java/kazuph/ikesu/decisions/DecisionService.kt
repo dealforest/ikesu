@@ -119,7 +119,7 @@ class DecisionService : Service() {
     /** Decisions that already rang on this phone (sound and pop-up happen once per decision). */
     private val alerted = mutableSetOf<String>()
     /** The choice buttons each shown notification carries now (null: none, it opens the app). */
-    private val posted = mutableMapOf<String, List<Pair<String, String>>?>()
+    private val posted = mutableMapOf<String, String>()
     /** Answers sent from a notification button, by sequence, waiting for the PC's result. */
     private val notificationAnswers = mutableMapOf<String, String>()
     private var generation = 0
@@ -182,7 +182,21 @@ class DecisionService : Service() {
         retries.clear()
         val store = MachineStore(this)
         store.list().forEach { connectRelay(thisGeneration, store, it, previous[it.id]) }
+        // Every connection is locked again: shown notifications lose their buttons now, and those of a
+        // removed PC go away, without waiting for a list that an offline or removed PC never sends.
+        DecisionState.recompute()
+        refreshShown()
         changed()
+    }
+
+    /** Brings every shown decision notification in line with the current lists, without ringing. */
+    private fun refreshShown() {
+        for (key in posted.keys.toList()) {
+            val source = DecisionState.split(key)?.let { DecisionState.sources[it.first] }
+            val item = source?.let { jsonItems(it.decisions).firstOrNull { item -> item.optString("id") == key } }
+            if (source == null || item == null) { notificationIds[key]?.let(manager::cancel); posted.remove(key); continue }
+            if (posted[key] != notificationContent(item, source.operable)) postDecision(key, item, source.operable, quietUpdate = true)
+        }
     }
 
     private fun connectRelay(thisGeneration: Int, store: MachineStore, machine: Machine, previous: DecisionSource?) {
@@ -314,7 +328,7 @@ class DecisionService : Service() {
             if (action == NotifyAction.CANCEL) { notificationIds[key]?.let(manager::cancel); posted.remove(key); continue }
             if (action == NotifyAction.KEEP) {
                 // The choices arrived (unlocked) or went away (locked): update the shown notification without ringing.
-                if (posted[key] != notificationChoices(item, source.operable)) postDecision(key, item, source.operable, quietUpdate = true)
+                if (posted[key] != notificationContent(item, source.operable)) postDecision(key, item, source.operable, quietUpdate = true)
                 continue
             }
             alerted.add(key)
@@ -342,7 +356,7 @@ class DecisionService : Service() {
     private fun postDecision(key: String, item: JSONObject, operable: Boolean, quiet: Boolean = false, quietUpdate: Boolean = false, status: String? = null, buttons: Boolean = true) {
         val number = notificationIds.getOrPut(key) { nextNotification++ }
         val choices = notificationChoices(item, operable)
-        posted[key] = choices
+        posted[key] = notificationContent(item, operable)
         val location = item.optString("location", "判断を待っています")
         val builder = Notification.Builder(this, if (quiet) QUESTIONS_QUIET else QUESTIONS).setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(decisionHeading(item.optString("raw_title"), item.optString("raw_body"), item.optString("kind")))
@@ -354,8 +368,11 @@ class DecisionService : Service() {
             .setContentIntent(panel(number, Intent(this, MainActivity::class.java).putExtra("decision", key))).setAutoCancel(true)
         if (choices != null && buttons) {
             val actions = choices.mapIndexed { index, (option, label) ->
-                val answer = Intent(this, DecisionService::class.java).setAction(ANSWER).putExtra("decision", key).putExtra("option", option)
-                Notification.Action.Builder(null, label, PendingIntent.getService(this, number * 16 + index, answer,
+                // The data names the decision and the choice, so every button is its own PendingIntent:
+                // a later button can never redirect an earlier one to another decision or choice.
+                val answer = Intent(this, DecisionService::class.java).setAction(ANSWER).setData(answerUri(key, option))
+                    .putExtra("decision", key).putExtra("option", option)
+                Notification.Action.Builder(null, label, PendingIntent.getService(this, index, answer,
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build()
             }
             // The phone shows up to three buttons; the watch lists every choice.
@@ -398,7 +415,7 @@ class DecisionService : Service() {
     private fun refreshChoices(source: DecisionSource) {
         for (item in jsonItems(source.decisions)) {
             val key = item.optString("id")
-            if (key in posted && posted[key] != notificationChoices(item, source.operable)) postDecision(key, item, source.operable, quietUpdate = true)
+            if (key in posted && posted[key] != notificationContent(item, source.operable)) postDecision(key, item, source.operable, quietUpdate = true)
         }
     }
 
@@ -436,7 +453,12 @@ class DecisionService : Service() {
         DecisionState.sources.values.forEach { it.link?.close("終了") }
         DecisionState.sources.clear()
         DecisionState.recompute()
+        // With the service gone nothing keeps the notifications current: none may keep offering answers.
+        notificationIds.values.forEach(manager::cancel)
+        posted.clear()
         super.onDestroy()
     }
     override fun onBind(intent: Intent?): IBinder? = null
 }
+
+private fun answerUri(decision: String, option: String): android.net.Uri = android.net.Uri.parse(answerData(decision, option))

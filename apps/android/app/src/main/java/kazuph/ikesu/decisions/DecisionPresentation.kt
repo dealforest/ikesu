@@ -118,3 +118,14 @@ fun notificationChoices(item: org.json.JSONObject, operable: Boolean): List<Pair
         .filter { it.first.isNotEmpty() && it.second.isNotEmpty() }
     return choices.takeIf { it.isNotEmpty() }
 }
+
+/** What a decision's notification shows: heading, place and buttons. An update is due when it differs. */
+fun notificationContent(item: org.json.JSONObject, operable: Boolean): String = listOf(
+    decisionHeading(item.optString("raw_title"), item.optString("raw_body"), item.optString("kind")),
+    item.optString("location"),
+    notificationChoices(item, operable)?.joinToString("\u0001") { "${it.first}\u0002${it.second}" } ?: "",
+).joinToString("\u0000")
+
+/** The data of a notification answer button: different for every decision and choice. */
+fun answerData(decision: String, option: String): String =
+    "ikesu-answer:" + java.net.URLEncoder.encode(decision, "UTF-8") + "/" + java.net.URLEncoder.encode(option, "UTF-8")

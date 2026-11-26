@@ -81,6 +81,20 @@ class DecisionPresentationTest {
         assertEquals(null, notificationChoices(item(multi = true), operable = true))
         assertEquals(null, notificationChoices(org.json.JSONObject().put("options", org.json.JSONArray()), operable = true))
     }
+    @Test fun everyAnswerButtonHasItsOwnData() {
+        // PendingIntents with the same data replace each other: each decision and choice must differ.
+        val pairs = listOf("pc~1" to "1", "pc~1" to "2", "pc~2" to "1", "pc~1/2" to "1", "pc~1" to "2/1", "pc2~1" to "1")
+        assertEquals(pairs.size, pairs.map { answerData(it.first, it.second) }.toSet().size)
+    }
+    @Test fun notificationContentChangesWithTheHeadingPlaceOrButtons() {
+        fun item(title: String = "t", location: String = "PC｜p1") = org.json.JSONObject().put("raw_title", title).put("location", location)
+            .put("options", org.json.JSONArray().put(org.json.JSONObject().put("id", "1").put("label", "はい")))
+        val base = notificationContent(item(), operable = true)
+        assertEquals(base, notificationContent(item(), operable = true))
+        assert(base != notificationContent(item(title = "u"), operable = true))
+        assert(base != notificationContent(item(location = "PC｜p2"), operable = true))
+        assert(base != notificationContent(item(), operable = false))
+    }
     @Test fun onlyNotifyFlagChangesKeepTheScreen() {
         fun item(id: String, notify: Boolean, title: String = "t") =
             org.json.JSONObject().put("id", id).put("raw_title", title).put("notify", notify)

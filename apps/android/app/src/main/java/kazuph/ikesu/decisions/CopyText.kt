@@ -13,7 +13,16 @@ package kazuph.ikesu.decisions
  * - Rows joined between Latin words get a space back; rows joined inside Japanese do not.
  */
 object CopyText {
-    private val listItem = Regex("^(?:[-*•・▼▶■□◆●○✓✔☐☒⏺⎿]|\\d+[.)]|[A-Za-z][.)])(?:\\s|$)")
+    private val listItem = Regex("^(?:[-*+>•・▼▶■□◆●○✓✔☐☒⏺⎿]|\\d+[.)]|[A-Za-z][.)])(?:\\s|$)")
+    /** Rows of a table, a box or a code fence keep every line break. */
+    private val structured = Regex("[|│┃┆┊─━┌┐└┘├┤┬┴┼]|^\\s*```")
+    private val urlTail = Regex("[a-z][a-z0-9+.-]*://\\S*$", RegexOption.IGNORE_CASE)
+
+    /** Rows joined inside a URL get no space: the URL was cut by the width, not by a space. */
+    private fun joinSpace(prev: String, body: String): Boolean {
+        val last = prev.trimEnd().lastOrNull() ?: return false
+        return needsSpace(last, body.first()) && !urlTail.containsMatchIn(prev.trimEnd())
+    }
 
     fun unwrap(rows: List<String>, width: Int): String {
         val lines = rows.map { it.trimEnd() }
@@ -26,7 +35,7 @@ object CopyText {
             if (prev != null && wrapped(prev, raw, width)) {
                 val body = line.trimStart()
                 val last = prev.trimEnd().lastOrNull()
-                if (last != null && needsSpace(last, body.first())) out.append(' ')
+                if (last != null && joinSpace(prev, body)) out.append(' ')
                 out.append(body)
             } else {
                 if (prev != null) out.append('\n')
@@ -41,7 +50,7 @@ object CopyText {
     private fun wrapped(row: String, next: String, width: Int): Boolean {
         if (width <= 0 || row.isBlank() || next.isBlank()) return false
         val body = next.trimStart()
-        if (listItem.containsMatchIn(body)) return false
+        if (listItem.containsMatchIn(body) || structured.containsMatchIn(row) || structured.containsMatchIn(next)) return false
         // A continuation keeps the paragraph's indent; a list item's text is indented under its marker.
         val rowIndent = indentOf(row)
         val rowText = row.trimStart()
@@ -49,7 +58,7 @@ object CopyText {
         val nextIndent = indentOf(next)
         if (nextIndent != rowIndent && nextIndent != paragraphIndent) return false
         val firstWord = if (body.first().code < 0x80) body.takeWhile { it != ' ' } else body.take(1)
-        val gap = if (needsSpace(rowText.last(), body.first())) 1 else 0
+        val gap = if (joinSpace(row, body)) 1 else 0
         return displayWidth(row) + gap + displayWidth(firstWord) > width
     }
 
