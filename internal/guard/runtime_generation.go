@@ -183,7 +183,13 @@ const generationRetention = time.Hour
 // current. This protects a shell that just obtained its immutable startup path.
 func retireCurrentGeneration(shell *privateDirectory, next string) error {
 	previous, err := shell.readlink("current")
-	if err != nil || previous == next || !generationName(previous) {
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read current guard generation: %w", err)
+	}
+	if previous == next || !generationName(previous) {
 		return nil
 	}
 	dir, err := shell.child(previous, false)

@@ -1,6 +1,8 @@
 package guard
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -181,4 +183,48 @@ func seedExpiredGenerations(t testing.TB, shell string, count int) []string {
 		dirs = append(dirs, dir)
 	}
 	return dirs
+}
+
+func TestPublishGenerationRejectsCurrentReadlinkError(t *testing.T) {
+	t.Parallel()
+	a := NewAssets(t.TempDir(), "p_1", "/usr/bin/true", Config{})
+	shell, err := a.privateShell(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shell.close()
+	unlock, err := shell.lock(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+
+	previous, err := a.ensureGeneration(shell, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := filepath.Join(previous, "bash-env.current")
+	before, err := os.ReadFile(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A regular file at current yields EINVAL from readlink, while rename
+	// would still be able to replace the entry with a symlink.
+	current := filepath.Join(shell.path, "current")
+	if err := os.Remove(current); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("unreadable as a symlink")
+	if err := os.WriteFile(current, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.ensureGeneration(shell, true); !errors.Is(err, unix.EINVAL) {
+		t.Errorf("publication should return readlink EINVAL, got %v", err)
+	}
+	if after, err := os.ReadFile(current); err != nil || !bytes.Equal(after, original) {
+		t.Errorf("publication replaced current despite the readlink failure: %v", err)
+	}
+	if after, err := os.ReadFile(payload); err != nil || !bytes.Equal(after, before) {
+		t.Errorf("publication changed the previous startup file: %v", err)
+	}
 }
