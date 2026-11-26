@@ -287,6 +287,12 @@ func TestServerShutdownDrainsLockedLedgerWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer writer.Close()
+	// The server may still be writing its own startup rows; wait for them like
+	// the server's connections do instead of failing at once with "database is
+	// locked", which happened under full-suite load.
+	if err := writer.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		t.Fatal(err)
+	}
 	if err := writer.Exec("BEGIN IMMEDIATE"); err != nil {
 		t.Fatal(err)
 	}
