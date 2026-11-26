@@ -98,6 +98,15 @@ func TestTierTableWranglerLocalOnly(t *testing.T) {
 		askCase(`wrangler types --unknown-flag`, "wrangler", 3, DestUnknown),
 		askCase(`wrangler types --env`, "wrangler", 3, DestUnknown),
 		askCase(`wrangler --config x types`, "wrangler", 3, DestUnknown),
+		askCase(`wrangler types --install-skills --local`, "wrangler", 3, DestUnknown),
+		askCase(`wrangler types --install-skills -c conf/--local`, "wrangler", 3, DestUnknown),
+		askCase(`wrangler types -c --install-skills`, "wrangler", 3, DestUnknown),
+		askCase(`wrangler types --config=`, "wrangler", 3, DestUnknown),
+		askCase(`wrangler types a.d.ts b.d.ts`, "wrangler", 3, DestUnknown),
+		askCase(`wrangler types out.js`, "wrangler", 3, DestUnknown),
+		askCase(`wrangler types --check=--install-skills`, "wrangler", 3, DestUnknown),
+		askCase(`wrangler types --no-check=true`, "wrangler", 3, DestUnknown),
+		askCase(`wrangler types --no-install-skills`, "wrangler", 3, DestUnknown),
 		askCase(`wrangler secret list`, "wrangler", 3, DestUnknown),
 	})
 }
@@ -136,7 +145,7 @@ func TestTierTableL1(t *testing.T) {
 		allowLine(`rm -rf ./build`),
 		allowLine(`curl -X POST http://localhost:8787/x`),
 		allowLine(`npx wrangler d1 execute db --local --command "DROP TABLE x"`),
-		// wrangler types (and --check) only talks to a workerd on localhost.
+		// The usual wrangler types / --check command lines pass without a check.
 		allowLine(`wrangler types`),
 		allowLine(`wrangler types worker-configuration.d.ts --check`),
 		allowLine(`wrangler types --env dev -c wrangler.jsonc --env-interface=CloudflareEnv --no-include-runtime --strict-vars=false`),

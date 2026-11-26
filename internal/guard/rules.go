@@ -164,21 +164,36 @@ func wranglerLocalOnly(a []string) bool {
 	if arg(a, 0) != "types" {
 		return false
 	}
+	outputs := 0
 	for n := 1; n < len(a); n++ {
 		t := a[n]
 		if !strings.HasPrefix(t, "-") {
-			continue // output path of the declaration file
+			// The one optional positional is the declaration file to write.
+			outputs++
+			if outputs > 1 || !strings.HasSuffix(t, ".d.ts") {
+				return false
+			}
+			continue
 		}
-		name, _, hasValue := strings.Cut(t, "=")
+		name, value, hasValue := strings.Cut(t, "=")
 		switch {
 		case wranglerTypesValueFlags[name]:
 			if !hasValue {
-				if n+1 >= len(a) {
-					return false
-				}
 				n++
+				value = arg(a, n)
 			}
-		case wranglerTypesBoolFlags[name], wranglerTypesBoolFlags["--"+strings.TrimPrefix(name, "--no-")] && strings.HasPrefix(name, "--no-"):
+			// A missing value, or another flag in its place, goes back to the check.
+			if value == "" || strings.HasPrefix(value, "-") {
+				return false
+			}
+		case wranglerTypesBoolFlags[name]:
+			if hasValue && value != "true" && value != "false" {
+				return false
+			}
+		case strings.HasPrefix(name, "--no-") && wranglerTypesBoolFlags["--"+strings.TrimPrefix(name, "--no-")]:
+			if hasValue {
+				return false
+			}
 		default:
 			return false
 		}
@@ -253,7 +268,9 @@ func classifyRules(c Config, i Input) Verdict {
 		return v
 	}
 	allow := result("allow", "default", "")
-	if cmd == "sqlite3" || localWrangler(i) {
+	// A direct `wrangler types` skips the generic --local match so that only
+	// wranglerLocalOnly decides it (a `--local` there is not a types option).
+	if cmd == "sqlite3" || localWrangler(i) && !(cmd == "wrangler" && arg(a, 0) == "types") {
 		return allow
 	}
 	if d1(i) {
