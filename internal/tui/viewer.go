@@ -2,6 +2,7 @@ package tui
 
 import (
 	"io"
+	"slices"
 	"time"
 
 	"github.com/kazuph/ikesu/internal/input"
@@ -190,7 +191,7 @@ func (v *Viewer) Resize(a *App, cols, rows, xp, yp int) {
 		ui.enc.Reset()
 		ui.SetCellPixels(xp, yp)
 		ui.setScreenPixels(xp, yp)
-		v.takeSize(a)
+		v.takeSizeIfAvailable(a)
 		ui.syncLayout()
 		ui.copyResizeAll(copySizes)
 		ui.dirty = true
@@ -201,8 +202,18 @@ func (v *Viewer) Resize(a *App, cols, rows, xp, yp int) {
 }
 
 func (v *Viewer) Begin(a *App, xp, yp int) {
-	v.with(a, func(ui *App) { ui.setScreenPixels(xp, yp); v.takeSize(a); ui.BeginHostMouse(xp, yp); ui.dirty = true })
-	a.st.Cols, a.st.Rows = v.cols, v.rows
+	if !slices.Contains(a.sizeViewers, v) {
+		a.sizeViewers = append(a.sizeViewers, v)
+	}
+	v.with(a, func(ui *App) {
+		ui.setScreenPixels(xp, yp)
+		v.takeSizeIfAvailable(a)
+		ui.BeginHostMouse(xp, yp)
+		ui.dirty = true
+	})
+	if a.sizeViewer == v {
+		a.st.Cols, a.st.Rows = v.cols, v.rows
+	}
 }
 
 func (v *Viewer) Tick(a *App) {

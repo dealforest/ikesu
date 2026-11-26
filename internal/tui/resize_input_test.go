@@ -58,7 +58,7 @@ func TestResizeInputClaimsViewerAndAppliesFinalGeometryTogetherRealPTY(t *testin
 	small.Begin(a, 106*8, 38*16)
 	large := a.NewViewer(io.Discard, 160, 45, nil)
 	large.Begin(a, 160*8, 45*16)
-	large.AcquireSize(a)
+	large.Input(a, []byte("x"))
 	before := viewerTerminalSizes(a)
 	small.with(a, func(ui *App) {
 		area := ui.st.PanesArea()

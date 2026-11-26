@@ -37,7 +37,6 @@ func (v *Viewer) deliverInput(ui *App, event input.Event) {
 	before := ui.currentSizeTab()
 	ui.onInput(event)
 	if ui.currentSizeTab() != before {
-		v.releaseSizeTab(ui.viewerOwner, before)
 		v.takeSize(ui.viewerOwner)
 		ui.syncLayout()
 	}

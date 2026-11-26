@@ -77,6 +77,7 @@ func TestViewerHiddenPanesUseOwnWorkspaceGeometryAndExplicitLayouts(t *testing.T
 			for _, size := range [][2]int{{200, 50}, {100, 30}}[:peers] {
 				owner = a.NewViewer(io.Discard, size[0], size[1], nil)
 				owner.Begin(a, 0, 0)
+				owner.Input(a, []byte("x"))
 				checkCurrentTabSizes(t, a, size[0], size[1])
 			}
 			for _, cmd := range []model.Command{
@@ -103,14 +104,15 @@ func TestViewerVisibleTabUpdatesAtSizeEvents(t *testing.T) {
 				v := a.NewViewer(io.Discard, size[0], size[1], nil)
 				v.Begin(a, 0, 0)
 				viewers = append(viewers, v)
-				checkCurrentTabSizes(t, a, size[0], size[1])
+				checkCurrentTabSizes(t, a, viewers[0].cols, viewers[0].rows)
 			}
 			owner := viewers[len(viewers)-1]
+			owner.Input(a, []byte("x"))
 			owner.Resize(a, 190, 45, 0, 0)
 			checkCurrentTabSizes(t, a, 190, 45)
 			if peers > 1 {
 				viewers[0].Resize(a, 220, 55, 0, 0)
-				checkCurrentTabSizes(t, a, 220, 55)
+				checkCurrentTabSizes(t, a, 190, 45)
 				owner.Detach(a)
 				if peers == 3 {
 					checkCurrentTabSizes(t, a, 220, 55)

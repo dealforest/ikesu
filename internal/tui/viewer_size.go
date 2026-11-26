@@ -79,17 +79,13 @@ func (a *App) ptyRectForPane(pid int) (r layout.Rect) {
 	return r
 }
 
+func (v *Viewer) takeSizeIfAvailable(a *App) {
+	if owner := a.sizeOwners[a.currentSizeTab()].viewer; owner == nil || owner == v {
+		v.takeSize(a)
+	}
+}
+
 func (v *Viewer) takeSize(a *App) {
-	found := false
-	for _, attached := range a.sizeViewers {
-		if attached == v {
-			found = true
-			break
-		}
-	}
-	if !found {
-		a.sizeViewers = append(a.sizeViewers, v)
-	}
 	a.sizeViewer = v
 	if a.sizeOwners == nil {
 		a.sizeOwners = make(map[*model.Tab]ptySizeBasis)
