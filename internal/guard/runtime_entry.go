@@ -27,8 +27,12 @@ func (a *Assets) publishRuntime() error {
 	if err != nil {
 		return err
 	}
-	defer unlock()
-	_, err = a.ensureGeneration(shell, true)
+	previous, _ := shell.readlink("current")
+	path, err := a.ensureGeneration(shell, true)
+	unlock()
+	if err == nil && previous != filepath.Base(path) {
+		go pruneRuntimeGenerations(a.Root, a.Pane)
+	}
 	return err
 }
 

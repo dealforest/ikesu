@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -231,9 +232,6 @@ func (a *Assets) ensureGeneration(shell *privateDirectory, entries bool) (string
 		return "", err
 	}
 	published = true
-	if created {
-		pruneGenerations(shell, name, time.Now().Add(-generationRetention))
-	}
 	return filepath.Join(shell.path, name), nil
 }
 
@@ -284,16 +282,53 @@ func (a *Assets) trustedSource() (string, os.FileInfo, error) {
 	return target, info, nil
 }
 
-// Called with the same exclusive lock as publication. Recent generations may
-// still be needed by a shell that has received its startup path.
-func pruneGenerations(shell *privateDirectory, current string, cutoff time.Time) {
+const generationPruneBatch = 500
+
+func pruneRuntimeGenerations(root, pane string) {
+	a := Assets{Root: root, Pane: pane}
+	shell, err := a.privateShell(false)
+	if err != nil {
+		return
+	}
+	defer shell.close()
+	pruneGenerations(shell, time.Now().Add(-generationRetention))
+}
+
+// The separate prune lock coalesces concurrent sweeps. Directory enumeration
+// and pauses between batches leave the publication lock available to shells.
+func pruneGenerations(shell *privateDirectory, cutoff time.Time) {
+	unlock, err := shell.lockFile("generation-prune.lock", unix.LOCK_EX|unix.LOCK_NB)
+	if err != nil {
+		return
+	}
+	defer unlock()
 	fd, err := unix.Openat(shell.fd(), ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return
 	}
 	listing := os.NewFile(uintptr(fd), shell.path)
-	names, _ := listing.Readdirnames(-1)
+	names, err := listing.Readdirnames(-1)
 	listing.Close()
+	if err != nil {
+		return
+	}
+	for batch := range slices.Chunk(names, generationPruneBatch) {
+		if !pruneGenerationBatch(shell, batch, cutoff) {
+			return
+		}
+	}
+}
+
+func pruneGenerationBatch(shell *privateDirectory, names []string, cutoff time.Time) bool {
+	unlock, err := shell.lock(true)
+	if err != nil {
+		return false
+	}
+	defer unlock()
+	current, err := shell.readlink("current")
+	if err != nil || !generationName(current) {
+		return false
+	}
 	for _, name := range names {
 		if name == current || !generationName(name) {
 			continue
@@ -308,6 +343,7 @@ func pruneGenerations(shell *privateDirectory, current string, cutoff time.Time)
 		}
 		dir.close()
 	}
+	return true
 }
 
 // Discard a generation whose creation or publication failed.
