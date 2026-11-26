@@ -181,7 +181,7 @@ func (s *Server) screenPromptConfig(c config.Config) {
 	s.screenPrompts.watches = nil
 	// Include pending records restored before their pane's first scan.
 	cleaned := true
-	if s.store != nil {
+	if s.loadedStore() != nil {
 		pending, err := s.pendingDecisionsCached()
 		if err != nil {
 			s.app.SetConfigWarning(err.Error())

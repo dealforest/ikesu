@@ -17,7 +17,7 @@ func (s *Server) invalidatePendingDecisions() {
 
 // pendingDecisionsCached returns a separate slice for projection overlays.
 func (s *Server) pendingDecisionsCached() ([]api.Decision, error) {
-	if s.store == nil {
+	if s.loadedStore() == nil {
 		return []api.Decision{}, nil
 	}
 	// Sample before reading the rows. If a commit interleaves with the read,

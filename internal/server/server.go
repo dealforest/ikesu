@@ -172,8 +172,9 @@ type Server struct {
 	cleanupRunning bool
 
 	// durable mailbox / jobs
-	dbOnce             sync.Once
+	dbMu               sync.Mutex
 	store              *dispatch.Store
+	dbReady            atomic.Bool // publishes store to existing-store readers
 	dbErr              error
 	mailCh             chan mailWrite
 	mailWG             sync.WaitGroup
@@ -816,6 +817,7 @@ func runEndpointWithClock(session, version string, peer endpoint.Peer, clock gra
 func (s *Server) cleanup() {
 	s.ledgerMu.Lock()
 	s.ledgerGiveUpAt = time.Now().Add(ledgerShutdownWait)
+	s.trace.Event("ledger.shutdown")
 	if s.ledgerCancel != nil {
 		timer := time.AfterFunc(time.Until(s.ledgerGiveUpAt), s.ledgerCancel)
 		defer timer.Stop()
@@ -855,8 +857,8 @@ func (s *Server) cleanup() {
 	s.mailWG.Wait()
 	s.stopJobMonitors()
 	s.ledgerWG.Wait()
-	if s.store != nil {
-		s.store.Close()
+	if store := s.loadedStore(); store != nil {
+		store.Close()
 	}
 	if !s.handedOff {
 		os.Remove(api.APISocketPath(s.dir))

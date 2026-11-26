@@ -1,18 +1,24 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/kazuph/ikesu/internal/api"
 	"github.com/kazuph/ikesu/internal/dispatch"
 	"github.com/kazuph/ikesu/internal/endpoint"
+	"github.com/kazuph/ikesu/internal/latency"
 	"github.com/kazuph/ikesu/internal/teststate"
 	"github.com/kazuph/ikesu/internal/tui"
 	sqlite3 "github.com/ncruces/go-sqlite3"
@@ -336,41 +342,19 @@ func TestLedgerWriteRetriesPastBusyTimeout(t *testing.T) {
 		return
 	}
 	teststate.Lock(t)
-	defer func(original time.Duration) { dispatch.LedgerBusyTimeout = original }(dispatch.LedgerBusyTimeout)
-	dispatch.LedgerBusyTimeout = 100 * time.Millisecond
-
+	setLedgerTestTimeouts(t, 100*time.Millisecond, ledgerShutdownWait)
 	logFile := captureLedgerStderr(t)
-	dir, done := startTestServer(t)
+	dir, done := startLedgerTestEndpoint(t)
 	defer stopServer(t, dir, done)
-	writer := lockTestLedger(t, dir)
+	writer := lockTestLedger(t, "test")
 	defer writer.Close()
 	const id = "retry-session"
 	reportAgent(t, dir, "p1", "codex", id)
-	// Keep the real write lock through multiple SQLite attempts.
-	time.Sleep(time.Second)
+	waitLedgerLog(t, api.LogPath(dir), "event=ledger.retry pane=1 stopping=false", 2, 2*time.Second)
 	if err := writer.Exec("COMMIT"); err != nil {
 		t.Fatal(err)
 	}
-
-	reader, err := dispatch.OpenLedger(dispatch.DBPath("test"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer reader.Close()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		rows, err := reader.PaneSessions("test")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(rows) == 1 && rows[0].PaneID == 1 && rows[0].SessionID == id {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("ledger still missing the reported session after unlock: %+v", rows)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitLedgerRow(t, "test", id)
 	log, err := os.ReadFile(logFile)
 	if err != nil {
 		t.Fatal(err)
@@ -381,17 +365,247 @@ func TestLedgerWriteRetriesPastBusyTimeout(t *testing.T) {
 	}
 }
 
+func TestLedgerRetriesBusySharedDBInitialization(t *testing.T) {
+	if runIsolatedParallelEarly(t) {
+		return
+	}
+	teststate.Lock(t)
+	s := newTestServer(t, "old-ledger")
+	enableLedgerTestTrace(t)
+	tracePath := filepath.Join(t.TempDir(), "trace")
+	s.trace = latency.Open(tracePath)
+	defer s.trace.Close()
+	path := dispatch.DBPath(s.session)
+	store, err := dispatch.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := sqlite3.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Exec("ALTER TABLE pane_sessions DROP COLUMN session_start_source"); err != nil {
+		legacy.Close()
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	unlock := lockLedgerInChild(t, path)
+	defer func() {
+		_ = unlock()
+		s.ledgerMu.Lock()
+		s.ledgerGiveUpAt = time.Now()
+		if s.ledgerCancel != nil {
+			s.ledgerCancel()
+		}
+		s.ledgerMu.Unlock()
+		s.ledgerWG.Wait()
+		if store := s.loadedStore(); store != nil {
+			store.Close()
+		}
+	}()
+	if err := s.app.StartInitialPane(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.sup.KillAll()
+	appDone := make(chan struct{})
+	go func() { s.app.Run(); close(appDone) }()
+	defer func() { s.app.Stop(); <-appDone }()
+	id := "init-retry-session"
+	var response api.Response
+	s.app.Do(func() {
+		response = s.dispatchOnLoop(&api.Request{ID: "report", Method: api.MethodPaneReportAgent,
+			Params: api.MarshalParams(api.PaneReportAgentParams{
+				PaneID: "p1", Agent: "codex", State: "idle", Source: "test", SessionID: &id,
+			})})
+	})
+	if response.Err != nil {
+		t.Fatalf("pane.report_agent: %+v", response.Err)
+	}
+	// The first real initialization attempt must exhaust Open's unchanged
+	// five-second SQLite timeout before we release the other process's lock.
+	waitLedgerLog(t, tracePath, "event=ledger.retry pane=1 stopping=false", 1, 7*time.Second)
+	if s.loadedStore() != nil {
+		t.Fatal("shared store initialized before the lock was released")
+	}
+	if err := unlock(); err != nil {
+		t.Fatal(err)
+	}
+	waitPromptCondition(t, func() bool { return s.loadedStore() != nil })
+	waitLedgerRow(t, s.session, id)
+}
+
+func TestLedgerRetryWithoutApp(t *testing.T) {
+	if teststate.RunIsolatedParallel(t) {
+		return
+	}
+	teststate.Lock(t)
+	setLedgerTestTimeouts(t, 50*time.Millisecond, ledgerShutdownWait)
+	teststate.Setenv(t, "IKESU_STATE_DIR", t.TempDir())
+	logFile := captureLedgerStderr(t)
+	s := &Server{session: "no-app"}
+	store, err := s.db()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	writer := lockTestLedger(t, s.session)
+	defer func() {
+		_ = writer.Close()
+		s.ledgerWG.Wait()
+	}()
+	const id = "no-app-session"
+	s.enqueueLedger(ledgerWrite{row: dispatch.PaneSession{Session: s.session, PaneID: 1, SessionID: id}})
+	waitLedgerLog(t, logFile, "外れるまで書き込みを待ちます", 1, 2*time.Second)
+	if err := writer.Exec("COMMIT"); err != nil {
+		t.Fatal(err)
+	}
+	waitLedgerRow(t, s.session, id)
+	s.ledgerWG.Wait()
+	if err := writer.Exec("DROP TABLE pane_sessions"); err != nil {
+		t.Fatal(err)
+	}
+	s.enqueueLedger(ledgerWrite{row: dispatch.PaneSession{Session: s.session, PaneID: 2}})
+	waitLedgerLog(t, logFile, "no such table: pane_sessions", 1, 2*time.Second)
+}
+
+func TestServerShutdownRetriesLockedLedgerWrite(t *testing.T) {
+	if teststate.RunIsolatedParallel(t) {
+		return
+	}
+	teststate.Lock(t)
+	setLedgerTestTimeouts(t, 50*time.Millisecond, time.Second)
+	dir, done := startLedgerTestEndpoint(t)
+	writer := lockTestLedger(t, "test")
+	defer func() { _ = writer.Close(); stopServer(t, dir, done) }()
+	const id = "shutdown-retry-session"
+	reportAgent(t, dir, "p1", "codex", id)
+	apiOK(t, dir, api.MethodServerStop, api.EmptyParams{}, nil)
+	waitLedgerLog(t, api.LogPath(dir), "event=ledger.retry pane=1 stopping=true", 1, 950*time.Millisecond)
+	if err := writer.Exec("COMMIT"); err != nil {
+		t.Fatal(err)
+	}
+	waitLedgerServerExit(t, done, writer)
+	waitLedgerRow(t, "test", id)
+}
+
 func TestServerShutdownGivesUpLockedLedgerWrite(t *testing.T) {
 	if teststate.RunIsolatedParallel(t) {
 		return
 	}
 	teststate.Lock(t)
-	defer func(shutdownWait, busyTimeout time.Duration) {
-		ledgerShutdownWait, dispatch.LedgerBusyTimeout = shutdownWait, busyTimeout
-	}(ledgerShutdownWait, dispatch.LedgerBusyTimeout)
-	ledgerShutdownWait = 300 * time.Millisecond
-	dispatch.LedgerBusyTimeout = 50 * time.Millisecond
+	setLedgerTestTimeouts(t, 50*time.Millisecond, 300*time.Millisecond)
+	logFile := captureLedgerStderr(t)
+	dir, done := startLedgerTestEndpoint(t)
+	defer stopServer(t, dir, done)
+	for range 2 {
+		apiOK(t, dir, api.MethodPaneSplit, api.PaneSplitParams{Direction: "right"}, nil)
+	}
+	writer := lockTestLedger(t, "test")
+	defer writer.Close()
+	for _, pane := range []string{"p1", "p2", "p3"} {
+		reportAgent(t, dir, pane, "codex", "locked-"+pane)
+	}
+	apiOK(t, dir, api.MethodServerStop, api.EmptyParams{}, nil)
+	waitLedgerServerExit(t, done, writer)
+	log, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Count(log, []byte("session ledger shutdown deadline:")) != 1 ||
+		!bytes.Contains(log, []byte("session ledger shutdown deadline: dropped 3 writes")) {
+		t.Fatalf("expected one deadline log for all three writes; stderr:\n%s", log)
+	}
+	if err := writer.Exec("COMMIT"); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := dispatch.OpenLedger(dispatch.DBPath("test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	rows, err := reader.PaneSessions("test")
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("ledger after shutdown: %+v %v", rows, err)
+	}
+}
 
+func TestLiveHandoffStartsTransferDeadlineAfterLedger(t *testing.T) {
+	if teststate.RunIsolatedParallel(t) {
+		return
+	}
+	teststate.Lock(t)
+	setLedgerTestTimeouts(t, 50*time.Millisecond, ledgerShutdownWait)
+	original := handoffTransferWait
+	handoffTransferWait = time.Second
+	defer func() { handoffTransferWait = original }()
+	dir, done := startLedgerTestEndpoint(t)
+	writer := lockTestLedger(t, "test")
+	transferred := false
+	defer func() {
+		_ = writer.Close()
+		if transferred {
+			apiOK(t, dir, api.MethodServerStop, api.EmptyParams{}, nil)
+			waitAPISocketGone(t, dir)
+		} else {
+			stopServer(t, dir, done)
+		}
+	}()
+	const id = "handoff-ledger-session"
+	reportAgent(t, dir, "p1", "codex", id)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, rd := decisionStream(t, dir, api.MethodServerLiveHandoff, api.ServerLiveHandoffParams{ImportExe: &exe})
+	defer conn.Close()
+	waitLedgerLog(t, api.LogPath(dir), "event=handoff.ledger_wait", 1, 2*time.Second)
+	// Hold the lock through an entire transfer budget after handoff has
+	// reached the wait. An early transfer timer would now have expired.
+	<-time.After(handoffTransferWait)
+	if err := writer.Exec("COMMIT"); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var response api.Response
+	if err := json.NewDecoder(rd).Decode(&response); err != nil || response.Err != nil {
+		t.Fatalf("live-handoff after ledger unlock: %+v %v", response.Err, err)
+	}
+	transferred = true
+	waitLedgerServerExit(t, done, writer)
+	var pong api.PongResult
+	apiOK(t, dir, api.MethodPing, api.EmptyParams{}, &pong)
+	if pong.Version != "test-importer" {
+		t.Fatalf("expected the importer to own the API, got %+v", pong)
+	}
+	waitLedgerRow(t, "test", id)
+}
+
+func setLedgerTestTimeouts(t *testing.T, busy, shutdown time.Duration) {
+	t.Helper()
+	busyOriginal, shutdownOriginal := dispatch.LedgerBusyTimeout, ledgerShutdownWait
+	dispatch.LedgerBusyTimeout, ledgerShutdownWait = busy, shutdown
+	t.Cleanup(func() {
+		dispatch.LedgerBusyTimeout, ledgerShutdownWait = busyOriginal, shutdownOriginal
+	})
+}
+
+func enableLedgerTestTrace(t *testing.T) {
+	t.Helper()
+	original := latency.Enabled
+	latency.Enabled = true
+	t.Cleanup(func() { latency.Enabled = original })
+}
+
+func startLedgerTestEndpoint(t *testing.T) (string, chan int) {
+	t.Helper()
+	enableLedgerTestTrace(t)
 	var startupLog string
 	dir, done := startTestEndpointWithSetup(t, endpoint.Current(), wallReceiptClock{}, func() {
 		store, err := dispatch.Open(dispatch.DBPath("test"))
@@ -414,67 +628,83 @@ func TestServerShutdownGivesUpLockedLedgerWrite(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	stopRequested := false
-	defer func() {
-		if !stopRequested {
-			stopServer(t, dir, done)
-		}
-	}()
-	// The jobs loop takes a write lock at startup and must finish that
-	// transaction first. Its cleanup of the expired log marks completion.
-	deadline := time.Now().Add(time.Second)
+	// The first jobs cleanup takes its own write lock. The expired log
+	// disappears after that transaction commits.
+	deadline := time.Now().Add(2 * time.Second)
 	for {
 		if _, err := os.Stat(startupLog); os.IsNotExist(err) {
-			break
+			return dir, done
 		} else if err != nil {
 			t.Fatal(err)
 		}
 		if time.Now().After(deadline) {
+			stopServer(t, dir, done)
 			t.Fatal("startup job cleanup did not remove the expired log")
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 	}
-	writer := lockTestLedger(t, dir)
-	defer writer.Close()
-	reportAgent(t, dir, "p1", "codex", "shutdown-locked-session")
-	apiOK(t, dir, api.MethodServerStop, api.EmptyParams{}, nil)
-	stopRequested = true
+}
+
+func waitLedgerLog(t *testing.T, path, marker string, count int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		data, err := os.ReadFile(path)
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if bytes.Count(data, []byte(marker)) >= count {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("did not observe %d occurrences of %q:\n%s", count, marker, data)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func waitLedgerRow(t *testing.T, session, id string) {
+	t.Helper()
+	reader, err := dispatch.OpenLedger(dispatch.DBPath(session))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		rows, err := reader.PaneSessions(session)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) == 1 && rows[0].PaneID == 1 && rows[0].SessionID == id {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("ledger still missing the reported session after unlock: %+v", rows)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func waitLedgerServerExit(t *testing.T, done <-chan int, writer *sqlite3.Conn) {
+	t.Helper()
 	select {
 	case code := <-done:
 		if code != 0 {
 			t.Fatalf("server exit %d", code)
 		}
 	case <-time.After(2 * time.Second):
-		t.Error("server did not exit before the deadline while the ledger remained locked")
-		if err := writer.Exec("ROLLBACK"); err != nil {
-			t.Fatal(err)
-		}
+		// Release the fixture lock so a broken worker can finish and the
+		// test process does not retain a server using the test DB.
+		_ = writer.Exec("ROLLBACK")
 		waitServerExit(t, done)
-		return
-	}
-	if err := writer.Exec("COMMIT"); err != nil {
-		t.Fatal(err)
-	}
-	reader, err := dispatch.OpenLedger(dispatch.DBPath("test"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer reader.Close()
-	rows, err := reader.PaneSessions("test")
-	if err != nil || len(rows) != 0 {
-		t.Fatalf("ledger after shutdown: %+v %v", rows, err)
+		t.Fatal("server did not exit before the deadline while the ledger remained locked")
 	}
 }
 
-func lockTestLedger(t *testing.T, dir string) *sqlite3.Conn {
+func lockTestLedger(t *testing.T, session string) *sqlite3.Conn {
 	t.Helper()
-	// Open the server's shared store before locking, so contention is on the
-	// pane-session write and not on schema initialization.
-	res := apiReq(t, dir, api.MethodDecisionGet, api.DecisionTargetParams{DecisionID: "missing"})
-	if res.Err == nil || res.Err.Code != api.ErrDecisionNotFound {
-		t.Fatalf("could not initialize server store: %+v", res)
-	}
-	writer, err := sqlite3.Open(dispatch.DBPath("test"))
+	writer, err := sqlite3.Open(dispatch.DBPath(session))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -483,6 +713,58 @@ func lockTestLedger(t *testing.T, dir string) *sqlite3.Conn {
 		t.Fatal(err)
 	}
 	return writer
+}
+
+func lockLedgerInChild(t *testing.T, path string) func() error {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "--ledger-test-lock", path)
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	unlock := sync.OnceValue(func() error {
+		_ = in.Close()
+		return cmd.Wait()
+	})
+	t.Cleanup(func() { _ = unlock() })
+	ready := make(chan string, 1)
+	go func() {
+		line, _ := bufio.NewReader(out).ReadString('\n')
+		ready <- line
+	}()
+	select {
+	case line := <-ready:
+		if line != "locked\n" {
+			t.Fatalf("external lock didn't start: %q, %v", line, unlock())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the external SQLite lock")
+	}
+	return unlock
+}
+
+func holdLedgerTestLock(path string) error {
+	conn, err := sqlite3.Open(path)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if err := conn.Exec("BEGIN IMMEDIATE"); err != nil {
+		return err
+	}
+	fmt.Println("locked")
+	if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
+		return err
+	}
+	return conn.Exec("COMMIT")
 }
 
 func captureLedgerStderr(t *testing.T) string {

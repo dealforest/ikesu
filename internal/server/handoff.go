@@ -23,6 +23,8 @@ import (
 // after 30 seconds; preserve that externally visible failure window.
 const handoffWait = 30 * time.Second
 
+var handoffTransferWait = handoffWait
+
 type handoffIdentity struct {
 	Protocol int
 	Version  string
@@ -192,8 +194,6 @@ func (s *Server) liveHandoff(ctx context.Context, req *api.Request) api.Response
 	if err != nil {
 		return api.Failure(req.ID, "handoff_failed", err.Error())
 	}
-	transferCtx, cancelTransfer := context.WithTimeout(context.Background(), handoffWait)
-	defer cancelTransfer()
 	for {
 		var handoffErr error
 		var ledgerIdle <-chan struct{}
@@ -211,6 +211,8 @@ func (s *Server) liveHandoff(ctx context.Context, req *api.Request) api.Response
 				return
 			}
 			defer s.app.EndHandoff()
+			transferCtx, cancelTransfer := context.WithTimeout(context.Background(), handoffTransferWait)
+			defer cancelTransfer()
 			handoffErr = s.transferHandoff(transferCtx, exe, p)
 		}) {
 			return api.Failure(req.ID, "handoff_failed", "request canceled before handoff")
@@ -222,6 +224,7 @@ func (s *Server) liveHandoff(ctx context.Context, req *api.Request) api.Response
 			}
 			return api.Success(req.ID, api.OkResult{Type: "ok"})
 		}
+		s.trace.Event("handoff.ledger_wait")
 		select {
 		case <-ledgerIdle:
 		case <-ctx.Done():
