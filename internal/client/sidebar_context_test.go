@@ -10,10 +10,23 @@ import (
 	"github.com/kazuph/ikesu/internal/render"
 )
 
-func TestSidebarContinuousTwoServersRightClicks(t *testing.T) {
+// Clicks every target on this machine in both modes using two real servers and PTYs.
+func TestSidebarContinuousTwoServersRightClicksLocal(t *testing.T) {
 	if teststate.RunIsolatedParallel(t) {
 		return
 	}
+	sidebarContinuousTwoServersRightClicks(t, "local")
+}
+
+// Clicks every target on this machine in both modes using two real servers and PTYs.
+func TestSidebarContinuousTwoServersRightClicksRemote(t *testing.T) {
+	if teststate.RunIsolatedParallel(t) {
+		return
+	}
+	sidebarContinuousTwoServersRightClicks(t, "remote")
+}
+
+func sidebarContinuousTwoServersRightClicks(t *testing.T, targetMachine string) {
 	h := newRightMachineHarness(t)
 	m := h.m
 	menus := map[string][]render.MenuItem{}
@@ -22,6 +35,9 @@ func TestSidebarContinuousTwoServersRightClicks(t *testing.T) {
 		h.modes(compact, compact, 240, 60)
 		hits := append([]render.MachineHit(nil), m.sidebar.Hits...)
 		for _, hit := range hits {
+			if hit.Machine != targetMachine {
+				continue
+			}
 			if hit.Header || hit.New || hit.Right && hit.Row.Kind != render.RowAgent || !hit.Right && hit.Row.Kind != render.RowWorkspace && hit.Row.Kind != render.RowGit && hit.Row.Kind != render.RowCardBlank {
 				continue
 			}
@@ -77,5 +93,5 @@ func TestSidebarContinuousTwoServersRightClicks(t *testing.T) {
 	if checked != 2*len(menus) || checked == 0 {
 		t.Fatal("expanded/compact target counts differ", checked, len(menus))
 	}
-	t.Logf("PASS %d real right-click targets at widths26/2, both machines, same menus and observed workspace/pane owners", checked)
+	t.Logf("PASS %d real right-click targets at widths26/2, machine=%s, same menus and observed workspace/pane owners", checked, targetMachine)
 }
