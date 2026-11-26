@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestRuntimeRejectsUntrustedExistingDirectories(t *testing.T) {
@@ -154,6 +155,11 @@ func TestRuntimeRebindFailureRestoresPreviousGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	oldPath := filepath.Join(filepath.Dir(a.RuntimePath()), old)
+	expired := time.Now().Add(-11 * time.Minute)
+	if err := os.Chtimes(oldPath, expired, expired); err != nil {
+		t.Fatal(err)
+	}
 	// A real rename failure after the new native generation has been published:
 	// the destination marker is now a directory, so Rename cannot replace it.
 	if err := os.Remove(a.MarkerPath); err != nil {
@@ -169,9 +175,12 @@ func TestRuntimeRebindFailureRestoresPreviousGeneration(t *testing.T) {
 	actual, _ := os.Stat(a.RuntimePath())
 	expected, _ := os.Stat("/usr/bin/true")
 	if err != nil || current != old || actual == nil || !os.SameFile(actual, expected) || a.Executable != "/usr/bin/true" {
-		t.Fatalf("failed rebind retained new generation: %s %s %v", old, current, err)
+		t.Fatalf("failed rebind did not restore generation %s (current=%s, executable=%v, error=%v)", old, current, actual, err)
 	}
 	if _, err := os.Stat(a.issuePath()); !os.IsNotExist(err) {
 		t.Fatalf("rollback retained new coverage issue: %v", err)
+	}
+	if !a.runtimeIntact() {
+		t.Fatal("restored generation does not pass runtime validation")
 	}
 }

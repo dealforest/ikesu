@@ -3,13 +3,14 @@ package guard
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/kazuph/ikesu/internal/childenv"
-	"golang.org/x/sys/unix"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/kazuph/ikesu/internal/childenv"
+	"golang.org/x/sys/unix"
 )
 
 type Record struct {
@@ -59,20 +60,39 @@ func ReadMarker(i Input) (Marker, bool, error) {
 	}
 	return m, true, nil
 }
+
+const decisionLogMaxBytes = 256 << 20
+
 func Log(root string, i Input, m Marker, v Verdict, via string) error {
+	return logWithLimit(root, i, m, v, via, decisionLogMaxBytes)
+}
+
+func logWithLimit(root string, i Input, m Marker, v Verdict, via string, limit int64) error {
 	d := filepath.Join(root, "guard")
 	if e := os.MkdirAll(d, 0700); e != nil {
 		return e
 	}
-	f, e := os.OpenFile(filepath.Join(d, "decisions.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	lock, e := lockDecisionLogDirectory(d, unix.LOCK_EX)
+	if e != nil {
+		return e
+	}
+	defer lock.Close()
+
+	path := filepath.Join(d, "decisions.jsonl")
+	info, e := os.Lstat(path)
+	if e != nil && !os.IsNotExist(e) {
+		return e
+	}
+	if e == nil && info.Mode().IsRegular() && info.Size() > limit {
+		if e = os.Rename(path, path+".1"); e != nil && !os.IsNotExist(e) {
+			return e
+		}
+	}
+	f, e := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if e != nil {
 		return e
 	}
 	defer f.Close()
-	if e = unix.Flock(int(f.Fd()), unix.LOCK_EX); e != nil {
-		return e
-	}
-	defer unix.Flock(int(f.Fd()), unix.LOCK_UN)
 	now := time.Now()
 	b, e := json.Marshal(Record{OutsidePane: m.OutsidePane, Epoch: now.Unix(), Timestamp: now.UTC().Format(time.RFC3339), Decision: v.Decision, Rule: v.Rule, Reason: i.redact(v.Reason), Command: i.redactedArgv(), CommandLine: i.redact(i.Line()), Cwd: i.redact(i.Cwd), LaunchCwd: i.redact(i.LaunchCwd), Pane: m.Pane, Workspace: m.Workspace, Tab: m.Tab, Agent: m.Agent, Via: via, Suppressed: v.Suppressed, Tier: v.Tier, Dest: v.Dest, TierRule: v.TierRule, AllowedBy: v.AllowedBy})
 	if e != nil {

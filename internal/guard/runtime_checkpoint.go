@@ -2,9 +2,10 @@ package guard
 
 import (
 	"fmt"
-	"golang.org/x/sys/unix"
 	"os"
 	"path/filepath"
+
+	"golang.org/x/sys/unix"
 )
 
 type runtimeFile struct {
@@ -15,12 +16,13 @@ type runtimeFile struct {
 	absent bool
 }
 type RuntimeCheckpoint struct {
-	state    Transfer
-	files    map[string]runtimeFile
-	marker   runtimeFile
-	injected bool
-	bins     map[string]runtimeFile
-	issue    runtimeFile
+	state      Transfer
+	files      map[string]runtimeFile
+	generation map[string]runtimeFile
+	marker     runtimeFile
+	injected   bool
+	bins       map[string]runtimeFile
+	issue      runtimeFile
 }
 
 var stableRuntimeNames = []string{"claude-prefix", "bash-env", "bash-env.current", ".zshenv", ".zshenv.current", ".zprofile", ".zprofile.current", ".zshrc", ".zshrc.current", ".zlogin", ".zlogin.current", "ikesu", "current"}
@@ -74,6 +76,49 @@ func restoreRuntimeFile(dir *privateDirectory, name string, f runtimeFile) error
 	}
 	return dir.write(name, f.data, f.mode)
 }
+
+// Capture the immutable payloads too. Publishing a replacement may prune the
+// old directory before a later handoff step fails and rolls back.
+func captureRuntimeGeneration(shell *privateDirectory, name string) (map[string]runtimeFile, error) {
+	if !generationName(name) {
+		return nil, nil
+	}
+	dir, err := shell.child(name, false)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer dir.close()
+	files := make(map[string]runtimeFile, len(runtimeGenerationNames))
+	for _, name := range runtimeGenerationNames {
+		f, err := captureRuntimeFile(dir, name)
+		if err != nil {
+			return nil, err
+		}
+		files[name] = f
+	}
+	return files, nil
+}
+
+func restoreRuntimeGeneration(shell *privateDirectory, name string, files map[string]runtimeFile) error {
+	if files == nil {
+		return nil
+	}
+	dir, err := shell.child(name, true)
+	if err != nil {
+		return err
+	}
+	defer dir.close()
+	for _, name := range runtimeGenerationNames {
+		if err := restoreRuntimeFile(dir, name, files[name]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (a *Assets) markerDirectory() (*privateDirectory, error) {
 	root, err := openPrivateState(a.Root, false)
 	if err != nil {
@@ -108,6 +153,10 @@ func (a *Assets) checkpointLocked() (*RuntimeCheckpoint, error) {
 			return nil, err
 		}
 		c.files[name] = file
+	}
+	c.generation, err = captureRuntimeGeneration(shell, c.files["current"].target)
+	if err != nil {
+		return nil, err
 	}
 	markers, err := a.markerDirectory()
 	if err != nil {
@@ -192,6 +241,12 @@ func (a *Assets) restoreCheckpointLocked(c *RuntimeCheckpoint) error {
 				return err
 			}
 		} else if !os.IsNotExist(err) {
+			return err
+		}
+		if err = restoreRuntimeGeneration(shell, c.files["current"].target, c.generation); err != nil {
+			return err
+		}
+		if err = retireCurrentGeneration(shell, c.files["current"].target); err != nil {
 			return err
 		}
 		if err = restoreRuntimeFile(shell, "current", c.files["current"]); err != nil {
