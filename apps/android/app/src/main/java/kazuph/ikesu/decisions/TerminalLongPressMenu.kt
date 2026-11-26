@@ -22,8 +22,8 @@ internal fun showTerminalLongPressMenu(
         items += "リンクを開く" to { openTerminalLink(activity, url) }
         items += "リンクをコピー" to { copyTerminalText(activity, "リンク", url) }
     }
-    content?.text?.takeIf { it.isNotBlank() }?.let { value ->
-        items += "ペインの文字をコピー" to { showSelectableTerminalText(activity, value) }
+    content?.copyText?.takeIf { it.isNotBlank() }?.let { value ->
+        items += "ペインの文字をコピー" to { showSelectableTerminalText(activity, value, content.text) }
     }
     items += actions
     AlertDialog.Builder(activity).setItems(items.map { it.first }.toTypedArray()) { _, which ->
@@ -41,7 +41,8 @@ private fun openTerminalLink(activity: Activity, url: String) {
     }
 }
 
-private fun showSelectableTerminalText(activity: Activity, value: String) {
+/** value: the rows joined back into sentences. raw: the rows as drawn, for when the joining guessed wrong. */
+private fun showSelectableTerminalText(activity: Activity, value: String, raw: String) {
     val margin = (20 * activity.resources.displayMetrics.density).toInt()
     val selectable = TextView(activity).apply {
         text = value
@@ -53,6 +54,7 @@ private fun showSelectableTerminalText(activity: Activity, value: String) {
     val scroll = ScrollView(activity).apply { addView(selectable) }
     AlertDialog.Builder(activity).setTitle("ペインの文字").setView(scroll)
         .setNegativeButton("閉じる", null)
+        .setNeutralButton("元のままコピー") { _, _ -> copyTerminalText(activity, "ペインの文字", raw) }
         .setPositiveButton("すべてコピー") { _, _ ->
             copyTerminalText(activity, "ペインの文字", value)
         }.show()

@@ -60,4 +60,47 @@ class DecisionPresentationTest {
         assertEquals(emptyList<String>(), notifiedIds(items, false))
         assertEquals(emptyList<String>(), notifiedIds(emptyList(), true))
     }
+    @Test fun aDecisionRingsOnlyOnceWhenThePcFocusMovesBackAndForth() {
+        // First arrival rings.
+        assertEquals(NotifyAction.ALERT, notifyAction(notify = true, shownBefore = false, alerted = false))
+        // The same list again: nothing to do.
+        assertEquals(NotifyAction.KEEP, notifyAction(notify = true, shownBefore = true, alerted = true))
+        // The PC shows that space: the notification goes away.
+        assertEquals(NotifyAction.CANCEL, notifyAction(notify = false, shownBefore = true, alerted = true))
+        // The PC stops showing it: it comes back without sound or pop-up.
+        assertEquals(NotifyAction.SILENT, notifyAction(notify = true, shownBefore = false, alerted = true))
+    }
+    @Test fun notificationButtonsOnlyWhileUnlocked() {
+        fun item(locked: Boolean = false, multi: Boolean = false) = org.json.JSONObject().put("locked", locked).put("multi_select", multi)
+            .put("options", org.json.JSONArray().put(org.json.JSONObject().put("id", "1").put("label", "はい")).put(org.json.JSONObject().put("id", "2").put("label", "いいえ")))
+        assertEquals(listOf("1" to "はい", "2" to "いいえ"), notificationChoices(item(), operable = true))
+        // Locked by the PC (only the heading arrived), or the phone is not unlocked: no buttons.
+        assertEquals(null, notificationChoices(item(locked = true), operable = true))
+        assertEquals(null, notificationChoices(item(), operable = false))
+        // A multi-select answer needs the app.
+        assertEquals(null, notificationChoices(item(multi = true), operable = true))
+        assertEquals(null, notificationChoices(org.json.JSONObject().put("options", org.json.JSONArray()), operable = true))
+    }
+    @Test fun everyAnswerButtonHasItsOwnData() {
+        // PendingIntents with the same data replace each other: each decision and choice must differ.
+        val pairs = listOf("pc~1" to "1", "pc~1" to "2", "pc~2" to "1", "pc~1/2" to "1", "pc~1" to "2/1", "pc2~1" to "1")
+        assertEquals(pairs.size, pairs.map { answerData(it.first, it.second) }.toSet().size)
+    }
+    @Test fun notificationContentChangesWithTheHeadingPlaceOrButtons() {
+        fun item(title: String = "t", location: String = "PC｜p1") = org.json.JSONObject().put("raw_title", title).put("location", location)
+            .put("options", org.json.JSONArray().put(org.json.JSONObject().put("id", "1").put("label", "はい")))
+        val base = notificationContent(item(), operable = true)
+        assertEquals(base, notificationContent(item(), operable = true))
+        assert(base != notificationContent(item(title = "u"), operable = true))
+        assert(base != notificationContent(item(location = "PC｜p2"), operable = true))
+        assert(base != notificationContent(item(), operable = false))
+    }
+    @Test fun onlyNotifyFlagChangesKeepTheScreen() {
+        fun item(id: String, notify: Boolean, title: String = "t") =
+            org.json.JSONObject().put("id", id).put("raw_title", title).put("notify", notify)
+        assertEquals(true, sameForDisplay(listOf(item("a", true), item("b", false)), listOf(item("a", false), item("b", true))))
+        assertEquals(false, sameForDisplay(listOf(item("a", true)), listOf(item("a", true, "changed"))))
+        assertEquals(false, sameForDisplay(listOf(item("a", true)), listOf(item("a", true), item("b", true))))
+        assertEquals(false, sameForDisplay(listOf(item("a", true), item("b", true)), listOf(item("b", true), item("a", true))))
+    }
 }
