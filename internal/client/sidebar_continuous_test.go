@@ -45,6 +45,12 @@ func TestSidebarContinuousTwoServersEveryCellRightLowerWidths(t *testing.T) {
 }
 
 func sidebarContinuousTwoServersEveryCell(t *testing.T, right, upperHalf bool) {
+	evidenceDir := os.Getenv("SIDEBAR_CONTINUOUS_EVIDENCE")
+	if evidenceDir != "" {
+		if err := os.MkdirAll(evidenceDir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	h := newRightMachineHarness(t)
 	m := h.m
 	h.modes(0, 0, 240, 60)
@@ -145,21 +151,16 @@ func sidebarContinuousTwoServersEveryCell(t *testing.T, right, upperHalf bool) {
 			}
 		}
 		records = append(records, record{side, width, got})
-		if width == 2 || width == 3 || width == 4 || width == 5 || width == 10 || width == 17 || width == 26 {
-			if root := os.Getenv("SIDEBAR_CONTINUOUS_EVIDENCE"); root != "" {
-				if err := os.MkdirAll(root, 0700); err != nil {
-					t.Fatal(err)
-				}
-				b, _ := json.Marshal(f)
-				if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("servers-%s-width%d.json", side, width)), b, 0600); err != nil {
-					t.Fatal(err)
-				}
+		if evidenceDir != "" && (width == 2 || width == 3 || width == 4 || width == 5 || width == 10 || width == 17 || width == 26) {
+			b, _ := json.Marshal(f)
+			if err := os.WriteFile(filepath.Join(evidenceDir, fmt.Sprintf("servers-%s-width%d.json", side, width)), b, 0600); err != nil {
+				t.Fatal(err)
 			}
 		}
 	}
-	if root := os.Getenv("SIDEBAR_CONTINUOUS_EVIDENCE"); root != "" {
+	if evidenceDir != "" {
 		b, _ := json.MarshalIndent(records, "", "  ")
-		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("servers-rows-%s-%s.json", side, half)), b, 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(evidenceDir, fmt.Sprintf("servers-rows-%s-%s.json", side, half)), b, 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
