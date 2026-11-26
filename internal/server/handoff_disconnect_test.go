@@ -35,6 +35,11 @@ func TestLiveHandoffContinuesAfterFinalNoticeDisconnect(t *testing.T) {
 		}
 	}()
 
+	// The listener is bound before the first pane publishes its guard
+	// assets. Wait for an API response before accessing those files.
+	var original, first, second api.PongResult
+	apiOK(t, dir, api.MethodPing, api.EmptyParams{}, &original)
+
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -83,8 +88,6 @@ func TestLiveHandoffContinuesAfterFinalNoticeDisconnect(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var original, first, second api.PongResult
-	apiOK(t, dir, api.MethodPing, api.EmptyParams{}, &original)
 	apiOK(t, dir, api.MethodServerLiveHandoff, api.ServerLiveHandoffParams{ImportExe: &launcher}, nil)
 	transferred = true
 	select {
