@@ -94,6 +94,7 @@ func (a *App) NewViewer(out io.Writer, cols, rows int, detach func(string)) *Vie
 	ui.fr, ui.enc = &input.Framer{}, &render.Encoder{}
 	ui.drawViewers, ui.tickViewers, ui.visiblePane = nil, nil, nil
 	ui.scroll = map[int]int{}
+	ui.paintedPaneViews = nil
 	ui.scrollbarUntil = nil
 	ui.sidebarHover, ui.rightSidebarHover = false, false
 	ui.focusHistory = nil

@@ -45,8 +45,17 @@ type CursorInfo struct {
 	Visible bool
 }
 
+// PaneViewport relates a painted content rectangle to the terminal buffer
+// and screen as they were when its grid was captured.
+type PaneViewport struct {
+	Inner                    layout.Rect
+	BufferTop, ScreenTop     int
+	Cols, Rows, CellW, CellH int
+}
+
 // PaneSnap is everything render needs to draw one pane.
 type PaneSnap struct {
+	Viewport       PaneViewport
 	Graphics       []kitty.Placement
 	Seen           bool
 	StateChangeSeq uint64
@@ -216,6 +225,7 @@ type CopyMark struct {
 
 // Output is a composed frame plus the cursor anchor for IME positioning.
 type Output struct {
+	PaneViewports map[int]PaneViewport `json:",omitempty"`
 	ApprovalRect  layout.Rect
 	AnswerRects   map[int]layout.Rect
 	Frame         *Frame
@@ -577,6 +587,7 @@ func drawPanes(f *Frame, s *model.AppState, in Input, out *Output) {
 		}
 		// Content.
 		if snap != nil {
+			out.recordPaneViewport(pr.ID, inner, snap.Viewport)
 			f.CopyGrid(ix, iy, clipGrid(snap.Grid, iw, ih))
 			paneGraphics(f, pr.ID, snap, ix, iy, iw, ih)
 		}
@@ -920,4 +931,15 @@ func drawStatusLine(f *Frame, s *model.AppState, in Input) {
 			f.Text(right, y, txt, uv.Style{Fg: o.c, Bg: f.Palette.Surface}, s.Cols-1)
 		}
 	}
+}
+
+func (out *Output) recordPaneViewport(pid int, inner layout.Rect, view PaneViewport) {
+	if view.Cols <= 0 || view.Rows <= 0 {
+		return
+	}
+	if out.PaneViewports == nil {
+		out.PaneViewports = make(map[int]PaneViewport)
+	}
+	view.Inner = inner
+	out.PaneViewports[pid] = view
 }

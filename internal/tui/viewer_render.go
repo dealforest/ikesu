@@ -113,6 +113,7 @@ func (v *Viewer) Rendered(a *App, out render.Output, focusEpoch uint64) {
 		ui.tabLeftRect, ui.tabRightRect = out.TabLeftRect, out.TabRightRect
 		ui.tabHits, ui.newTabRect = out.TabHits, out.NewTabRect
 		ui.toastRect, ui.actionBar = out.ToastRect, out.ActionBar
+		ui.paintedPaneViews = out.PaneViewports
 		if ui.help != nil {
 			ui.help.rect = out.HelpRect
 		}

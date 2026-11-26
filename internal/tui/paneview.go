@@ -7,6 +7,7 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/vt"
 
+	"github.com/kazuph/ikesu/internal/layout"
 	"github.com/kazuph/ikesu/internal/render"
 	"github.com/kazuph/ikesu/internal/runtime"
 )
@@ -14,13 +15,22 @@ import (
 // paneGrid extracts the innerH×w cells a pane displays at scroll offset off
 // (0 = live screen bottom). Rows come from scrollback followed by screen.
 func (a *App) paneGrid(p *runtime.Pane, off, h, w int) [][]uv.Cell {
+	var snap render.PaneSnap
+	a.fillPaneGrid(&snap, p, off, layout.Rect{W: w, H: h})
+	return snap.Grid
+}
+
+func (a *App) fillPaneGrid(snap *render.PaneSnap, p *runtime.Pane, off int, inner layout.Rect) {
 	defer benchstage.Span("ui.panegrid")()
+	h, w := inner.H, inner.W
+	cw, ch := p.CellPixels()
 	benchstage.Values("panegrid.materialized", h*w, 0)
 	var g [][]uv.Cell
 	p.WithEmu(func(e *vt.Emulator) {
 		sb := e.ScrollbackLen()
 		eh := e.Height()
 		top := runtime.PaneViewportTop(e, off, h, a.viewerContext != nil)
+		snap.Viewport = render.PaneViewport{Inner: inner, BufferTop: top, ScreenTop: top - sb, Cols: e.Width(), Rows: eh, CellW: cw, CellH: ch}
 		for r := 0; r < h; r++ {
 			i := top + r
 			row := make([]uv.Cell, w)
@@ -54,7 +64,7 @@ func (a *App) paneGrid(p *runtime.Pane, off, h, w int) [][]uv.Cell {
 			benchstage.Values("screen.ids.live", p.ID, info.LiveIDs)
 		}
 	})
-	return g
+	snap.Grid = g
 }
 
 // bufferLen returns the total number of stored lines (scrollback + screen).
@@ -174,4 +184,15 @@ func (a *App) selText(s *selState) (string, int) {
 		}
 	}
 	return sb.String(), chars
+}
+
+func (a *App) livePaneViewport(p *runtime.Pane, inner layout.Rect) render.PaneViewport {
+	cw, ch := p.CellPixels()
+	view := render.PaneViewport{Inner: inner, CellW: cw, CellH: ch}
+	p.WithEmu(func(e *vt.Emulator) {
+		view.BufferTop = runtime.PaneViewportTop(e, a.scroll[p.ID], inner.H, a.viewerContext != nil)
+		view.ScreenTop = view.BufferTop - e.ScrollbackLen()
+		view.Cols, view.Rows = e.Width(), e.Height()
+	})
+	return view
 }

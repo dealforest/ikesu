@@ -175,6 +175,7 @@ type App struct {
 	viewerOwner       *App
 	viewerContext     *Viewer
 	viewerActive      bool
+	paintedPaneViews  map[int]render.PaneViewport
 	sizeInputOrder    uint64
 	sizeViewer        *Viewer
 	sizeViewers       []*Viewer
