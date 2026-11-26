@@ -199,6 +199,22 @@ func TestStage6aPopupMinimumPTYGeometry(t *testing.T) {
 func TestPopupWheelDuringSelectionCopiesThroughPaintedReleaseRow(t *testing.T) {
 	teststate.Lock(t)
 	teststate.Setenv(t, "SSH_CONNECTION", "isolated-test")
+	for _, tc := range []struct {
+		name    string
+		repaint bool
+		last    string
+	}{
+		{"repainted", true, "R98"},
+		{"unpainted", false, "REA"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testPopupWheelSelection(t, tc.repaint, tc.last)
+		})
+	}
+}
+
+func testPopupWheelSelection(t *testing.T, repaint bool, wantLast string) {
+	t.Helper()
 	a := specRuntimeApp(t)
 	t.Cleanup(a.sup.KillAll)
 	width, height := api.PopupSize{Cells: 40}, api.PopupSize{Cells: 12}
@@ -235,14 +251,20 @@ func TestPopupWheelDuringSelectionCopiesThroughPaintedReleaseRow(t *testing.T) {
 	}
 	viewer.Input(a, []byte(fmt.Sprintf("\x1b[<0;%d;%dM", inner.X+1, inner.Y+1)))
 	viewer.Input(a, []byte(fmt.Sprintf("\x1b[<64;%d;%dM", inner.X+1, y+1)))
-	draw()
+	if repaint {
+		draw()
+	}
 	last := visibleRow(y)
-	if last != "R98" {
-		t.Fatalf("painted release row = %q, want R98 after scrolling", last)
+	if last != wantLast {
+		t.Fatalf("painted release row = %q, want %q", last, wantLast)
 	}
 	clipboard.Reset()
 	viewer.Input(a, []byte(fmt.Sprintf("\x1b[<0;%d;%dm", inner.X+3, y+1)))
-	want := "R92\nR93\nR94\nR95\nR96\nR97\n" + last
+	want := "R92\nR93\nR94\nR95\nR96\nR97\n"
+	if !repaint {
+		want += "R98\nR99\nR100\n"
+	}
+	want += last
 	payload, ok := strings.CutPrefix(clipboard.String(), "\x1b]52;c;")
 	got, err := base64.StdEncoding.DecodeString(strings.TrimSuffix(payload, "\a"))
 	if !ok || err != nil || string(got) != want {

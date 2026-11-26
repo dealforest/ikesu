@@ -580,12 +580,6 @@ func (a *App) hostScroll(pid, scrollN int, up bool) {
 	} else {
 		off -= a.sidebarConfig.MouseScrollLines()
 	}
-	if s := a.sel; s != nil && s.pane == pid {
-		if p := a.sup.Get(pid); p != nil {
-			a.scrollSelection(p, s, off)
-			return
-		}
-	}
 	a.setScrollOff(pid, off)
 }
 
@@ -621,18 +615,19 @@ func (a *App) selMouse(ev input.Event) {
 		a.sel = nil
 		return
 	}
-	top := a.selectionTop(p, s)
-	hx := m.X - s.inner.X
-	hy := top + m.Y - s.inner.Y
-	if !a.st.PopupVisible() && !a.st.OverlayVisible() {
-		hy = top + min(max(m.Y-s.inner.Y, 0), s.inner.H-1)
+	top, inner := a.selectionTop(p, s), s.inner
+	popup := a.st.PopupVisible() || a.st.OverlayVisible()
+	if popup {
+		if view, ok := a.paintedPaneViews[s.pane]; ok {
+			top, inner = view.BufferTop, view.Inner
+		}
 	}
-	if hx < 0 {
-		hx = 0
+	hx := min(max(m.X-inner.X, 0), inner.W-1)
+	hy := m.Y - inner.Y
+	if !popup {
+		hy = min(max(hy, 0), inner.H-1)
 	}
-	if hx >= s.inner.W {
-		hx = s.inner.W - 1
-	}
+	hy += top
 	s.hx, s.hy = hx, hy
 	if hx != s.ax || hy != s.ay {
 		s.moved = true
