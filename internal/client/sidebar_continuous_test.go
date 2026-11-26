@@ -12,23 +12,39 @@ import (
 	"github.com/kazuph/ikesu/internal/render"
 )
 
-// Walks every width on this side using two real servers and PTYs.
-func TestSidebarContinuousTwoServersEveryCellLeft(t *testing.T) {
+// Walks the left sidebar's upper widths using two real servers and PTYs.
+func TestSidebarContinuousTwoServersEveryCellLeftUpperWidths(t *testing.T) {
 	if teststate.RunIsolatedParallel(t) {
 		return
 	}
-	sidebarContinuousTwoServersEveryCell(t, false)
+	sidebarContinuousTwoServersEveryCell(t, false, true)
 }
 
-// Walks every width on this side using two real servers and PTYs.
-func TestSidebarContinuousTwoServersEveryCellRight(t *testing.T) {
+// Walks the left sidebar's lower widths using two real servers and PTYs.
+func TestSidebarContinuousTwoServersEveryCellLeftLowerWidths(t *testing.T) {
 	if teststate.RunIsolatedParallel(t) {
 		return
 	}
-	sidebarContinuousTwoServersEveryCell(t, true)
+	sidebarContinuousTwoServersEveryCell(t, false, false)
 }
 
-func sidebarContinuousTwoServersEveryCell(t *testing.T, right bool) {
+// Walks the right sidebar's upper widths using two real servers and PTYs.
+func TestSidebarContinuousTwoServersEveryCellRightUpperWidths(t *testing.T) {
+	if teststate.RunIsolatedParallel(t) {
+		return
+	}
+	sidebarContinuousTwoServersEveryCell(t, true, true)
+}
+
+// Walks the right sidebar's lower widths using two real servers and PTYs.
+func TestSidebarContinuousTwoServersEveryCellRightLowerWidths(t *testing.T) {
+	if teststate.RunIsolatedParallel(t) {
+		return
+	}
+	sidebarContinuousTwoServersEveryCell(t, true, false)
+}
+
+func sidebarContinuousTwoServersEveryCell(t *testing.T, right, upperHalf bool) {
 	h := newRightMachineHarness(t)
 	m := h.m
 	h.modes(0, 0, 240, 60)
@@ -84,7 +100,19 @@ func sidebarContinuousTwoServersEveryCell(t *testing.T, right bool) {
 		side = "right"
 	}
 	_, upper, _ := m.endpoints[m.active].snapshot.State.SidebarBounds()
-	for width := upper; width >= 2; width-- {
+	const smallestWidth = 2
+	middle := smallestWidth + (upper-smallestWidth)/2
+	firstWidth, lastWidth, half := upper, smallestWidth, "lower"
+	if upperHalf {
+		lastWidth, half = middle+1, "upper"
+	} else {
+		firstWidth = middle
+		if middle < upper {
+			// Enter the lower range with the same one-column drag as the full sweep.
+			drag(right, middle+1)
+		}
+	}
+	for width := firstWidth; width >= lastWidth; width-- {
 		drag(right, width)
 		got := rows()
 		if !reflect.DeepEqual(got, expected) {
@@ -131,9 +159,9 @@ func sidebarContinuousTwoServersEveryCell(t *testing.T, right bool) {
 	}
 	if root := os.Getenv("SIDEBAR_CONTINUOUS_EVIDENCE"); root != "" {
 		b, _ := json.MarshalIndent(records, "", "  ")
-		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("servers-rows-%s.json", side)), b, 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("servers-rows-%s-%s.json", side, half)), b, 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	t.Logf("PASS %d widths from real endpoint snapshots: all machine/workspace/pane row identities, Y/order and %s state cells", len(records), side)
+	t.Logf("PASS %d widths from real endpoint snapshots: all machine/workspace/pane row identities, Y/order and %s state cells (widths %d..%d)", len(records), side, firstWidth, lastWidth)
 }
