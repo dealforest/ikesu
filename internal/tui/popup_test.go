@@ -202,18 +202,21 @@ func TestPopupWheelDuringSelectionCopiesThroughPaintedReleaseRow(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		repaint bool
+		legacy  bool
 		last    string
 	}{
-		{"repainted", true, "R98"},
-		{"unpainted", false, "REA"},
+		{"repainted", true, false, "R98"},
+		{"unpainted", false, false, "REA"},
+		// A client that predates painted viewports still follows the wheel.
+		{"legacy client", true, true, "R98"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			testPopupWheelSelection(t, tc.repaint, tc.last)
+			testPopupWheelSelection(t, tc.repaint, tc.legacy, tc.last)
 		})
 	}
 }
 
-func testPopupWheelSelection(t *testing.T, repaint bool, wantLast string) {
+func testPopupWheelSelection(t *testing.T, repaint, legacy bool, wantLast string) {
 	t.Helper()
 	a := specRuntimeApp(t)
 	t.Cleanup(a.sup.KillAll)
@@ -234,7 +237,11 @@ func testPopupWheelSelection(t *testing.T, repaint bool, wantLast string) {
 	})
 	draw := func() {
 		viewer.with(a, func(ui *App) { ui.draw() })
-		viewer.Rendered(a, *out, 0)
+		sent := *out
+		if legacy {
+			sent.PaneViewports = nil
+		}
+		viewer.Rendered(a, sent, 0)
 	}
 	draw()
 	inner := out.PaneViewports[pid].Inner

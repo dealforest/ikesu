@@ -580,6 +580,16 @@ func (a *App) hostScroll(pid, scrollN int, up bool) {
 	} else {
 		off -= a.sidebarConfig.MouseScrollLines()
 	}
+	// A client that does not report painted viewports gives the release no
+	// frame to follow, so move the selection's view with the wheel instead.
+	if s := a.sel; s != nil && s.pane == pid {
+		if _, painted := a.paintedPaneViews[pid]; !painted {
+			if p := a.sup.Get(pid); p != nil {
+				a.scrollSelection(p, s, off)
+				return
+			}
+		}
+	}
 	a.setScrollOff(pid, off)
 }
 
