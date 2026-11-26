@@ -18,9 +18,7 @@ import (
 func TestBashRuntimePIDStatusline(t *testing.T) {
 	root := t.TempDir()
 	binary := filepath.Join(root, "ikesu")
-	if out, err := exec.Command("go", "build", "-o", binary, "../../cmd/ikesu").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v: %s", err, out)
-	}
+	guardBinary(t, binary)
 	jq, err := exec.LookPath("jq")
 	if err != nil {
 		t.Fatal(err)

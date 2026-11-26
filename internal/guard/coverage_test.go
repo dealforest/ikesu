@@ -19,9 +19,7 @@ func TestLoginStartupAndSnapshotKeepShimFirst(t *testing.T) {
 		}
 	}
 	binary := filepath.Join(t.TempDir(), "ikesu")
-	if output, err := exec.Command("go", "build", "-o", binary, "../../cmd/ikesu").CombinedOutput(); err != nil {
-		t.Fatalf("build real guard CLI: %v %s", err, output)
-	}
+	guardBinary(t, binary)
 	a := NewAssets(d, "p_1", binary, Config{})
 	a.ConfigureShell("/bin/zsh")
 	env, e := a.Prepare([]string{"HOME=" + home, "ZDOTDIR=" + home, "PATH=/usr/bin:/bin", "IKESU_PANE_ID=p1", "IKESU_SOCKET_PATH=" + realGuardFixture(t), "IKESU_SOCKET_PATH_EXPLICIT=1"}, d)

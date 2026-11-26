@@ -1,6 +1,7 @@
 package guard
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,63 @@ import (
 	"github.com/kazuph/ikesu/internal/api"
 	"github.com/kazuph/ikesu/internal/childenv"
 )
+
+// Building cmd/ikesu takes seconds per build, so the package builds it once and
+// every test that runs the real CLI gets its own copy of that one binary.
+var sharedGuardBinary struct {
+	once      sync.Once
+	dir, path string
+	err       error
+}
+
+// copyGuardBinary copies the package's one build of cmd/ikesu to dst. It copies
+// rather than hard-links: a new link changes the shared file's ctime, which is
+// part of the identity the guard trusts, so a running server would see its
+// executable as replaced. dst stays inside the caller's own directory, so
+// tests keep their existing directory layout.
+func copyGuardBinary(dst string) error {
+	sharedGuardBinary.once.Do(func() {
+		dir, err := os.MkdirTemp("/tmp", "ikesu-guard-bin-")
+		if err != nil {
+			sharedGuardBinary.err = err
+			return
+		}
+		sharedGuardBinary.dir = dir
+		path := filepath.Join(dir, "ikesu")
+		// The same 2-minute cap the CLI tests used to put on their own builds.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if out, err := exec.CommandContext(ctx, "go", "build", "-o", path, "../../cmd/ikesu").CombinedOutput(); err != nil {
+			sharedGuardBinary.err = fmt.Errorf("build real guard CLI: %w: %s", err, out)
+			return
+		}
+		sharedGuardBinary.path = path
+	})
+	if sharedGuardBinary.err != nil {
+		return sharedGuardBinary.err
+	}
+	src, err := os.Open(sharedGuardBinary.path)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o755)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, src); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+func guardBinary(t *testing.T, dst string) {
+	t.Helper()
+	if err := copyGuardBinary(dst); err != nil {
+		t.Fatal(err)
+	}
+}
 
 var guardFixture struct {
 	once         sync.Once
@@ -34,8 +92,8 @@ func realGuardFixture(t *testing.T) string {
 		}
 		guardFixture.root = root
 		binary := filepath.Join(root, "ikesu")
-		if out, err := exec.Command("go", "build", "-o", binary, "../../cmd/ikesu").CombinedOutput(); err != nil {
-			guardFixture.err = fmt.Errorf("build: %w: %s", err, out)
+		if err := copyGuardBinary(binary); err != nil {
+			guardFixture.err = err
 			return
 		}
 		cfg := filepath.Join(root, "config.toml")
@@ -72,6 +130,14 @@ func realGuardFixture(t *testing.T) string {
 func TestMain(m *testing.M) {
 	probeTimeout, ghProbeTimeout = 30*time.Second, 30*time.Second
 	code := m.Run()
+	// The fixture server runs its own copy, so the shared build can go now even
+	// if stopping the server below hangs.
+	if sharedGuardBinary.dir != "" {
+		if err := os.RemoveAll(sharedGuardBinary.dir); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			code = 1
+		}
+	}
 	if guardFixture.server != nil {
 		if conn, err := net.DialTimeout("unix", guardFixture.socket, time.Second); err == nil {
 			_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
