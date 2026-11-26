@@ -83,6 +83,13 @@ func matchesClaudeDisplay(previous, current *screenprompt.Prompt, display api.De
 	return matchClaudeQuestion(previous, q)
 }
 
+// onlyTailVisible reports a truncated question whose title is only the notice: just the end of
+// the question (in the body) was on screen.
+func onlyTailVisible(p *screenprompt.Prompt) bool {
+	return p != nil && compactQuestion(strings.TrimPrefix(p.Params.Title, screenprompt.TruncatedNotice)) == "" &&
+		(p.Truncated || strings.HasPrefix(p.Params.Title, screenprompt.TruncatedNotice))
+}
+
 func chooseClaudeQuestion(p *screenprompt.Prompt, questions []session.ClaudeQuestion) (*session.ClaudeQuestion, bool, bool) {
 	var match *session.ClaudeQuestion
 	pendingCount := 0
@@ -95,7 +102,11 @@ func chooseClaudeQuestion(p *screenprompt.Prompt, questions []session.ClaudeQues
 			continue
 		}
 		if questions[i].Answered {
-			resolvedMatch = true
+			// Only a shared tail and the options matched: an earlier question may end the same way.
+			// That is not proof the question on screen was answered, so it stays a decision.
+			if !onlyTailVisible(p) {
+				resolvedMatch = true
+			}
 			continue
 		}
 		if match != nil {
