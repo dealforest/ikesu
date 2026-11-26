@@ -36,6 +36,18 @@ import com.termux.terminal.TerminalSessionClient
 import com.termux.view.TerminalRenderer
 import org.json.JSONObject
 
+/** What the screen does with a message from a PC. */
+internal enum class ScreenRoute { HANDLE, CLOSE_STRAY, RELEASE, IGNORE }
+
+/** A message from the shown PC is handled, except a screen_opened that answers no screen_open sent to it. A screen
+ *  opened on any other PC (one switched away from) is closed; an error from the PC still opening frees the next open. */
+internal fun screenRoute(from: String, type: String, shown: String?, openingFrom: String?): ScreenRoute = when {
+    from == shown && (type != "screen_opened" || from == openingFrom) -> ScreenRoute.HANDLE
+    type == "screen_opened" -> ScreenRoute.CLOSE_STRAY
+    type == "error" && from == openingFrom -> ScreenRoute.RELEASE
+    else -> ScreenRoute.IGNORE
+}
+
 /** Messages about the remote screen, handed from DecisionService to the open ScreenActivity on the main thread. */
 object ScreenBus {
     var listener: ((source: String, message: JSONObject) -> Unit)? = null
@@ -190,7 +202,7 @@ class ScreenActivity : Activity() {
     private fun dropScreen() {
         closeNative(); choosing = null; answeredInput = null; view.removeCallbacks(choiceTimeout)
         if (screenId >= 0) target()?.send(JSONObject().put("type", "screen_close").put("screen", screenId))
-        screenId = -1; opening = false; wanted = null; paneLayout = null
+        screenId = -1; opening = false; openingFrom = null; wanted = null; paneLayout = null
     }
 
     private fun choosePc() {
@@ -199,7 +211,11 @@ class ScreenActivity : Activity() {
         AlertDialog.Builder(this).setTitle("どの PC の画面を出すか")
             .setItems(all.map { "${it.name}${if (it.connected) "" else "（未接続）"}" }.toTypedArray()) { _, i ->
                 if (all[i].id == source) return@setItems
-                dropScreen(); view.clear(); source = all[i].id; refresh()
+                // Close the old PC's screen, then switch before clearing: clearing reports a new size, and that
+                // opens the screen on whichever PC is chosen at that moment.
+                dropScreen(); source = all[i].id
+                status.text = "${all[i].name} に切り替えています…"
+                view.clear(); refresh()
             }.show()
     }
 
@@ -215,6 +231,8 @@ class ScreenActivity : Activity() {
     private var screenId = -1
     /** A screen_open is on its way; size changes wait for screen_opened instead of opening a second screen. */
     private var opening = false
+    /** The PC the pending screen_open went to; a screen_opened from any other PC is closed, not shown. */
+    private var openingFrom: String? = null
     private var wanted: Pair<Int, Int>? = null
     private var mods = 0
     private val modifierViews = mutableMapOf<Int, TextView>()
@@ -811,7 +829,13 @@ class ScreenActivity : Activity() {
         super.onStart()
         registerReceiver(changes, android.content.IntentFilter(DecisionService.CHANGED), RECEIVER_NOT_EXPORTED)
         markBell()
-        ScreenBus.listener = { from, message -> if (from == source) handle(message) }
+        ScreenBus.listener = { from, message ->
+            when (screenRoute(from, message.optString("type"), source, openingFrom)) {
+                ScreenRoute.HANDLE -> handle(message)
+                ScreenRoute.CLOSE_STRAY, ScreenRoute.RELEASE -> stray(from, message)
+                ScreenRoute.IGNORE -> {}
+            }
+        }
         // Coming back after the unlock ended: do not keep showing the old screen.
         started = true
         if (target()?.operable != true) { dropScreen(); view.clear() }
@@ -836,11 +860,21 @@ class ScreenActivity : Activity() {
         super.onStop()
     }
 
+    /** The answer to a screen_open from a PC that is no longer shown here. An opened screen is closed so it does not
+     *  stay open on that PC; then the shown PC gets its own screen_open. */
+    private fun stray(from: String, message: JSONObject) {
+        if (message.optString("type") == "screen_opened") {
+            DecisionState.sources[from]?.send(JSONObject().put("type", "screen_close").put("screen", message.optInt("screen")))
+        }
+        if (from == openingFrom) { opening = false; openingFrom = null; refresh() }
+    }
+
     private fun open(cols: Int, rows: Int) {
         val target = target()
         if (target == null || !target.operable) { status.text = "顔・指紋で開いてから、画面を開いてください"; return }
         if (opening) return
         opening = target.send(JSONObject().put("type", "screen_open").put("cols", cols).put("rows", rows))
+        openingFrom = if (opening) target.id else null
     }
 
     private fun sizeChanged(cols: Int, rows: Int) {
@@ -853,7 +887,7 @@ class ScreenActivity : Activity() {
         when (message.optString("type")) {
             "screen_opened" -> {
                 if (!opening) return
-                opening = false; screenId = message.optInt("screen")
+                opening = false; openingFrom = null; screenId = message.optInt("screen")
                 scanner = NativeUiScanner(); lastMenu = null; paneLayout = null
                 status.text = "${target()?.name ?: "PC"} の画面"
                 // The size changed while opening (the keyboard, for example): send the latest one.
