@@ -107,6 +107,7 @@ class DecisionService : Service() {
         const val RECONNECT = "kazuph.ikesu.RECONNECT"
         private const val CONNECTION = "connection"
         private const val QUESTIONS = "questions"
+        private const val QUESTIONS_QUIET = "questions_quiet"
         private const val FOREGROUND_ID = 1
         private const val RETRY_MS = 2000L
         private const val RETRY_MAX_MS = 60_000L
@@ -114,6 +115,8 @@ class DecisionService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private val notificationIds = mutableMapOf<String, Int>()
     private var nextNotification = 2
+    /** Decisions that already rang on this phone (sound and pop-up happen once per decision). */
+    private val alerted = mutableSetOf<String>()
     private var generation = 0
     private val receiving = mutableMapOf<String, Pair<FileOutputStream, Int>>()
     /** Failed attempts in a row per source, for a growing wait before the next try. */
@@ -128,6 +131,7 @@ class DecisionService : Service() {
         super.onCreate()
         manager.createNotificationChannel(NotificationChannel(CONNECTION, "接続状態", NotificationManager.IMPORTANCE_LOW))
         manager.createNotificationChannel(NotificationChannel(QUESTIONS, "判断待ち", NotificationManager.IMPORTANCE_HIGH))
+        manager.createNotificationChannel(NotificationChannel(QUESTIONS_QUIET, "判断待ち（再表示・音なし）", NotificationManager.IMPORTANCE_LOW))
         startForeground(FOREGROUND_ID, connectionNotification())
         // The passphrase connection is gone: remove what the old version stored (address, encrypted passphrase, its key).
         getSharedPreferences("connection", MODE_PRIVATE).edit().clear().apply()
@@ -239,8 +243,8 @@ class DecisionService : Service() {
             source.send(JSONObject().put("type", "screen_close").put("screen", message.optInt("screen")))
         if (type.startsWith("screen_")) return
         when (type) {
-            "snapshot" -> { source.connected = true; retries.remove(source.id); updateDecisions(source, message.optJSONArray("decisions") ?: JSONArray(), false) }
-            "notice" -> { source.connected = true; if (!source.operable) updateDecisions(source, message.optJSONArray("decisions") ?: JSONArray(), true) }
+            "snapshot" -> { val was = source.connected; source.connected = true; retries.remove(source.id); updateDecisions(source, message.optJSONArray("decisions") ?: JSONArray(), false, was) }
+            "notice" -> { val was = source.connected; source.connected = true; if (!source.operable) updateDecisions(source, message.optJSONArray("decisions") ?: JSONArray(), true, was) else if (!was) changed() }
             "operate_ok" -> { source.operable = true; changed() }
             "operate_expired" -> { lock(source); changed() }
             "beat" -> source.beat = message.optLong("n")
@@ -255,7 +259,7 @@ class DecisionService : Service() {
     }
 
     /** Stores a source's decisions under prefixed ids. A notice (no operate yet) carries only the heading. */
-    private fun updateDecisions(source: DecisionSource, raw: JSONArray, notice: Boolean) {
+    private fun updateDecisions(source: DecisionSource, raw: JSONArray, notice: Boolean, connectedBefore: Boolean) {
         val items = JSONArray()
         for (index in 0 until raw.length()) {
             val original = raw.optJSONObject(index) ?: continue
@@ -278,6 +282,9 @@ class DecisionService : Service() {
         val currentKeys = (0 until items.length()).map { items.getJSONObject(it).getString("id") }.toSet()
         val sourcePrefix = DecisionState.key(source.id, "")
         (old.keys.filter { it.startsWith(sourcePrefix) } - currentKeys).forEach { key -> notificationIds.remove(key)?.let(manager::cancel) }
+        // A decision that is gone may ring again only if it comes back as a new one.
+        alerted.removeAll { it.startsWith(sourcePrefix) && it !in currentKeys }
+        val before = source.decisions
         source.decisions = items
         DecisionState.recompute()
         val all = DecisionState.decisions
@@ -290,12 +297,15 @@ class DecisionService : Service() {
         for (index in 0 until items.length()) {
             val item = items.optJSONObject(index) ?: continue
             val key = item.optString("id")
-            if (!item.optBoolean("notify")) { notificationIds[key]?.let(manager::cancel); continue }
-            if (old[key] == true) continue
+            val action = notifyAction(item.optBoolean("notify"), old[key] == true, key in alerted)
+            if (action == NotifyAction.CANCEL) { notificationIds[key]?.let(manager::cancel); continue }
+            if (action == NotifyAction.KEEP) continue
+            alerted.add(key)
             val number = notificationIds.getOrPut(key) { nextNotification++ }
             val intent = Intent(this, MainActivity::class.java).putExtra("decision", key)
             val pending = panel(number, intent)
-            manager.notify(number, Notification.Builder(this, QUESTIONS).setSmallIcon(R.drawable.ic_notification)
+            // Shown again after the PC stopped showing it: the quiet channel has no sound and no pop-up over what the user is typing.
+            manager.notify(number, Notification.Builder(this, if (action == NotifyAction.SILENT) QUESTIONS_QUIET else QUESTIONS).setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle(decisionHeading(item.optString("raw_title"), item.optString("raw_body"), item.optString("kind")))
                 .setContentText(item.optString("location", "判断を待っています"))
                 .setColor(0xFF33FF66.toInt())
@@ -306,8 +316,15 @@ class DecisionService : Service() {
         // 通知を出している判断待ちを、出どころの PC に知らせる。つなぎ直した一覧でも同じ分をもう一度送る。
         DecisionState.shown(notifiedIds((0 until items.length()).mapNotNull { items.optJSONObject(it) }
             .map { it.optString("id") to it.optBoolean("notify") }, manager.areNotificationsEnabled()))
+        // Only the notify flags moved (the PC's focus or space changed): the screens stay as they are,
+        // so a field being typed in keeps its focus and the open decision stays open.
+        if (connectedBefore && sameForDisplay(jsonItems(before), jsonItems(items))) {
+            manager.notify(FOREGROUND_ID, connectionNotification())
+            return
+        }
         changed()
     }
+    private fun jsonItems(array: JSONArray): List<JSONObject> = (0 until array.length()).mapNotNull { array.optJSONObject(it) }
 
     private fun receiveVideo(source: DecisionSource, message: JSONObject) {
         val key = message.optString("key")

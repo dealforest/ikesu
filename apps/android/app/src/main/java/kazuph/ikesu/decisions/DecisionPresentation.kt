@@ -80,3 +80,27 @@ fun answerLabel(multiSelect: Boolean, selected: Int): String =
 /** 通知を出す判断待ち（notify=true）の id。通知が許可されていなければ空（届いたとは言えない）。 */
 fun notifiedIds(items: List<Pair<String, Boolean>>, notificationsEnabled: Boolean): List<String> =
     if (!notificationsEnabled) emptyList() else items.filter { it.second && it.first.isNotEmpty() }.map { it.first }.distinct()
+
+/** What to do with one decision's notification when a new list arrives. */
+enum class NotifyAction { ALERT, SILENT, CANCEL, KEEP }
+
+/**
+ * A decision rings (sound and pop-up) only once. The PC hides it (notify=false) while one of its
+ * screens shows that space; when the PC stops showing it, the notification comes back without
+ * ringing, so switching spaces or moving the focus on the PC does not interrupt the phone.
+ * notify: this list asks for a notification. shownBefore: the previous list asked for one too.
+ * alerted: this decision already rang on this phone.
+ */
+fun notifyAction(notify: Boolean, shownBefore: Boolean, alerted: Boolean): NotifyAction = when {
+    !notify -> NotifyAction.CANCEL
+    shownBefore -> NotifyAction.KEEP
+    alerted -> NotifyAction.SILENT
+    else -> NotifyAction.ALERT
+}
+
+/** Whether two lists show the same on screen: only the notify flag (whether the PC shows it) may differ. */
+fun sameForDisplay(old: List<org.json.JSONObject>, new: List<org.json.JSONObject>): Boolean {
+    if (old.size != new.size) return false
+    val strip = { item: org.json.JSONObject -> org.json.JSONObject(item.toString()).apply { remove("notify") }.toString() }
+    return old.indices.all { strip(old[it]) == strip(new[it]) }
+}

@@ -60,4 +60,22 @@ class DecisionPresentationTest {
         assertEquals(emptyList<String>(), notifiedIds(items, false))
         assertEquals(emptyList<String>(), notifiedIds(emptyList(), true))
     }
+    @Test fun aDecisionRingsOnlyOnceWhenThePcFocusMovesBackAndForth() {
+        // First arrival rings.
+        assertEquals(NotifyAction.ALERT, notifyAction(notify = true, shownBefore = false, alerted = false))
+        // The same list again: nothing to do.
+        assertEquals(NotifyAction.KEEP, notifyAction(notify = true, shownBefore = true, alerted = true))
+        // The PC shows that space: the notification goes away.
+        assertEquals(NotifyAction.CANCEL, notifyAction(notify = false, shownBefore = true, alerted = true))
+        // The PC stops showing it: it comes back without sound or pop-up.
+        assertEquals(NotifyAction.SILENT, notifyAction(notify = true, shownBefore = false, alerted = true))
+    }
+    @Test fun onlyNotifyFlagChangesKeepTheScreen() {
+        fun item(id: String, notify: Boolean, title: String = "t") =
+            org.json.JSONObject().put("id", id).put("raw_title", title).put("notify", notify)
+        assertEquals(true, sameForDisplay(listOf(item("a", true), item("b", false)), listOf(item("a", false), item("b", true))))
+        assertEquals(false, sameForDisplay(listOf(item("a", true)), listOf(item("a", true, "changed"))))
+        assertEquals(false, sameForDisplay(listOf(item("a", true)), listOf(item("a", true), item("b", true))))
+        assertEquals(false, sameForDisplay(listOf(item("a", true), item("b", true)), listOf(item("b", true), item("a", true))))
+    }
 }
