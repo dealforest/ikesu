@@ -110,14 +110,17 @@ func (p *Pane) webLinksLocked(top, height, width int) []weblink.Span {
 
 	// Inspect whole soft-wrapped lines touching the viewport so a visible
 	// continuation still resolves to the complete URL.
+	// Stop at a bound so a program printing one huge wrapped line does not
+	// make every paint read that whole line under the pane lock.
+	lo, hi := linkScanBounds(first, last, e.Width())
 	start := first
-	for continued(start) {
+	for start > lo && continued(start) {
 		start--
 	}
 	var text []byte
 	for start < last {
 		stop := start + 1
-		for continued(stop) {
+		for stop < hi && continued(stop) {
 			stop++
 		}
 		text = text[:0]
@@ -177,6 +180,17 @@ func (p *Pane) webLinksLocked(top, height, width int) []weblink.Span {
 		start = stop
 	}
 	return append(explicit, plain...)
+}
+
+// maxLinkBytes is the longest URL a wrapped row outside the viewport can
+// contribute to; browsers and servers commonly reject longer ones.
+const maxLinkBytes = 4096
+
+// linkScanBounds returns the rows [lo, hi) a scan of [first, last) may read
+// while following wrapped continuations of a visible row.
+func linkScanBounds(first, last, cols int) (lo, hi int) {
+	extra := (maxLinkBytes+max(cols, 1)-1)/max(cols, 1) + 1
+	return first - extra, last + extra
 }
 
 // Preserve paired delimiters in URLs while trimming trailing prose punctuation.
