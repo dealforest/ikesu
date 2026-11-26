@@ -65,18 +65,22 @@ func (a *App) pluginLinkClick(pid int, m uv.Mouse) bool {
 	if a.pluginHost == nil || m.Button != uv.MouseLeft || !m.Mod.Contains(uv.ModCtrl) {
 		return false
 	}
-	r := a.innerRect(pid)
-	if !pointIn(m.X, m.Y, r) {
-		return false
-	}
 	p := a.sup.Get(pid)
 	if p == nil {
 		return false
 	}
+	view, ok := a.paintedPaneViews[pid]
+	if !ok {
+		view = a.livePaneViewport(p, a.innerRect(pid))
+	}
+	r := view.Inner
+	if !pointIn(m.X, m.Y, r) {
+		return false
+	}
 	x, y := m.X-r.X, m.Y-r.Y
 	lines := p.BufferLines()
-	row := viewTop(p, a.scroll[pid], r.H) + y
-	if row < 0 || row >= len(lines) || x < 0 || x >= len(lines[row]) {
+	row := view.BufferTop + y
+	if row < 0 || row >= len(lines) || x >= view.Cols || x >= len(lines[row]) {
 		return false
 	}
 	url := lines[row][x].Link.URL
