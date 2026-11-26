@@ -143,6 +143,10 @@ func has(a []string, s string) bool {
 	}
 	return false
 }
+
+// wranglerLocal lists wrangler subcommands that only work on this machine.
+var wranglerLocal = map[string]bool{"types": true, "--version": true, "-v": true, "--help": true, "-h": true}
+
 func arg(a []string, n int) string {
 	if n < len(a) {
 		return a[n]
@@ -289,6 +293,12 @@ func commandRules(c Config, i Input, cmd string, a []string) Verdict {
 	case "aws":
 		return awsAsk(i)
 	case "wrangler":
+		// These never leave the machine: types (and its --check) only reads the
+		// config and asks a workerd it starts on localhost; checked 2026-11-26
+		// under sandbox-exec with every non-loopback address blocked.
+		if wranglerLocal[arg(a, 0)] {
+			return allow
+		}
 		if has(defaults(c.WranglerAllow, []string{"r2 put"}), arg(a, 0)+" "+arg(a, 1)) {
 			return allow
 		}

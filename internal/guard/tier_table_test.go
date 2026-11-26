@@ -119,6 +119,13 @@ func TestTierTableL1(t *testing.T) {
 		allowLine(`rm -rf ./build`),
 		allowLine(`curl -X POST http://localhost:8787/x`),
 		allowLine(`npx wrangler d1 execute db --local --command "DROP TABLE x"`),
+		// wrangler types (and --check) only talks to a workerd on localhost.
+		allowLine(`wrangler types`),
+		allowLine(`wrangler types worker-configuration.d.ts --check`),
+		allowLine(`npx wrangler types worker-configuration.d.ts --check`),
+		allowLine(`bunx wrangler types --check`),
+		allowLine(`wrangler types worker-configuration.d.ts --check && tsrs --noEmit`),
+		allowLine(`wrangler --version`),
 	})
 }
 
