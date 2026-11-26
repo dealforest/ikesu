@@ -163,6 +163,13 @@ func isolatedRunPattern(pattern, parent, child string) string {
 }
 
 func TestMain(m *testing.M) {
+	if len(os.Args) == 5 && os.Args[1] == "--session" && os.Args[3] == "server" && os.Args[4] == "--handoff-import" {
+		code, err := RunHandoffImport(os.Args[2], "test-importer")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+		os.Exit(code)
+	}
 	if len(os.Args) == 2 && os.Args[1] == jobRunnerArg {
 		code, err := RunJobRunner()
 		if err != nil {

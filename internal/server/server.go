@@ -208,13 +208,15 @@ type Server struct {
 	lastAPINotification time.Time                    // last successfully shown explicit notification
 
 	// session persistence & restart (SPEC G3/G5)
-	ledgerMu      sync.Mutex
-	ledgerRowsMap map[int]dispatch.PaneSession
-	ledgerVersion map[int]uint64
-	ledgerQueue   []ledgerWrite
-	ledgerRunning bool
-	ledgerIdle    chan struct{}
-	ledgerWG      sync.WaitGroup
+	ledgerMu       sync.Mutex
+	ledgerRowsMap  map[int]dispatch.PaneSession
+	ledgerVersion  map[int]uint64
+	ledgerQueue    []ledgerWrite
+	ledgerRunning  bool
+	ledgerIdle     chan struct{}
+	ledgerWG       sync.WaitGroup
+	ledgerCancel   context.CancelFunc
+	ledgerGiveUpAt time.Time
 	// mailAckWG counts completeMailWrite goroutines (they open the session's
 	// database after the PTY write ends). Tests wait for it before removing
 	// the state folder; shutdown does not, since a stuck PTY write would hang it.
@@ -812,6 +814,15 @@ func runEndpointWithClock(session, version string, peer endpoint.Peer, clock gra
 }
 
 func (s *Server) cleanup() {
+	s.ledgerMu.Lock()
+	s.ledgerGiveUpAt = time.Now().Add(ledgerShutdownWait)
+	s.trace.Event("ledger.shutdown")
+	if s.ledgerCancel != nil {
+		timer := time.AfterFunc(time.Until(s.ledgerGiveUpAt), s.ledgerCancel)
+		defer timer.Stop()
+	}
+	s.ledgerMu.Unlock()
+
 	s.stopPluginWatcher()
 	defer s.trace.Close()
 	s.stopMailQueries()

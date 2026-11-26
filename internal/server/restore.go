@@ -8,6 +8,8 @@ package server
 // "--last", "resume --last", or a cwd/mtime-latest guess.
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -19,6 +21,7 @@ import (
 	"github.com/kazuph/ikesu/internal/runtime"
 	"github.com/kazuph/ikesu/internal/session"
 	"github.com/kazuph/ikesu/internal/tui"
+	sqlite3 "github.com/ncruces/go-sqlite3"
 )
 
 // resumeSubmitDelay separates typing the resume command from the Enter
@@ -134,8 +137,17 @@ type ledgerWrite struct {
 	generation uint64
 }
 
+var ledgerShutdownWait = 30 * time.Second
+
+const ledgerInitialBackoff = 50 * time.Millisecond
+
 func (s *Server) enqueueLedger(w ledgerWrite) {
 	s.ledgerMu.Lock()
+	if !s.ledgerGiveUpAt.IsZero() && !time.Now().Before(s.ledgerGiveUpAt) {
+		s.ledgerMu.Unlock()
+		logLedgerShutdownDrop(1)
+		return
+	}
 	if s.ledgerVersion == nil {
 		s.ledgerVersion = map[int]uint64{}
 	}
@@ -147,59 +159,167 @@ func (s *Server) enqueueLedger(w ledgerWrite) {
 		s.ledgerRunning = true
 		s.ledgerIdle = make(chan struct{})
 		s.ledgerWG.Add(1)
-		go s.runLedgerWrites()
+		ctx := context.Background()
+		if s.ledgerGiveUpAt.IsZero() {
+			ctx, s.ledgerCancel = context.WithCancel(ctx)
+		} else {
+			ctx, s.ledgerCancel = context.WithDeadline(ctx, s.ledgerGiveUpAt)
+		}
+		go s.runLedgerWrites(ctx, s.ledgerCancel)
 	}
 	s.ledgerMu.Unlock()
 }
 
-func (s *Server) runLedgerWrites() {
+func (s *Server) runLedgerWrites(ctx context.Context, cancel context.CancelFunc) {
 	defer s.ledgerWG.Done()
+	defer cancel()
 	var ledgerStore *dispatch.Store
 	defer func() {
 		if ledgerStore != nil {
 			ledgerStore.Close()
 		}
 	}()
+	_, dbErr := s.db()
+	backoff := ledgerInitialBackoff
 	for {
 		s.ledgerMu.Lock()
 		if len(s.ledgerQueue) == 0 {
-			s.ledgerRunning = false
-			close(s.ledgerIdle)
+			s.finishLedgerWritesLocked()
 			s.ledgerMu.Unlock()
 			return
 		}
 		w := s.ledgerQueue[0]
+		s.ledgerQueue[0] = ledgerWrite{}
 		s.ledgerQueue = s.ledgerQueue[1:]
 		s.ledgerMu.Unlock()
-		_, err := s.db()
-		if err == nil && ledgerStore == nil {
-			ledgerStore, err = dispatch.OpenLedger(dispatch.DBPath(s.session))
-		}
-		if err == nil {
-			if w.delete {
-				err = ledgerStore.DeletePaneSession(s.session, w.row.PaneID)
-			} else {
-				err = ledgerStore.PutPaneSession(w.row)
-			}
-		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "ikesu: save session ledger pane %d: %v\n", w.row.PaneID, err)
-			message := fmt.Sprintf("pane %d: %v", w.row.PaneID, err)
-			s.enqueueAppCleanup(func() { s.app.ShowToast("session ledger", message, "error", -1) })
+
+		if dbErr != nil {
+			s.reportLedgerWriteError(w, dbErr)
 			continue
 		}
-		s.ledgerMu.Lock()
-		if s.ledgerRowsMap == nil {
-			s.ledgerRowsMap = map[int]dispatch.PaneSession{}
-		}
-		if s.ledgerVersion[w.row.PaneID] == w.generation {
-			if w.delete {
-				delete(s.ledgerRowsMap, w.row.PaneID)
-			} else {
-				s.ledgerRowsMap[w.row.PaneID] = w.row
+
+		var retried bool
+		for {
+			s.ledgerMu.Lock()
+			giveUpAt := s.ledgerGiveUpAt
+			superseded := s.ledgerVersion[w.row.PaneID] != w.generation
+			s.ledgerMu.Unlock()
+			if retried && superseded {
+				break
 			}
+
+			// Only a BUSY from a fresh, no-wait attempt can discard the
+			// queue. The lock may have cleared during the last backoff.
+			finalAttempt := !giveUpAt.IsZero() && !time.Now().Before(giveUpAt)
+			if finalAttempt {
+				s.trace.Event("ledger.final_attempt", " pane=", w.row.PaneID)
+			}
+			var err error
+			ledgerStore, err = s.writeLedger(ledgerStore, w, giveUpAt)
+			if err == nil {
+				s.recordLedgerWrite(w)
+				backoff = ledgerInitialBackoff
+				break
+			}
+			if !errors.Is(err, sqlite3.BUSY) {
+				s.reportLedgerWriteError(w, err)
+				break
+			}
+
+			s.ledgerMu.Lock()
+			giveUpAt = s.ledgerGiveUpAt
+			if finalAttempt {
+				count := 1 + len(s.ledgerQueue)
+				s.finishLedgerWritesLocked()
+				s.ledgerMu.Unlock()
+				logLedgerShutdownDrop(count)
+				return
+			}
+			superseded = s.ledgerVersion[w.row.PaneID] != w.generation
+			s.ledgerMu.Unlock()
+			if superseded {
+				break
+			}
+			if !giveUpAt.IsZero() && !time.Now().Before(giveUpAt) {
+				retried = true
+				continue
+			}
+
+			s.trace.Event("ledger.retry", " pane=", w.row.PaneID, " stopping=", !giveUpAt.IsZero(), " backoff=", backoff)
+			if !retried {
+				message := fmt.Sprintf("pane %d: 会話の記録がほかのプロセスにロックされています。外れるまで書き込みを待ちます", w.row.PaneID)
+				fmt.Fprintf(os.Stderr, "ikesu: %s\n", message)
+				s.ledgerToast(message, "warning")
+				retried = true
+			}
+			timer := time.NewTimer(backoff)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+			}
+			backoff = min(2*backoff, time.Second)
 		}
-		s.ledgerMu.Unlock()
+	}
+}
+
+func (s *Server) finishLedgerWritesLocked() {
+	s.ledgerQueue = nil
+	s.ledgerRunning = false
+	s.ledgerCancel = nil
+	close(s.ledgerIdle)
+}
+
+func logLedgerShutdownDrop(count int) {
+	fmt.Fprintf(os.Stderr, "ikesu: session ledger shutdown deadline: dropped %d writes\n", count)
+}
+
+func (s *Server) writeLedger(store *dispatch.Store, w ledgerWrite, giveUpAt time.Time) (*dispatch.Store, error) {
+	if store == nil {
+		var err error
+		store, err = dispatch.OpenLedger(dispatch.DBPath(s.session))
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !giveUpAt.IsZero() {
+		// SQLite can block in the OS lock call. Limit each new attempt
+		// to the remaining budget as well as bounding the retry timer.
+		timeout := max(0, min(dispatch.LedgerBusyTimeout, time.Until(giveUpAt)))
+		if err := store.SetLedgerBusyTimeout(timeout); err != nil {
+			return store, err
+		}
+	}
+	if w.delete {
+		return store, store.DeletePaneSession(s.session, w.row.PaneID)
+	}
+	return store, store.PutPaneSession(w.row)
+}
+
+func (s *Server) recordLedgerWrite(w ledgerWrite) {
+	s.ledgerMu.Lock()
+	defer s.ledgerMu.Unlock()
+	if s.ledgerVersion[w.row.PaneID] != w.generation {
+		return
+	}
+	if w.delete {
+		delete(s.ledgerRowsMap, w.row.PaneID)
+		return
+	}
+	if s.ledgerRowsMap == nil {
+		s.ledgerRowsMap = map[int]dispatch.PaneSession{}
+	}
+	s.ledgerRowsMap[w.row.PaneID] = w.row
+}
+
+func (s *Server) reportLedgerWriteError(w ledgerWrite, err error) {
+	fmt.Fprintf(os.Stderr, "ikesu: save session ledger pane %d: %v\n", w.row.PaneID, err)
+	s.ledgerToast(fmt.Sprintf("pane %d: %v", w.row.PaneID, err), "error")
+}
+
+func (s *Server) ledgerToast(message, kind string) {
+	if app := s.app; app != nil {
+		s.enqueueAppCleanup(func() { app.ShowToast("session ledger", message, kind, -1) })
 	}
 }
 
