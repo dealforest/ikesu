@@ -25,6 +25,10 @@ type MachineHit struct {
 	Oyagoi        bool
 	OfflineOyagoi bool
 	OyagoiHeading bool
+	// Fold is the right list's ▾/▸ heading; a left click folds the machine.
+	Fold bool
+	// Rule is a right-list rule: it takes a row and swallows clicks.
+	Rule bool
 }
 
 type MachineSidebar struct {

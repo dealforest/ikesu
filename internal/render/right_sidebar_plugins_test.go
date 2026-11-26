@@ -19,7 +19,7 @@ func TestRightSidebarPluginReservesRowsForAgentsJobsAndKoi(t *testing.T) {
 		for range 40 {
 			in.Jobs = append(in.Jobs, JobRow{Label: "job-row"})
 		}
-		panel := &SidebarPanel{Sections: []SidebarPanelSection{{Key: "right/status.30s.sh", Title: "Right plugin"}}}
+		panel := &SidebarPanel{Rules: true, Sections: []SidebarPanelSection{{Key: "right/status.30s.sh", Title: "Right plugin"}}}
 		for range 30 {
 			panel.Sections[0].Lines = append(panel.Sections[0].Lines, SidebarPanelLine{Text: "\x1b[31mPlugin output\x1b[0m"})
 		}
@@ -144,7 +144,7 @@ func TestRightSidebarPluginGeometryAtNormalAndCompactWidths(t *testing.T) {
 		if compact {
 			in.State.RightSidebarMode, in.State.RightSidebarSize = "compact", 0
 		}
-		p := &SidebarPanel{Sections: []SidebarPanelSection{{Key: "probe", Title: "Probe", Lines: []SidebarPanelLine{{Text: "body"}}}}}
+		p := &SidebarPanel{Rules: true, Sections: []SidebarPanelSection{{Key: "probe", Title: "Probe", Lines: []SidebarPanelLine{{Text: "body"}}}}}
 		in.RightSidebarPanel = p
 		area := in.State.RightSidebarArea()
 		for _, machines := range []*MachineSidebar{nil, {Groups: []MachineGroup{{ID: "a", Input: &in}, {ID: "b", Input: &in}}}} {
@@ -178,7 +178,7 @@ func TestRightSidebarPluginGeometryAtNormalAndCompactWidths(t *testing.T) {
 func TestSidebarPluginANSIRejectsMalformedDecorationOnBothSides(t *testing.T) {
 	in := koiFixture(t, 0)
 	in.State.SidebarPanelRows = 4
-	p := &SidebarPanel{Sections: []SidebarPanelSection{{Key: "probe", Title: "Probe", Lines: []SidebarPanelLine{
+	p := &SidebarPanel{Rules: true, Sections: []SidebarPanelSection{{Key: "probe", Title: "Probe", Lines: []SidebarPanelLine{
 		{Text: "\x1bmA\x1b[?31mB\x1b[123\x1b[32mC\x1b[0mD\x1b["},
 	}}}}
 	in.SidebarPanel, in.RightSidebarPanel = p, p

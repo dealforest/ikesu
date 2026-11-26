@@ -142,3 +142,23 @@ func TestNarrowSidebarSingleMachineKeepsStandaloneCells(t *testing.T) {
 		}
 	}
 }
+
+// Only the ▾/▸ heading folds a machine; the approval lines under it keep
+// their own click (clear the approval and reconnect) and do not fold.
+func TestRightMachineApprovalLinesDoNotFold(t *testing.T) {
+	s := model.New(t.TempDir(), 160, 30)
+	in := Input{State: s}
+	m := MachineSidebar{Groups: []MachineGroup{{ID: "remote", Label: "remote", Status: "awaiting approval", Reason: "open the page"}}}
+	folds, headers := 0, 0
+	for _, row := range m.rightRows(in) {
+		if row.header {
+			headers++
+		}
+		if row.fold {
+			folds++
+		}
+	}
+	if folds != 1 || headers < 3 {
+		t.Fatalf("folds=%d headers=%d", folds, headers)
+	}
+}

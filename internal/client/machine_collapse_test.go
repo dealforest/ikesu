@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/kazuph/ikesu/internal/api"
+	"github.com/kazuph/ikesu/internal/layout"
 	"github.com/kazuph/ikesu/internal/render"
 )
 
@@ -246,22 +247,32 @@ func TestRightMachineHeaderClickFoldsAgentRows(t *testing.T) {
 	h := newRightMachineHarness(t)
 	m := h.m
 	h.modes(0, 0, 160, 35)
+	// rules are the drawn rule rows of the right list, found in the frame
+	// itself so a rule that is drawn but not registered is still clicked.
+	var rules []layout.Rect
 	read := func() (header render.MachineHit, rows map[string]int, frame *render.Frame) {
+		rules = rules[:0]
 		frame = render.ComposeClient(*m.endpoints[m.active].snapshot, &m.sidebar, "test", false).Frame
 		rows = map[string]int{}
 		for _, hit := range m.sidebar.Hits {
 			if !hit.Right {
 				continue
 			}
-			if hit.Header && hit.Machine == "remote" && frame.Cell(hit.Rect.X, hit.Rect.Y).Content != " " {
+			if hit.Fold && hit.Machine == "remote" {
 				header = hit
 			}
-			if !hit.Header {
+			if !hit.Header && !hit.Rule {
 				rows[hit.Machine]++
 			}
 		}
 		if header.Machine == "" {
 			t.Fatal("remote heading not drawn in the right list")
+		}
+		list := render.RightSidebarListRect(m.endpoints[m.active].snapshot.State, m.endpoints[m.active].snapshot.RightSidebarPanel)
+		for y := list.Y; y < list.Y+list.H; y++ {
+			if frame.Cell(list.X, y).Content == "─" && frame.Cell(list.X+list.W-1, y).Content == "─" {
+				rules = append(rules, layout.Rect{X: list.X, Y: y, W: list.W, H: 1})
+			}
 		}
 		return header, rows, frame
 	}
@@ -277,8 +288,36 @@ func TestRightMachineHeaderClickFoldsAgentRows(t *testing.T) {
 			t.Fatalf("no rule at y=%d next to the heading: %q", y, got)
 		}
 	}
+	// A rule takes a row but is not a target: the row at the same place in
+	// the server's own list (an agent or a job) must not get the click.
+	focused := m.endpoints[m.active].snapshot.State.FocusedPane()
+	sent := func() uint64 {
+		c := m.endpoints[m.active].connection
+		c.queueMu.Lock()
+		defer c.queueMu.Unlock()
+		return c.sentInput
+	}
+	sentBefore := sent()
+	for _, rule := range rules {
+		clickCell(t, h, rule.X+2, rule.Y)
+		if m.pending != nil || m.sidebar.RightCollapsed["remote"] || m.sidebar.RightCollapsed["local"] {
+			t.Fatalf("rule y=%d acted: pending=%+v folded=%+v", rule.Y, m.pending, m.sidebar.RightCollapsed)
+		}
+	}
+	if got := sent(); got != sentBefore {
+		t.Fatalf("rule clicks sent %d inputs to the server", got-sentBefore)
+	}
+	if got := m.endpoints[m.active].snapshot.State.FocusedPane(); got != focused {
+		t.Fatalf("rule click moved focus %d -> %d", focused, got)
+	}
 	clickCell(t, h, header.Rect.X+3, header.Rect.Y)
 	folded, after, frame := read()
+	// The pond starts below the folded machine's lower rule.
+	snap := *m.endpoints[m.active].snapshot
+	snap.Koi = true
+	if pond := render.KoiSceneFor(frame, snap, &m.sidebar).ClickPond; len(rules) == 0 || pond.H > 0 && pond.Y <= rules[len(rules)-1].Y {
+		t.Fatalf("pond %+v covers the last rule %+v", pond, rules)
+	}
 	if got := frame.Cell(folded.Rect.X, folded.Rect.Y).Content; got != "▸" {
 		t.Fatalf("folded glyph = %q", got)
 	}

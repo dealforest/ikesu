@@ -1,8 +1,6 @@
 package render
 
 import (
-	"strings"
-
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/kazuph/ikesu/internal/config"
@@ -29,6 +27,7 @@ type machineRightRow struct {
 	group  int
 	row    SidebarRow
 	header bool
+	fold   bool // the ▾/▸ heading, not an approval line under it
 	rule   bool
 	text   string
 }
@@ -43,11 +42,7 @@ func (m *MachineSidebar) rightRows(active Input) []machineRightRow {
 		if len(rows) == 0 || !rows[len(rows)-1].rule {
 			rows = append(rows, machineRightRow{group: gi, rule: true})
 		}
-		glyph := "▾ "
-		if m.RightCollapsed[group.ID] {
-			glyph = "▸ "
-		}
-		rows = append(rows, machineRightRow{group: gi, header: true, text: glyph + group.Label + ": " + group.Status}, machineRightRow{group: gi, rule: true})
+		rows = append(rows, machineRightRow{group: gi, header: true, fold: true, text: group.Label + ": " + group.Status}, machineRightRow{group: gi, rule: true})
 		if group.Reason != "" && (group.Status == "awaiting approval" || group.Status == "承認待ち。クリックで承認ページを開く") {
 			for _, text := range []string{group.Status, group.Reason} {
 				line, width := "", 0
@@ -95,20 +90,24 @@ func (m *MachineSidebar) drawRight(f *Frame, active Input) {
 		entry := rows[n+m.RightScroll]
 		group := m.Groups[entry.group]
 		y := area.Y + n
+		hit := MachineHit{Machine: group.ID, Row: entry.row, Header: entry.header, Fold: entry.fold, Rule: entry.rule, Right: true, Rect: layout.Rect{X: area.X, Y: y, W: area.W, H: 1}}
+		m.Hits = append(m.Hits, hit)
 		if entry.rule {
 			f.Fill(area.X, y, area.W, 1, "─", uv.Style{Fg: f.Palette.Dim, Bg: f.Palette.PopupBG})
 			continue
 		}
-		hit := MachineHit{Machine: group.ID, Row: entry.row, Header: entry.header, Right: true, Rect: layout.Rect{X: area.X, Y: y, W: area.W, H: 1}}
-		m.Hits = append(m.Hits, hit)
 		if entry.header {
 			if area.W <= 1 {
 				continue
 			}
-			if glyph, label, ok := strings.Cut(entry.text, " "); ok && (glyph == "▾" || glyph == "▸") {
+			if entry.fold {
 				// Drawn like the space list's machine headings.
+				glyph := "▾"
+				if m.RightCollapsed[group.ID] {
+					glyph = "▸"
+				}
 				f.Text(area.X, y, glyph, uv.Style{Fg: f.Palette.Accent, Bg: f.Palette.PopupBG}, area.X+area.W)
-				f.Text(area.X+2, y, truncate(label, max(0, area.W-2)), uv.Style{Fg: f.Palette.Dim, Bg: f.Palette.PopupBG, Attrs: uv.AttrBold}, area.X+area.W)
+				f.Text(area.X+2, y, truncate(entry.text, max(0, area.W-2)), uv.Style{Fg: f.Palette.Dim, Bg: f.Palette.PopupBG, Attrs: uv.AttrBold}, area.X+area.W)
 				continue
 			}
 			f.Text(area.X, y, entry.text, uv.Style{Fg: f.Palette.Text, Bg: f.Palette.PopupBG}, area.X+area.W)

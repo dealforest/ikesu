@@ -78,23 +78,39 @@ func TestRightSidebarPluginCapabilityKeepsLegacyBottomJobClickable(t *testing.T)
 	}
 
 	right := modern.lastInput.RightSidebarPanel
-	click(modern, render.RightSidebarPanelRect(modern.lastInput.State, right))
+	if !right.Rules {
+		t.Fatal("server did not agree on the ruled layout with a modern client")
+	}
+	heads := render.SidebarPanelHeadings(right, render.RightSidebarPanelRect(modern.lastInput.State, right))
+	if len(heads) != 1 {
+		t.Fatalf("modern headings = %+v", heads)
+	}
+	click(modern, heads[0].Rect)
 	folded := func(in render.Input) bool {
 		return in.RightSidebarPanel != nil && in.RightSidebarPanel.Sections[0].Collapsed
 	}
 	wait(modern, folded)
-	heading := render.RightSidebarPanelRect(modern.lastInput.State, modern.lastInput.RightSidebarPanel)
-	if heading.Y != rows-1 || heading.H != 1 {
-		t.Fatalf("modern collapsed heading = %+v", heading)
+	// Folded: the heading between its two rules takes the bottom three rows.
+	panelRect := render.RightSidebarPanelRect(modern.lastInput.State, modern.lastInput.RightSidebarPanel)
+	heads = render.SidebarPanelHeadings(modern.lastInput.RightSidebarPanel, panelRect)
+	if panelRect.Y != rows-3 || panelRect.H != 3 || len(heads) != 1 || heads[0].Rect.Y != rows-2 {
+		t.Fatalf("modern collapsed panel = %+v headings = %+v", panelRect, heads)
 	}
+	heading := heads[0].Rect
 	if old.lastInput.RightSidebarPanel != nil {
 		t.Fatal("server sent the right panel to a client without capability")
 	}
 	in := *old.lastInput
 	view := render.SidebarViewForInput(in)
-	last := view.Rows[len(view.Rows)-1]
-	if !last.Right || last.Row.Kind != render.RowJob || last.Y != heading.Y {
-		t.Fatalf("legacy bottom row = %+v, modern heading = %+v", last, heading)
+	// The legacy client has a job on the row where the modern heading sits.
+	var last render.SidebarPosition
+	for _, row := range view.Rows {
+		if row.Right && row.Y == heading.Y {
+			last = row
+		}
+	}
+	if !last.Right || last.Row.Kind != render.RowJob {
+		t.Fatalf("legacy row at y=%d = %+v", heading.Y, last)
 	}
 	want := "job log: " + in.Jobs[last.Row.Line].Label
 	click(old, heading)
@@ -105,5 +121,56 @@ func TestRightSidebarPluginCapabilityKeepsLegacyBottomJobClickable(t *testing.T)
 	wait(modern, func(in render.Input) bool { return in.State.Cols == 121 })
 	if !folded(*modern.lastInput) {
 		t.Fatal("legacy job click toggled modern plugin")
+	}
+}
+
+// A display from before the ruled plugin headings keeps the old layout: the
+// server neither sends the rules to it nor reads its clicks with them.
+func TestSidebarPanelRulesFollowEachDisplay(t *testing.T) {
+	if teststate.RunIsolatedParallel(t) {
+		return
+	}
+	teststate.Lock(t)
+	cfg := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(cfg, []byte("onboarding=false\n[session]\nresume_agents_on_restore=false\n[ui.sidebar_plugins]\nenabled=true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	pluginDir := filepath.Join(sidebarplugin.Dir(cfg), "right")
+	if err := os.MkdirAll(pluginDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "probe.30s.sh"), []byte("#!/bin/sh\nprintf 'plugin body\\n'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	teststate.Setenv(t, config.EnvVar, cfg)
+	dir, done := startTestServer(t)
+	defer stopServer(t, dir, done)
+
+	previous := dialClient(t, dir)
+	defer previous.conn.Close()
+	peer := endpoint.Current()
+	peer.Methods = slices.DeleteFunc(peer.Methods, func(method string) bool { return method == endpoint.SidebarPanelRules })
+	previous.send(t, clientMsg{Type: "hello", Peer: peer, Cols: 120, Rows: 18})
+	ready := func(in render.Input) bool {
+		p := in.RightSidebarPanel
+		return p != nil && len(p.Sections) == 1 && len(p.Sections[0].Lines) == 1
+	}
+	previous.readUntil(t, 5*time.Second, func(m clientMsg) bool {
+		return m.Type == "output" && previous.lastInput != nil && ready(*previous.lastInput)
+	})
+	p := previous.lastInput.RightSidebarPanel
+	r := render.RightSidebarPanelRect(previous.lastInput.State, p)
+	heads := render.SidebarPanelHeadings(p, r)
+	if p.Rules || r.H != 2 || len(heads) != 1 || heads[0].Rect.Y != r.Y {
+		t.Fatalf("previous display got rules=%t panel=%+v headings=%+v", p.Rules, r, heads)
+	}
+	// Its click on the old heading row folds the plugin on the server.
+	at := heads[0].Rect
+	previous.send(t, clientMsg{Type: "input", Data: encode64([]byte(fmt.Sprintf("\x1b[<0;%d;%dM\x1b[<0;%d;%dm", at.X+2, at.Y+1, at.X+2, at.Y+1)))})
+	previous.readUntil(t, 5*time.Second, func(m clientMsg) bool {
+		return m.Type == "output" && previous.lastInput != nil && previous.lastInput.RightSidebarPanel != nil && previous.lastInput.RightSidebarPanel.Sections[0].Collapsed
+	})
+	if !previous.lastInput.RightSidebarPanel.Sections[0].Collapsed {
+		t.Fatal("old heading click did not fold the plugin")
 	}
 }

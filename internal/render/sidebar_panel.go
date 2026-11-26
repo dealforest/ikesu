@@ -16,6 +16,9 @@ import (
 // per plugin and its output. Click a heading to fold its section.
 type SidebarPanel struct {
 	Sections []SidebarPanelSection
+	// Rules puts each heading between two rules. The server sets it only for
+	// a display that knows this layout, so clicks match on both ends.
+	Rules bool `json:",omitempty"`
 }
 
 // SidebarPanelSection is one foldable section.
@@ -58,10 +61,13 @@ type sidebarPanelRow struct {
 func sidebarPanelRowList(p *SidebarPanel) []sidebarPanelRow {
 	var rows []sidebarPanelRow
 	for i, sec := range p.Sections {
-		if len(rows) == 0 || !rows[len(rows)-1].rule {
+		if p.Rules && (len(rows) == 0 || !rows[len(rows)-1].rule) {
 			rows = append(rows, sidebarPanelRow{section: i, rule: true})
 		}
-		rows = append(rows, sidebarPanelRow{section: i, heading: true}, sidebarPanelRow{section: i, rule: true})
+		rows = append(rows, sidebarPanelRow{section: i, heading: true})
+		if p.Rules {
+			rows = append(rows, sidebarPanelRow{section: i, rule: true})
+		}
 		if sec.Collapsed {
 			continue
 		}
@@ -70,6 +76,16 @@ func sidebarPanelRowList(p *SidebarPanel) []sidebarPanelRow {
 		}
 	}
 	return rows
+}
+
+// sidebarPanelVisibleRows is what fits in height rows. When only one or two
+// rows fit, the first heading comes before its upper rule.
+func sidebarPanelVisibleRows(p *SidebarPanel, height int) []sidebarPanelRow {
+	rows := sidebarPanelRowList(p)
+	if height < len(rows) && height <= 2 && len(rows) > 0 && rows[0].rule {
+		rows = rows[1:]
+	}
+	return rows[:min(len(rows), max(0, height))]
 }
 
 // SidebarPanelHeading is a clickable heading row.
@@ -110,10 +126,7 @@ func SidebarPanelHeadings(p *SidebarPanel, r layout.Rect) []SidebarPanelHeading 
 		return nil
 	}
 	var out []SidebarPanelHeading
-	for i, row := range sidebarPanelRowList(p) {
-		if i >= r.H {
-			break
-		}
+	for i, row := range sidebarPanelVisibleRows(p, r.H) {
 		if row.heading {
 			out = append(out, SidebarPanelHeading{Key: p.Sections[row.section].Key, Rect: layout.Rect{X: r.X, Y: r.Y + i, W: r.W, H: 1}})
 		}
@@ -131,10 +144,7 @@ func drawSidebarPanelAt(f *Frame, p *SidebarPanel, r layout.Rect) {
 	}
 	x, w := r.X, r.W
 	f.Fill(x, r.Y, w, r.H, " ", uv.Style{})
-	for i, row := range sidebarPanelRowList(p) {
-		if i >= r.H {
-			return
-		}
+	for i, row := range sidebarPanelVisibleRows(p, r.H) {
 		y, sec := r.Y+i, p.Sections[row.section]
 		switch {
 		case row.rule:

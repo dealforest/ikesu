@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/kazuph/ikesu/internal/layout"
 	"github.com/kazuph/ikesu/internal/model"
 )
 
@@ -16,7 +17,7 @@ func TestSidebarPanelDrawsPluginLinesWithColorsAboveFooter(t *testing.T) {
 	panel := &SidebarPanel{Sections: []SidebarPanelSection{
 		{Key: "usage.30s.sh", Title: "usage", Lines: []SidebarPanelLine{{Text: "CC W  \x1b[38;2;229;72;77m██\x1b[0m│ 40%"}, {Text: "CX W  ----"}}},
 		{Key: "tenki.1h.sh", Title: "tenki", Lines: []SidebarPanelLine{{Text: "sunny 18C"}}},
-	}}
+	}, Rules: true}
 	area := s.SidebarArea()
 	s.SidebarPanelRows = SidebarPanelRows(panel, area.H-5)
 	if s.SidebarPanelRows != 9 { // rule, heading, rule, then lines, per section
@@ -59,6 +60,36 @@ func TestSidebarPanelDrawsPluginLinesWithColorsAboveFooter(t *testing.T) {
 	// A folded section shares its lower rule with the next heading.
 	if got := SidebarPanelRows(panel, area.H-5); got != 6 {
 		t.Fatalf("collapsed rows = %d", got)
+	}
+	// A display without the rules keeps the old layout, so both ends agree.
+	panel.Rules = false
+	if got := SidebarPanelRows(panel, area.H-5); got != 3 {
+		t.Fatalf("legacy collapsed rows = %d", got)
+	}
+	panel.Sections[0].Collapsed = false
+	s.SidebarPanelRows = SidebarPanelRows(panel, area.H-5)
+	if heads := SidebarPanelLayout(s, panel); s.SidebarPanelRows != 5 || len(heads) != 2 || heads[0].Rect.Y != fr.Y-5 || heads[1].Rect.Y != fr.Y-2 {
+		t.Fatalf("legacy rows=%d headings=%+v", s.SidebarPanelRows, heads)
+	}
+}
+
+// When only one or two rows fit, the first heading stays on screen and clickable.
+func TestSidebarPanelKeepsHeadingInTinyHeights(t *testing.T) {
+	panel := &SidebarPanel{Rules: true, Sections: []SidebarPanelSection{{Key: "a", Title: "Alpha", Lines: []SidebarPanelLine{{Text: "body"}}}}}
+	for _, h := range []int{1, 2, 3} {
+		f := NewFrame(40, 10)
+		r := layout.Rect{X: 0, Y: 2, W: 30, H: h}
+		drawSidebarPanelAt(f, panel, r)
+		heads := SidebarPanelHeadings(panel, r)
+		if len(heads) != 1 {
+			t.Fatalf("height %d: headings = %+v", h, heads)
+		}
+		if line := frameLine(f, heads[0].Rect.Y); !strings.Contains(line, "Alpha") {
+			t.Fatalf("height %d: heading row %d = %q", h, heads[0].Rect.Y, line)
+		}
+		if want := map[int]int{1: 2, 2: 2, 3: 3}[h]; heads[0].Rect.Y != want {
+			t.Fatalf("height %d: heading at %d, want %d", h, heads[0].Rect.Y, want)
+		}
 	}
 }
 

@@ -27,6 +27,7 @@ type Viewer struct {
 	display             displayState
 	legacySidebarRows   bool
 	rightSidebarPlugins bool
+	panelRules          bool
 	copyText            func(string, error)
 }
 
@@ -36,6 +37,11 @@ func (v *Viewer) SetContinuousSidebarRows(supported bool) {
 
 func (v *Viewer) SetRightSidebarPlugins(supported bool) {
 	v.rightSidebarPlugins = supported
+}
+
+// SetSidebarPanelRules picks the plugin layout both ends draw and hit-test.
+func (v *Viewer) SetSidebarPanelRules(supported bool) {
+	v.panelRules = supported
 }
 
 type viewSelection struct {

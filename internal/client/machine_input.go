@@ -335,6 +335,11 @@ func (m *machineClient) input(event input.Event) error {
 					}
 					return nil
 				}
+				if hit.Rule {
+					// A rule only takes a row; the row under it on the server is not this.
+					m.suppressRelease = event.Kind == input.KindMouseClick
+					return nil
+				}
 				if hit.Right && !hit.Header {
 					return m.rightMachineInput(hit, event)
 				}
@@ -352,7 +357,7 @@ func (m *machineClient) input(event input.Event) error {
 				if hit.Header && event.Kind == input.KindMouseClick {
 					// A ▾/▸ header folds that machine's rows: space rows on the left,
 					// agent or job rows on the right.
-					toggled := event.Mouse.Button == uv.MouseLeft
+					toggled := (!hit.Right || hit.Fold) && event.Mouse.Button == uv.MouseLeft
 					if toggled {
 						folded := &m.sidebar.Collapsed
 						if hit.Right {
