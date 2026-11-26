@@ -348,7 +348,7 @@ async function pauseLocalConfirmation(t) {
 
 test('B21 確定中の Ctrl+C は端末登録と paired の通知を待ってから終了する', async t => {
   const { f, term, app, marker } = await pauseLocalConfirmation(t);
-  term.kill('SIGINT');
+  term.terminal.write('\x03');
   await until(() => {
     assert.equal(term.exited, false, '確定中の最初の SIGINT で CLI が終了した');
     return term.output.includes('登録の処理が終わるまで待っています');
@@ -366,7 +366,7 @@ test('B21 確定中の Ctrl+C は端末登録と paired の通知を待ってか
 
 test('B22 確定中の2回目の Ctrl+C は確定を待たずにロックを解放する', async t => {
   const { f, term, marker } = await pauseLocalConfirmation(t);
-  term.kill('SIGINT');
+  term.terminal.write('\x03');
   await until(() => term.output.includes('登録の処理が終わるまで待っています'));
   assert.equal(term.exited, false);
   term.kill('SIGINT');
@@ -377,7 +377,7 @@ test('B22 確定中の2回目の Ctrl+C は確定を待たずにロックを解�
   await assert.rejects(fs.stat(f.lockPath), { code: 'ENOENT' });
 });
 
-async function startWaitingPairControl(t, f, ttl) {
+async function startWaitingPairControl(t, f, ttl, { answerCancel = true } = {}) {
   const { publicKey } = await loadNoiseKey(f.configDir);
   const requests = [];
   const sockets = new Set();
@@ -393,7 +393,7 @@ async function startWaitingPairControl(t, f, ttl) {
         const pairing = new Pairing({ relay: f.relay, bridgePublic: publicKey, name: request.name, permissions: request.permissions, ttl });
         socket.write(`${JSON.stringify({ ok: true, qr: pairing.qr() })}\n`);
       }
-      if (request.op === 'pair_cancel') socket.write('{"ok":true}\n');
+      if (request.op === 'pair_cancel' && answerCancel) socket.write('{"ok":true}\n');
     });
   });
   server.listen(path.join(f.stateDir, 'pair.sock'));
@@ -431,4 +431,42 @@ test('B24 6桁の入力待ちは制御ソケットの切断で終了しロック
   assert.match(term.output, /常駐の bridge との接続が切れました/);
   assert.deepEqual(control.requests, ['pair_start']);
   await assert.rejects(fs.stat(f.lockPath), { code: 'ENOENT' });
+});
+
+test('B25 期限切れの後、常駐の bridge が pair_cancel に答えなくても、ロックを解放して終わる', async t => {
+  const f = await fixture(t);
+  const control = await startWaitingPairControl(t, f, 2, { answerCancel: false });
+  const term = f.open();
+  await until(() => term.output.includes('6桁:'));
+
+  await until(() => term.exited, 6000);
+  assert.equal((await term.result).exitCode, 1);
+  assert.match(term.output, /この QR の期限が切れました/);
+  assert.deepEqual(control.requests, ['pair_start', 'pair_cancel']);
+  await assert.rejects(fs.stat(f.lockPath), { code: 'ENOENT' });
+});
+
+test('B26 6桁を受け付けた後で QR の期限が来ても、確定を最後まで進めて paired を送る', async t => {
+  const f = await fixture(t);
+  let pairing;
+  const hub = await f.startDaemon({
+    async loadDevices(dir) {
+      const devices = await loadDevices(dir);
+      // Hold the reload that follows saving the device until the QR has expired.
+      if (devices.length && pairing) await until(() => Date.now() > pairing.exp * 1000 + 300, 5000);
+      return devices;
+    },
+  });
+  pairing = hub.startPairing({ name: 'pair-test', permissions: ['notify'], ttl: 1 });
+  const app = new FakeApp(f.relay, 'pair', pairing.id, hub.noiseKey.publicKey);
+  assert.ok(await app.handshake());
+  app.sendJson(app.pairMessage(pairing.secret));
+  await until(() => pairing.candidates.length === 1);
+
+  const device = await hub.confirmPairing(app.sas(pairing.secret));
+  assert.ok(device, '期限をまたいだ確定が失敗した');
+  const paired = await app.recv(message => message.type === 'paired');
+  assert.equal(paired.device, device.device);
+  assert.deepEqual((await loadDevices(f.configDir)).map(item => item.device), [device.device]);
+  assert.equal(hub.pairing, null);
 });

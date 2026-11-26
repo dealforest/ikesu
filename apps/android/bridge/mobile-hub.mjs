@@ -356,12 +356,15 @@ export class MobileHub {
   onReset() { for (const session of [...this.sessions.values()]) session.close(); }
   publish() { for (const session of this.sessions.values()) if (session.role === 'app' && session.ready) { void session.sendNotice(); if (session.operating) void session.sendSnapshot().catch(() => session.close()); } }
   clientCount() { let count = 0; for (const session of this.sessions.values()) if (session.role === 'app' && session.ready) count++; return count; }
-  startPairing({ name, permissions }) {
+  startPairing({ name, permissions, ttl }) {
     this.pairing?.close();
-    this.pairing = new Pairing({ relay: this.relay, bridgePublic: this.noiseKey.publicKey, name, permissions, now: this.now });
+    this.pairing = new Pairing({ relay: this.relay, bridgePublic: this.noiseKey.publicKey, name, permissions, now: this.now, ...(ttl === undefined ? {} : { ttl }) });
     clearTimeout(this.pairingTimer);
     const pairing = this.pairing;
-    this.pairingTimer = setTimeout(() => { if (this.pairing === pairing) this.closePairing(); }, Math.max(0, pairing.exp * 1000 - this.now()) + 50);
+    // At expiry, stop taking new candidates but keep the one whose code was
+    // already accepted: confirmPairing owns that connection until it has sent
+    // paired or rolled the device back.
+    this.pairingTimer = setTimeout(() => { if (this.pairing === pairing) this.closePairing(this.confirmingSession ?? undefined); }, Math.max(0, pairing.exp * 1000 - this.now()) + 50);
     this.pairingTimer.unref?.();
     return pairing;
   }
@@ -371,23 +374,29 @@ export class MobileHub {
     const pairing = this.pairing;
     const candidate = pairing?.confirm(code);
     if (!candidate) { if (pairing && !pairing.active) { this.closePairing(); } return null; }
-    const device = { device: b64u(randomBytes(16)), noise_pub: b64u(candidate.noisePublic), operate_pub: candidate.operate, name: candidate.name,
-      permissions: pairing.permissions, created: new Date(this.now()).toISOString() };
-    await addDevice(this.configDir, device);
-    await this.reloadDevices();
     const session = candidate.session;
-    if (session.closed || !this.devices.some(current => current.device === device.device)) {
-      return this.rollback(device, '登録を反映できませんでした');
+    this.confirmingSession = session;
+    try {
+      const device = { device: b64u(randomBytes(16)), noise_pub: b64u(candidate.noisePublic), operate_pub: candidate.operate, name: candidate.name,
+        permissions: pairing.permissions, created: new Date(this.now()).toISOString() };
+      await addDevice(this.configDir, device);
+      await this.reloadDevices();
+      if (session.closed || !this.devices.some(current => current.device === device.device)) {
+        session.close();
+        return this.rollback(device, '登録を反映できませんでした');
+      }
+      const sent = session.send({ type: 'paired', device: device.device, tag: this.appTag(Buffer.from(device.device, 'base64url')), name: pairing.name, permissions: pairing.permissions });
+      if (sent === false) {
+        session.close();
+        return this.rollback(device, '登録の知らせをスマホへ送れませんでした');
+      }
+      session.paired = true;
+      if (this.pairing === pairing) this.closePairing(session);
+      const linger = setTimeout(() => session.close(), 10_000); linger.unref?.();
+      return device;
+    } finally {
+      if (this.confirmingSession === session) this.confirmingSession = null;
     }
-    const sent = session.send({ type: 'paired', device: device.device, tag: this.appTag(Buffer.from(device.device, 'base64url')), name: pairing.name, permissions: pairing.permissions });
-    if (sent === false) {
-      session.close();
-      return this.rollback(device, '登録の知らせをスマホへ送れませんでした');
-    }
-    session.paired = true;
-    if (this.pairing === pairing) this.closePairing(session);
-    const linger = setTimeout(() => session.close(), 10_000); linger.unref?.();
-    return device;
   }
   async rollback(device, reason) {
     const id = device.device;

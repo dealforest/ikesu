@@ -307,7 +307,13 @@ async function pair() {
     clearTimeout(expiryTimer);
     try {
       prompt?.close();
-      if (pairingStarted) await session.cancel().catch(() => {});
+      // A hung bridge may never answer pair_cancel; give it a moment, then go on
+      // so the socket is closed and pair.lock is released anyway.
+      if (pairingStarted) {
+        let timer;
+        await Promise.race([session.cancel().catch(() => {}), new Promise(resolve => { timer = setTimeout(resolve, 1000); })]);
+        clearTimeout(timer);
+      }
       session?.close();
       await mobile?.stop();
     } finally {
