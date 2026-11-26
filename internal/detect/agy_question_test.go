@@ -25,6 +25,24 @@ func TestAgyQuestionDetection(t *testing.T) {
 	}
 }
 
+// 1問だけの質問（agy 1.5.17・1.5.18、2026-11-26 に実物で確認）は Next が無い。下に使用量の行が続いても待ちにする。
+func TestAgySingleQuestionDetection(t *testing.T) {
+	b, err := os.ReadFile("../screenprompt/testdata/agy-question-single.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen := string(b)
+	quota := "Gemini 5h 3% (2h31m) · wk 6% (6d16h) │ Claude/GPT 5h 0% (<1m) · wk 50% (1d22h)\n"
+	for name, s := range map[string]string{"plain": screen, "with quota": strings.TrimRight(screen, "\n") + "\n" + quota} {
+		if d := Detect("agy", Input{Screen: s}); d.State != Blocked || d.RuleID != "question_prompt" {
+			t.Fatalf("%s: %+v", name, d)
+		}
+	}
+	if d := Detect("agy", Input{Screen: strings.Replace(screen, "esc Skip", "", 1)}); d.RuleID == "question_prompt" {
+		t.Fatalf("false question: %+v", d)
+	}
+}
+
 func TestAgyIdleAndActivePriority(t *testing.T) {
 	idle := "──────────\n>\n──────────\n? for shortcuts                         auto · Gemini 4 Neon · medium\n"
 	d := Detect("agy", Input{Screen: idle})

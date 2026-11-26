@@ -66,7 +66,7 @@ func parseAgy(screen []string) *Prompt {
 			editor = true
 			continue
 		}
-		if agyFooter(trim, index == total) {
+		if agyFooter(trim, index == total) || total == 1 && agySingleFooter(trim) {
 			footer = agyview.Tail(screen[start+1+rowIndex+1:])
 			break
 		}
@@ -104,6 +104,13 @@ func parseAgy(screen []string) *Prompt {
 	}
 	presentQuestion(p)
 	return p
+}
+
+// A lone question (1/1, observed in agy 1.5.17 on 2026-11-26) has no Next and no
+// Submit: "↑/↓ Navigate · enter Select · esc Skip", and enter answers it.
+func agySingleFooter(line string) bool {
+	return strings.Contains(line, "↑/↓ Navigate") && !strings.Contains(line, "→ Next") && !strings.Contains(line, "Toggle") &&
+		(strings.Contains(line, "enter Select") || strings.Contains(line, "enter Write-in")) && strings.Contains(line, "esc Skip")
 }
 
 // The final question submits its answer directly; no separate submit key is sent.
