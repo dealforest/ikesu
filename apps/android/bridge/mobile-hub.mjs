@@ -396,6 +396,9 @@ export class MobileHub {
       return device;
     } finally {
       if (this.confirmingSession === session) this.confirmingSession = null;
+      // Expiry leaves this connection to us; close it on every path that did
+      // not send paired, including a save that threw.
+      if (!session.paired) session.close();
     }
   }
   async rollback(device, reason) {

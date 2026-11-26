@@ -448,25 +448,54 @@ test('B25 期限切れの後、常駐の bridge が pair_cancel に答えなく�
 
 test('B26 6桁を受け付けた後で QR の期限が来ても、確定を最後まで進めて paired を送る', async t => {
   const f = await fixture(t);
-  let pairing;
-  const hub = await f.startDaemon({
+  let pairing, hub, candidateSession, candidateOpenAtExpiry;
+  hub = await f.startDaemon({
     async loadDevices(dir) {
       const devices = await loadDevices(dir);
-      // Hold the reload that follows saving the device until the QR has expired.
-      if (devices.length && pairing) await until(() => Date.now() > pairing.exp * 1000 + 300, 5000);
+      // Hold the reload that follows saving the device until the hub's own
+      // expiry has run, then record whether the accepted candidate survived it.
+      if (devices.length && candidateSession) {
+        await until(() => hub.pairing === null, 5000);
+        candidateOpenAtExpiry = !candidateSession.closed;
+      }
       return devices;
     },
   });
-  pairing = hub.startPairing({ name: 'pair-test', permissions: ['notify'], ttl: 1 });
+  // exp is whole seconds, so 2 leaves at least 1 second to accept the code.
+  pairing = hub.startPairing({ name: 'pair-test', permissions: ['notify'], ttl: 2 });
   const app = new FakeApp(f.relay, 'pair', pairing.id, hub.noiseKey.publicKey);
   assert.ok(await app.handshake());
   app.sendJson(app.pairMessage(pairing.secret));
   await until(() => pairing.candidates.length === 1);
 
+  candidateSession = pairing.candidates[0].session;
   const device = await hub.confirmPairing(app.sas(pairing.secret));
+  assert.equal(candidateOpenAtExpiry, true, '期限の処理が、受け付けた候補の接続を閉じた');
   assert.ok(device, '期限をまたいだ確定が失敗した');
   const paired = await app.recv(message => message.type === 'paired');
   assert.equal(paired.device, device.device);
   assert.deepEqual((await loadDevices(f.configDir)).map(item => item.device), [device.device]);
   assert.equal(hub.pairing, null);
+});
+
+test('B27 確定の保存が例外で終わったら、受け付けた候補の接続をすぐ閉じる', async t => {
+  const f = await fixture(t);
+  const hub = await f.startDaemon();
+  const pairing = hub.startPairing({ name: 'pair-test', permissions: ['notify'] });
+  const app = new FakeApp(f.relay, 'pair', pairing.id, hub.noiseKey.publicKey);
+  assert.ok(await app.handshake());
+  app.sendJson(app.pairMessage(pairing.secret));
+  await until(() => pairing.candidates.length === 1);
+  const session = pairing.candidates[0].session;
+
+  // A read-only config folder makes saving the device fail with EACCES.
+  await fs.chmod(f.configDir, 0o500);
+  try {
+    await assert.rejects(hub.confirmPairing(app.sas(pairing.secret)), { code: 'EACCES' });
+  } finally {
+    await fs.chmod(f.configDir, 0o700);
+  }
+  assert.equal(session.closed, true);
+  await until(() => app.conn.closed);
+  assert.deepEqual(await loadDevices(f.configDir), []);
 });
