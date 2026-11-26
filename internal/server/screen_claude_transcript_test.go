@@ -175,3 +175,29 @@ func TestTruncatedScreenQuestionStillMatchesTranscript(t *testing.T) {
 		t.Fatalf("presentation = %q", got.Title)
 	}
 }
+
+// 画面に質問の最後の段落しか見えないと、題は取り込めなかった旨の文だけになり、見えた部分は本文へ入る。
+// それでも会話記録の質問と照合でき、スマホには全文が出る（2026-11-26 に題が案内文だけで届いた）。
+func TestTruncatedQuestionWithOnlyTheNoticeAsTitleMatchesTranscript(t *testing.T) {
+	body := screenprompt.TruncatedNotice + "\n\nだと聞かれ、外の大事なフォルダは聞かれずに動く。\n\nあーしの推奨は「外も聞く」。"
+	desc := "ワークツリーの中・/tmp ・.artifacts は聞かない"
+	p := &screenprompt.Prompt{Truncated: true, Params: api.DecisionCreateParams{Kind: "agent_prompt", Title: screenprompt.TruncatedNotice, Body: &body,
+		Options: []api.DecisionOption{{ID: "1", Label: "外も聞く（推奨）", Description: &desc}, {ID: "2", Label: "中だけ緩める"}}}}
+	q := session.ClaudeQuestion{Question: "mv を rm と同じ決まりにする？\n\n今の mv: ワークツリーの中でも bak だと聞かれ、外の大事なフォルダは聞かれずに動く。\n\nあーしの推奨は「外も聞く」。",
+		Options: []session.ClaudeQuestionOption{{Label: "外も聞く（推奨）", Description: "ワークツリーの中・/tmp・.artifacts は聞かない"}, {Label: "中だけ緩める"}}}
+	if !matchClaudeQuestion(p, q) {
+		t.Fatal("a question whose visible part is only in the body did not match its transcript question")
+	}
+	// The visible tail must still belong to the question: a different question does not match.
+	other := q
+	other.Question = "別の質問。あーしの推奨は「中だけ」。"
+	if matchClaudeQuestion(p, other) {
+		t.Fatal("matched a transcript question that does not contain the visible tail")
+	}
+	// A title that is only the notice with nothing visible below it is not enough to match.
+	empty := screenprompt.TruncatedNotice
+	bare := &screenprompt.Prompt{Truncated: true, Params: api.DecisionCreateParams{Kind: "agent_prompt", Title: screenprompt.TruncatedNotice, Body: &empty, Options: p.Params.Options}}
+	if matchClaudeQuestion(bare, q) {
+		t.Fatal("matched with no visible question text")
+	}
+}

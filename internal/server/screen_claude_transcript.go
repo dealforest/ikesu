@@ -38,15 +38,23 @@ func matchClaudeQuestion(p *screenprompt.Prompt, q session.ClaudeQuestion) bool 
 	if p.Total > 0 && (p.Question != q.Index || p.Total <= q.Index) {
 		return false
 	}
-	screenTitle := compactQuestion(strings.TrimPrefix(p.Params.Title, screenprompt.TruncatedNotice))
-	if screenTitle == "" || !strings.Contains(compactQuestion(q.Question), screenTitle) {
+	// A truncated question carries the notice at its head. When the screen showed only the tail,
+	// the notice alone becomes the title and the visible tail moves to the body: match on that tail.
+	strip := func(s string) string { return compactQuestion(strings.TrimPrefix(s, screenprompt.TruncatedNotice)) }
+	whole := compactQuestion(q.Question)
+	screenTitle := strip(p.Params.Title)
+	body := ""
+	if p.Params.Body != nil && (p.Params.QuestionLabel == nil || *p.Params.Body != *p.Params.QuestionLabel) {
+		body = strip(*p.Params.Body)
+	}
+	if screenTitle == "" && (!p.Truncated && !strings.HasPrefix(p.Params.Title, screenprompt.TruncatedNotice) || body == "") {
 		return false
 	}
-	if p.Params.Body != nil && (p.Params.QuestionLabel == nil || *p.Params.Body != *p.Params.QuestionLabel) {
-		body := compactQuestion(*p.Params.Body)
-		if body != "" && !strings.Contains(compactQuestion(q.Question), body) {
-			return false
-		}
+	if screenTitle != "" && !strings.Contains(whole, screenTitle) {
+		return false
+	}
+	if body != "" && !strings.Contains(whole, body) {
+		return false
 	}
 	for i, option := range p.Params.Options {
 		label := compactQuestion(option.Label)
