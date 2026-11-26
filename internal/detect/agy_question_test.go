@@ -25,6 +25,46 @@ func TestAgyQuestionDetection(t *testing.T) {
 	}
 }
 
+// 1問だけの質問（agy 1.5.17・1.5.18、2026-11-26 に実物で確認）は Next が無い。下に使用量の行が続いても待ちにする。
+func TestAgySingleQuestionDetection(t *testing.T) {
+	b, err := os.ReadFile("../screenprompt/testdata/agy-question-single.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen := string(b)
+	quota := "Gemini 5h 3% (2h31m) · wk 6% (6d16h) │ Claude/GPT 5h 0% (<1m) · wk 50% (1d22h)\n"
+	for name, s := range map[string]string{"plain": screen, "with quota": strings.TrimRight(screen, "\n") + "\n" + quota} {
+		if d := Detect("agy", Input{Screen: s}); d.State != Blocked || d.RuleID != "question_prompt" {
+			t.Fatalf("%s: %+v", name, d)
+		}
+	}
+	if d := Detect("agy", Input{Screen: strings.Replace(screen, "esc Skip", "", 1)}); d.RuleID == "question_prompt" {
+		t.Fatalf("false question: %+v", d)
+	}
+	// The short footer waits only under 1/1, the same rule the reader uses: 1/2 and 2/2 with it
+	// are neither waiting nor answerable.
+	for _, header := range []string{"Question 1/2:", "Question 2/2:"} {
+		s := strings.Replace(screen, "Question 1/1:", header, 1)
+		if d := Detect("agy", Input{Screen: s}); d.RuleID == "question_prompt" {
+			t.Fatalf("%s with the short footer detected as waiting: %+v", header, d)
+		}
+	}
+	// On the Write-in row the footer reads "enter Write-in · esc Skip" for the last question of any set:
+	// detection and the reader agree on 1/1 and 2/2 (the reader's own check is in screenprompt).
+	for _, header := range []string{"Question 1/1:", "Question 2/2:"} {
+		s := strings.Replace(screen, "Question 1/1:", header, 1)
+		s = strings.Replace(strings.Replace(s, "> 1.", "  1.", 1), "  4. Write-in", "> 4. Write-in", 1)
+		s = strings.Replace(s, "enter Select", "enter Write-in", 1)
+		if d := Detect("agy", Input{Screen: s}); d.State != Blocked || d.RuleID != "question_prompt" {
+			t.Fatalf("%s on Write-in not waiting: %+v", header, d)
+		}
+	}
+	// Ordinary output under the status row ends the question.
+	if d := Detect("agy", Input{Screen: strings.TrimRight(screen, "\n") + "\nGemini finished\n"}); d.RuleID == "question_prompt" {
+		t.Fatalf("old question kept after output: %+v", d)
+	}
+}
+
 func TestAgyIdleAndActivePriority(t *testing.T) {
 	idle := "──────────\n>\n──────────\n? for shortcuts                         auto · Gemini 4 Neon · medium\n"
 	d := Detect("agy", Input{Screen: idle})
