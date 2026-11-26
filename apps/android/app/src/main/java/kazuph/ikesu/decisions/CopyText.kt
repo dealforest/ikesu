@@ -29,18 +29,23 @@ object CopyText {
         val shared = lines.filter { it.isNotBlank() }.minOfOrNull { indentOf(it) } ?: 0
         val out = StringBuilder()
         var previous: String? = null
+        var inFence = false
         for (raw in lines) {
             val line = if (raw.isBlank()) "" else raw.substring(minOf(shared, raw.length))
             val prev = previous
-            if (prev != null && wrapped(prev, raw, width)) {
+            val fence = raw.trimStart().startsWith("```")
+            // Inside a code fence every row stays as it is.
+            if (prev != null && !inFence && !fence && wrapped(prev, raw, width)) {
                 val body = line.trimStart()
-                val last = prev.trimEnd().lastOrNull()
-                if (last != null && joinSpace(prev, body)) out.append(' ')
+                // The line built so far, not just the last row, says whether a URL is still going on.
+                val built = out.substring(out.lastIndexOf('\n') + 1)
+                if (built.isNotEmpty() && joinSpace(built, body)) out.append(' ')
                 out.append(body)
             } else {
                 if (prev != null) out.append('\n')
                 out.append(line)
             }
+            if (fence) inFence = !inFence
             previous = raw
         }
         return out.toString().trimEnd('\n')

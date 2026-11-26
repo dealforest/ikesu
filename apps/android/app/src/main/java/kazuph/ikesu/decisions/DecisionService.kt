@@ -137,6 +137,11 @@ class DecisionService : Service() {
         manager.createNotificationChannel(NotificationChannel(CONNECTION, "接続状態", NotificationManager.IMPORTANCE_LOW))
         manager.createNotificationChannel(NotificationChannel(QUESTIONS, "判断待ち", NotificationManager.IMPORTANCE_HIGH))
         manager.createNotificationChannel(NotificationChannel(QUESTIONS_QUIET, "判断待ち（再表示・音なし）", NotificationManager.IMPORTANCE_LOW))
+        // A killed process leaves its decision notifications behind (onDestroy is not guaranteed), with
+        // buttons from an unlock that is over. This service does not know them: take them all down;
+        // the PCs' next lists bring back what is still waiting.
+        manager.activeNotifications.filter { it.notification.channelId == QUESTIONS || it.notification.channelId == QUESTIONS_QUIET }
+            .forEach { manager.cancel(it.id) }
         startForeground(FOREGROUND_ID, connectionNotification())
         // The passphrase connection is gone: remove what the old version stored (address, encrypted passphrase, its key).
         getSharedPreferences("connection", MODE_PRIVATE).edit().clear().apply()

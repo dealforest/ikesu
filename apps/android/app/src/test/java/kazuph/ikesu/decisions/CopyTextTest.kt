@@ -45,6 +45,12 @@ class CopyTextTest {
         assertEquals("see https://example.com/a/b/c/d", CopyText.unwrap(listOf("see https://example", ".com/a/b/c/d"), 19))
     }
 
+    @Test fun rowsInsideACodeFenceAndAUrlOverThreeRows() {
+        val code = listOf("```", "val x = 1", "val y = 2", "val z = 3", "```", "あと")
+        assertEquals(code.joinToString("\n"), CopyText.unwrap(code, 9))
+        assertEquals("https://example.com/aaaa/bbbb/cc", CopyText.unwrap(listOf("https://exa", "mple.com/aa", "aa/bbbb/cc"), 11))
+    }
+
     @Test fun tablesCodeFencesAndMarkdownMarkersKeepTheirBreaks() {
         val table = listOf("| a    | b    |", "| 1    | 2    |")
         assertEquals(table.joinToString("\n"), CopyText.unwrap(table, 15))
