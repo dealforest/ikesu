@@ -440,10 +440,31 @@ func TestRightSidebarTwoMachinesActualPTYMatrixAndWheel(t *testing.T) {
 	}
 }
 
-func TestNarrowRightSidebarTwoMachinesEveryRowAndIndependentModes(t *testing.T) {
+// Walks all rows and panel modes for these widths using two real servers and PTYs.
+func TestNarrowRightSidebarTwoMachinesEveryRowAndIndependentModesWidths2And3(t *testing.T) {
 	if teststate.RunIsolatedParallel(t) {
 		return
 	}
+	narrowRightSidebarCase(t, []int{2, 3})
+}
+
+// Walks all rows and panel modes for these widths using two real servers and PTYs.
+func TestNarrowRightSidebarTwoMachinesEveryRowAndIndependentModesWidths5And10(t *testing.T) {
+	if teststate.RunIsolatedParallel(t) {
+		return
+	}
+	narrowRightSidebarCase(t, []int{5, 10})
+}
+
+// Walks all rows and panel modes for these widths using two real servers and PTYs.
+func TestNarrowRightSidebarTwoMachinesEveryRowAndIndependentModesWidths17And18(t *testing.T) {
+	if teststate.RunIsolatedParallel(t) {
+		return
+	}
+	narrowRightSidebarCase(t, []int{17, 18})
+}
+
+func narrowRightSidebarCase(t *testing.T, testWidths []int) {
 	h := newRightMachineHarness(t)
 	m := h.m
 	t.Cleanup(func() {
@@ -460,7 +481,7 @@ func TestNarrowRightSidebarTwoMachinesEveryRowAndIndependentModes(t *testing.T) 
 		m.requestPending()
 		h.until("source machine visible", func() bool { return m.pending == nil && m.active == source })
 	}
-	for _, width := range []int{2, 3, 5, 10, 17, 18} {
+	for _, width := range testWidths {
 		for _, mixed := range []bool{false, true} {
 			widths := map[string]int{"local": width, "remote": width}
 			if mixed {

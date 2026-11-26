@@ -12,9 +12,44 @@ import (
 	"github.com/kazuph/ikesu/internal/render"
 )
 
-func TestSidebarContinuousTwoServersEveryCell(t *testing.T) {
+// Walks the left sidebar's upper widths using two real servers and PTYs.
+func TestSidebarContinuousTwoServersEveryCellLeftUpperWidths(t *testing.T) {
 	if teststate.RunIsolatedParallel(t) {
 		return
+	}
+	sidebarContinuousTwoServersEveryCell(t, false, true)
+}
+
+// Walks the left sidebar's lower widths using two real servers and PTYs.
+func TestSidebarContinuousTwoServersEveryCellLeftLowerWidths(t *testing.T) {
+	if teststate.RunIsolatedParallel(t) {
+		return
+	}
+	sidebarContinuousTwoServersEveryCell(t, false, false)
+}
+
+// Walks the right sidebar's upper widths using two real servers and PTYs.
+func TestSidebarContinuousTwoServersEveryCellRightUpperWidths(t *testing.T) {
+	if teststate.RunIsolatedParallel(t) {
+		return
+	}
+	sidebarContinuousTwoServersEveryCell(t, true, true)
+}
+
+// Walks the right sidebar's lower widths using two real servers and PTYs.
+func TestSidebarContinuousTwoServersEveryCellRightLowerWidths(t *testing.T) {
+	if teststate.RunIsolatedParallel(t) {
+		return
+	}
+	sidebarContinuousTwoServersEveryCell(t, true, false)
+}
+
+func sidebarContinuousTwoServersEveryCell(t *testing.T, right, upperHalf bool) {
+	evidenceDir := os.Getenv("SIDEBAR_CONTINUOUS_EVIDENCE")
+	if evidenceDir != "" {
+		if err := os.MkdirAll(evidenceDir, 0700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	h := newRightMachineHarness(t)
 	m := h.m
@@ -63,66 +98,71 @@ func TestSidebarContinuousTwoServersEveryCell(t *testing.T) {
 		})
 		paint()
 	}
-	for _, right := range []bool{false, true} {
-		h.modes(0, 0, 240, 60)
-		paint()
-		expected := rows()
-		side := "left"
-		if right {
-			side = "right"
+	h.modes(0, 0, 240, 60)
+	paint()
+	expected := rows()
+	side := "left"
+	if right {
+		side = "right"
+	}
+	_, upper, _ := m.endpoints[m.active].snapshot.State.SidebarBounds()
+	const smallestWidth = 2
+	middle := smallestWidth + (upper-smallestWidth)/2
+	firstWidth, lastWidth, half := upper, smallestWidth, "lower"
+	if upperHalf {
+		lastWidth, half = middle+1, "upper"
+	} else {
+		firstWidth = middle
+		if middle < upper {
+			// Enter the lower range with the same one-column drag as the full sweep.
+			drag(right, middle+1)
 		}
-		_, upper, _ := m.endpoints[m.active].snapshot.State.SidebarBounds()
-		for width := upper; width >= 2; width-- {
-			drag(right, width)
-			got := rows()
-			if !reflect.DeepEqual(got, expected) {
-				t.Fatalf("side=%s width=%d changes endpoint/row/order/Y\ngot=%+v\nwant=%+v", side, width, got, expected)
+	}
+	for width := firstWidth; width >= lastWidth; width-- {
+		drag(right, width)
+		got := rows()
+		if !reflect.DeepEqual(got, expected) {
+			t.Fatalf("side=%s width=%d changes endpoint/row/order/Y\ngot=%+v\nwant=%+v", side, width, got, expected)
+		}
+		in := *m.endpoints[m.active].snapshot
+		f := render.ComposeClient(in, &m.sidebar, "test", false).Frame
+		for _, hit := range m.sidebar.Hits {
+			if hit.Right != right || hit.New || hit.Header {
+				continue
 			}
-			in := *m.endpoints[m.active].snapshot
-			f := render.ComposeClient(in, &m.sidebar, "test", false).Frame
-			for _, hit := range m.sidebar.Hits {
-				if hit.Right != right || hit.New || hit.Header {
-					continue
+			glyph := ""
+			snap := m.endpoints[hit.Machine].snapshot
+			switch hit.Row.Kind {
+			case render.RowWorkspace:
+				glyph = snap.Panes[snap.State.Workspaces[hit.Row.Ws].TabRef().Layout.Focused()].Status.Rune
+			case render.RowAgent:
+				if hit.Row.Line == 0 {
+					glyph = snap.Panes[hit.Row.Pane].Status.Rune
 				}
-				glyph := ""
-				snap := m.endpoints[hit.Machine].snapshot
-				switch hit.Row.Kind {
-				case render.RowWorkspace:
-					glyph = snap.Panes[snap.State.Workspaces[hit.Row.Ws].TabRef().Layout.Focused()].Status.Rune
-				case render.RowAgent:
-					if hit.Row.Line == 0 {
-						glyph = snap.Panes[hit.Row.Pane].Status.Rune
-					}
-				case render.RowJob:
-					glyph = "●"
-				}
-				x := min(1, width-2)
-				if right {
-					x = in.State.RightSidebarArea().X + min(2, width-1)
-				}
-				if glyph != "" && f.Cell(x, hit.Rect.Y).Content != glyph {
-					t.Fatalf("side=%s width=%d machine=%s row=%+v Y=%d status=%q want=%q", side, width, hit.Machine, hit.Row, hit.Rect.Y, f.Cell(x, hit.Rect.Y).Content, glyph)
-				}
+			case render.RowJob:
+				glyph = "●"
 			}
-			records = append(records, record{side, width, got})
-			if width == 2 || width == 3 || width == 4 || width == 5 || width == 10 || width == 17 || width == 26 {
-				if root := os.Getenv("SIDEBAR_CONTINUOUS_EVIDENCE"); root != "" {
-					if err := os.MkdirAll(root, 0700); err != nil {
-						t.Fatal(err)
-					}
-					b, _ := json.Marshal(f)
-					if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("servers-%s-width%d.json", side, width)), b, 0600); err != nil {
-						t.Fatal(err)
-					}
-				}
+			x := min(1, width-2)
+			if right {
+				x = in.State.RightSidebarArea().X + min(2, width-1)
+			}
+			if glyph != "" && f.Cell(x, hit.Rect.Y).Content != glyph {
+				t.Fatalf("side=%s width=%d machine=%s row=%+v Y=%d status=%q want=%q", side, width, hit.Machine, hit.Row, hit.Rect.Y, f.Cell(x, hit.Rect.Y).Content, glyph)
+			}
+		}
+		records = append(records, record{side, width, got})
+		if evidenceDir != "" && (width == 2 || width == 3 || width == 4 || width == 5 || width == 10 || width == 17 || width == 26) {
+			b, _ := json.Marshal(f)
+			if err := os.WriteFile(filepath.Join(evidenceDir, fmt.Sprintf("servers-%s-width%d.json", side, width)), b, 0600); err != nil {
+				t.Fatal(err)
 			}
 		}
 	}
-	if root := os.Getenv("SIDEBAR_CONTINUOUS_EVIDENCE"); root != "" {
+	if evidenceDir != "" {
 		b, _ := json.MarshalIndent(records, "", "  ")
-		if err := os.WriteFile(filepath.Join(root, "servers-rows.json"), b, 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(evidenceDir, fmt.Sprintf("servers-rows-%s-%s.json", side, half)), b, 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	t.Logf("PASS %d widths from real endpoint snapshots: all machine/workspace/pane row identities, Y/order and left state cells", len(records))
+	t.Logf("PASS %d widths from real endpoint snapshots: all machine/workspace/pane row identities, Y/order and %s state cells (widths %d..%d)", len(records), side, firstWidth, lastWidth)
 }
