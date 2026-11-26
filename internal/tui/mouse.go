@@ -21,7 +21,7 @@ func (a *App) onMouse(ev input.Event) {
 		return
 	}
 	if a.sidebarConfig.UI.MouseCapture != nil && !*a.sidebarConfig.UI.MouseCapture {
-		if ev.Kind == input.KindMouseRelease && a.fwd >= 0 {
+		if a.fwd >= 0 && (ev.Kind == input.KindMouseMotion || ev.Kind == input.KindMouseRelease) {
 			a.forwardMouse(ev)
 			return
 		}

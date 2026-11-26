@@ -157,3 +157,52 @@ func TestMouseCaptureDisabledReleasesTrackingPaneOnBorder(t *testing.T) {
 		t.Fatal("release left the pane tracking the gesture")
 	}
 }
+
+func TestMouseCaptureDisabledKeepsDragWithPressedPane(t *testing.T) {
+	teststate.Lock(t)
+	a := specRuntimeApp(t)
+	capture := false
+	a.sidebarConfig.UI.MouseCapture = &capture
+	first := a.focusedPane()
+	second := first + 1
+	a.st.ActiveWorkspace().TabRef().Layout.SplitFocused(layout.Vertical, second)
+	const command = `stty raw -echo icrnl; printf '\033[?1003h\033[?1006hREADY'; IFS= read -r events; printf '%s' "$events" > "$1"; printf '\r\nRECORDED'; exec /bin/cat`
+	dir := t.TempDir()
+	paths := make(map[int]string)
+	for _, id := range []int{first, second} {
+		inner := a.innerRect(id)
+		paths[id] = filepath.Join(dir, fmt.Sprint(id))
+		p, err := a.sup.SpawnWith(id, a.cwd, inner.W, inner.H, nil, []string{"/bin/sh", "-c", command, "test", paths[id]})
+		if err != nil {
+			t.Fatal(err)
+		}
+		specWaitText(t, p, "READY")
+	}
+	a.draw()
+	left, right := a.innerRect(first), a.innerRect(second)
+	x, y := left.X+3, left.Y+3
+	otherX := right.X + 3
+	specFeed(a, fmt.Sprintf("\x1b[<0;%d;%dM\x1b[<32;%d;%dM\x1b[<32;%d;%dM\x1b[<0;%d;%dm", x, y, x+1, y, otherX, y, x+1, y))
+	for _, id := range []int{first, second} {
+		if _, err := a.sup.Get(id).WriteToPTY([]byte("\r")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	specWaitText(t, a.sup.Get(first), "RECORDED")
+	specWaitText(t, a.sup.Get(second), "RECORDED")
+	for _, tc := range []struct {
+		id   int
+		want string
+	}{
+		{first, "\x1b[<0;3;3M\x1b[<32;4;3M\x1b[<0;4;3m"},
+		{second, ""},
+	} {
+		got, err := os.ReadFile(paths[tc.id])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != tc.want {
+			t.Errorf("pane %d received %q, want %q", tc.id, got, tc.want)
+		}
+	}
+}
