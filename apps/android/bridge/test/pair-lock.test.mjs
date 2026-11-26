@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { once } from 'node:events';
 import fs from 'node:fs/promises';
+import net from 'node:net';
 import path from 'node:path';
+import { createInterface } from 'node:readline';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -293,5 +296,139 @@ test('B19 確定中に制御ソケットが切れると PC の pair は失敗し
   await until(() => term.exited);
   assert.equal((await term.result).exitCode, 1);
   assert.deepEqual(requests.map(request => request.op), ['pair_start', 'pair_confirm']);
+  await assert.rejects(fs.stat(f.lockPath), { code: 'ENOENT' });
+});
+
+async function pauseLocalConfirmation(t) {
+  const f = await fixture(t);
+  const qrFile = path.join(f.stateDir, 'test-qr.json');
+  const marker = path.join(f.stateDir, 'confirm-paused');
+  const preload = `
+    import { existsSync, writeFileSync } from 'node:fs';
+    import { setTimeout as delay } from 'node:timers/promises';
+    import { MobileHub } from ${JSON.stringify(new URL('../mobile-hub.mjs', import.meta.url).href)};
+    import { Pairing } from ${JSON.stringify(new URL('../pairing.mjs', import.meta.url).href)};
+    const qrFile = ${JSON.stringify(qrFile)};
+    const marker = ${JSON.stringify(marker)};
+    const qr = Pairing.prototype.qr;
+    Pairing.prototype.qr = function () {
+      const value = qr.call(this);
+      writeFileSync(qrFile, value);
+      return value;
+    };
+    const reload = MobileHub.prototype.reloadDevices;
+    let firstWithDevices = true;
+    MobileHub.prototype.reloadDevices = async function () {
+      const result = await reload.call(this);
+      if (firstWithDevices && this.devices.length > 0) {
+        firstWithDevices = false;
+        writeFileSync(marker, '');
+      }
+      // ファイル監視による並行 reload が先に着いても、confirm 側を同じ目印で止める。
+      while (existsSync(marker)) await delay(5);
+      return result;
+    };
+  `;
+  const term = f.open(160, 60, [`--import=data:text/javascript,${encodeURIComponent(preload)}`]);
+  await until(() => term.output.includes('6桁:'));
+  const qr = JSON.parse(await fs.readFile(qrFile, 'utf8'));
+  await f.relay.bridgeUp();
+  const app = new FakeApp(f.relay, 'pair', Buffer.from(qr.pairing, 'base64url'), Buffer.from(qr.bridge, 'base64url'));
+  const secret = Buffer.from(qr.secret, 'base64url');
+  assert.ok(await app.handshake());
+  app.sendJson(app.pairMessage(secret));
+  await until(() => term.output.includes('候補が接続しました'));
+  term.terminal.write(`${app.sas(secret)}\r`);
+  await until(async () => fs.stat(marker).then(() => true, error => {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }));
+  return { f, term, app, marker };
+}
+
+test('B21 確定中の Ctrl+C は端末登録と paired の通知を待ってから終了する', async t => {
+  const { f, term, app, marker } = await pauseLocalConfirmation(t);
+  term.kill('SIGINT');
+  await until(() => {
+    assert.equal(term.exited, false, '確定中の最初の SIGINT で CLI が終了した');
+    return term.output.includes('登録の処理が終わるまで待っています');
+  });
+  await fs.unlink(marker);
+
+  await until(() => term.exited);
+  assert.equal((await term.result).exitCode, 130);
+  assert.match(term.output, /登録しました/);
+  await assert.rejects(fs.stat(f.lockPath), { code: 'ENOENT' });
+  const paired = await app.recv(message => message.type === 'paired');
+  assert.deepEqual((await loadDevices(f.configDir)).map(device => device.device), [paired.device]);
+  assert.ok(term.output.includes(`端末 ID ${paired.device}`));
+});
+
+test('B22 確定中の2回目の Ctrl+C は確定を待たずにロックを解放する', async t => {
+  const { f, term, marker } = await pauseLocalConfirmation(t);
+  term.kill('SIGINT');
+  await until(() => term.output.includes('登録の処理が終わるまで待っています'));
+  assert.equal(term.exited, false);
+  term.kill('SIGINT');
+
+  await until(() => term.exited);
+  assert.equal((await term.result).exitCode, 130);
+  await fs.stat(marker);
+  await assert.rejects(fs.stat(f.lockPath), { code: 'ENOENT' });
+});
+
+async function startWaitingPairControl(t, f, ttl) {
+  const { publicKey } = await loadNoiseKey(f.configDir);
+  const requests = [];
+  const sockets = new Set();
+  await fs.mkdir(f.stateDir, { recursive: true, mode: 0o700 });
+  const server = net.createServer(socket => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+    const lines = createInterface({ input: socket });
+    lines.on('line', line => {
+      const request = JSON.parse(line);
+      requests.push(request.op);
+      if (request.op === 'pair_start') {
+        const pairing = new Pairing({ relay: f.relay, bridgePublic: publicKey, name: request.name, permissions: request.permissions, ttl });
+        socket.write(`${JSON.stringify({ ok: true, qr: pairing.qr() })}\n`);
+      }
+      if (request.op === 'pair_cancel') socket.write('{"ok":true}\n');
+    });
+  });
+  server.listen(path.join(f.stateDir, 'pair.sock'));
+  await once(server, 'listening');
+  const disconnect = () => { for (const socket of sockets) socket.destroy(); };
+  t.after(async () => {
+    disconnect();
+    await new Promise(resolve => server.close(resolve));
+  });
+  return { disconnect, requests };
+}
+
+test('B23 6桁の入力待ちは QR の期限切れで終了しロックを解放する', async t => {
+  const f = await fixture(t);
+  const control = await startWaitingPairControl(t, f, 2);
+  const term = f.open();
+  await until(() => term.output.includes('6桁:'));
+
+  await until(() => term.exited);
+  assert.equal((await term.result).exitCode, 1);
+  assert.match(term.output, /この QR の期限が切れました/);
+  assert.deepEqual(control.requests, ['pair_start', 'pair_cancel']);
+  await assert.rejects(fs.stat(f.lockPath), { code: 'ENOENT' });
+});
+
+test('B24 6桁の入力待ちは制御ソケットの切断で終了しロックを解放する', async t => {
+  const f = await fixture(t);
+  const control = await startWaitingPairControl(t, f);
+  const term = f.open();
+  await until(() => term.output.includes('6桁:'));
+  control.disconnect();
+
+  await until(() => term.exited);
+  assert.equal((await term.result).exitCode, 1);
+  assert.match(term.output, /常駐の bridge との接続が切れました/);
+  assert.deepEqual(control.requests, ['pair_start']);
   await assert.rejects(fs.stat(f.lockPath), { code: 'ENOENT' });
 });

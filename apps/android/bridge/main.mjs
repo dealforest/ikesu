@@ -229,16 +229,23 @@ async function printPairQR(qr) {
 
 async function pair() {
   const release = acquirePairLock(stateDir);
+  let confirming = false;
+  let pendingSignal = null;
   const exitOnSignal = code => () => {
+    if (confirming && pendingSignal === null) {
+      pendingSignal = code;
+      process.stderr.write('\n登録の処理が終わるまで待っています（もう一度押すと待たずに終了します）\n');
+      return;
+    }
     if (process.stdin.isTTY && process.stdin.isRaw) process.stdin.setRawMode(false);
     release();
     process.exit(code);
   };
   const interrupt = exitOnSignal(130);
   const signals = [['SIGINT', interrupt], ['SIGTERM', exitOnSignal(143)], ['SIGHUP', exitOnSignal(129)]];
-  for (const [signal, handler] of signals) process.once(signal, handler);
+  for (const [signal, handler] of signals) process.on(signal, handler);
   process.once('exit', release);
-  let session, mobile, prompt;
+  let session, mobile, prompt, expiryTimer;
   let pairingStarted = false;
   try {
     const name = option('name');
@@ -261,20 +268,43 @@ async function pair() {
     session.onCandidate(candidate => process.stdout.write(`\n候補が接続しました（${candidate.name}）\n`));
     prompt = readline.createInterface({ input: process.stdin, output: process.stdout });
     prompt.on('SIGINT', interrupt);
+    const stopWaiting = new AbortController();
+    let exp;
+    try { exp = JSON.parse(qr)?.exp; } catch { /* 読めない場合は入力を待ち続ける */ }
+    if (Number.isFinite(exp)) {
+      expiryTimer = setTimeout(() => stopWaiting.abort('expired'), exp * 1000 - Date.now());
+    }
+    session.onClose(() => stopWaiting.abort('disconnected'));
     for (;;) {
-      const code = await prompt.question('6桁: ');
+      let code;
+      try { code = await prompt.question('6桁: ', { signal: stopWaiting.signal }); }
+      catch (error) {
+        if (error.name !== 'AbortError' || !stopWaiting.signal.aborted) throw error;
+        const message = stopWaiting.signal.reason === 'expired'
+          ? 'この QR の期限が切れました。もう一度 pair を実行してください'
+          : '常駐の bridge との接続が切れました。もう一度 pair を実行してください';
+        process.stderr.write(`${message}\n`);
+        process.exitCode = 1;
+        return;
+      }
       let result;
+      confirming = true;
       try { result = await session.confirm(code); }
       catch (error) {
         process.stderr.write(`登録に失敗しました: ${error.message}\n`);
         process.exitCode = 1;
         return;
+      } finally {
+        confirming = false;
       }
       if (result.device) { process.stdout.write(`登録しました（端末 ID ${result.device}）\n`); return; }
       if (!result.active) { process.stdout.write('この QR は無効になりました。もう一度 pair を実行してください\n'); process.exitCode = 1; return; }
       process.stdout.write('一致しません\n');
+      if (pendingSignal !== null) return;
     }
   } finally {
+    if (pendingSignal !== null) process.exitCode = pendingSignal;
+    clearTimeout(expiryTimer);
     try {
       prompt?.close();
       if (pairingStarted) await session.cancel().catch(() => {});
