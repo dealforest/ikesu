@@ -21,11 +21,18 @@ func (a *App) onMouse(ev input.Event) {
 		return
 	}
 	if a.sidebarConfig.UI.MouseCapture != nil && !*a.sidebarConfig.UI.MouseCapture {
+		if a.fwd >= 0 && (ev.Kind == input.KindMouseMotion || ev.Kind == input.KindMouseRelease) {
+			a.forwardMouse(ev)
+			return
+		}
 		if pr, ok := a.paneAt(ev.Mouse.X, ev.Mouse.Y); ok {
 			if p := a.sup.Get(pr.ID); p != nil && p.Snapshot().MouseTracking {
 				switch ev.Kind {
 				case input.KindMouseClick:
-					a.forwardTo(pr.ID, uv.MouseClickEvent(ev.Mouse))
+					a.fwdStrip = 0
+					if a.forwardTo(pr.ID, uv.MouseClickEvent(ev.Mouse)) {
+						a.fwd = pr.ID
+					}
 				case input.KindMouseRelease:
 					a.forwardTo(pr.ID, uv.MouseReleaseEvent(ev.Mouse))
 				case input.KindMouseMotion:
@@ -173,7 +180,8 @@ func (a *App) click(m uv.Mouse) {
 	if a.actionBarHit(m) {
 		return
 	}
-	if l := ws.ActiveLayout(); l != nil {
+	if tab := ws.TabRef(); tab != nil && tab.Layout != nil && tab.Zoomed == 0 {
+		l := tab.Layout
 		if b := l.SplitBorderAt(m.X, m.Y, area); b != nil {
 			grab := b.Pos - m.X
 			if b.Direction == layout.Horizontal {
@@ -566,22 +574,23 @@ func (a *App) wheel(m uv.Mouse) {
 
 // hostScroll moves a pane's host scrollback by three lines per notch.
 func (a *App) hostScroll(pid, scrollN int, up bool) {
-	a.showPaneScrollbar(pid)
 	off := a.scroll[pid]
 	if up {
-		off += a.sidebarConfig.MouseScrollLines()
-		if off > scrollN {
-			off = scrollN
-		}
-		a.scroll[pid] = off
+		off = min(off+a.sidebarConfig.MouseScrollLines(), scrollN)
 	} else {
 		off -= a.sidebarConfig.MouseScrollLines()
-		if off <= 0 {
-			delete(a.scroll, pid)
-		} else {
-			a.scroll[pid] = off
+	}
+	// A client that does not report painted viewports gives the release no
+	// frame to follow, so move the selection's view with the wheel instead.
+	if s := a.sel; s != nil && s.pane == pid {
+		if _, painted := a.paintedPaneViews[pid]; !painted {
+			if p := a.sup.Get(pid); p != nil {
+				a.scrollSelection(p, s, off)
+				return
+			}
 		}
 	}
+	a.setScrollOff(pid, off)
 }
 
 // --- drag states ---
@@ -616,18 +625,19 @@ func (a *App) selMouse(ev input.Event) {
 		a.sel = nil
 		return
 	}
-	top := a.selectionTop(p, s)
-	hx := m.X - s.inner.X
-	hy := top + m.Y - s.inner.Y
-	if !a.st.PopupVisible() && !a.st.OverlayVisible() {
-		hy = top + min(max(m.Y-s.inner.Y, 0), s.inner.H-1)
+	top, inner := a.selectionTop(p, s), s.inner
+	popup := a.st.PopupVisible() || a.st.OverlayVisible()
+	if popup {
+		if view, ok := a.paintedPaneViews[s.pane]; ok {
+			top, inner = view.BufferTop, view.Inner
+		}
 	}
-	if hx < 0 {
-		hx = 0
+	hx := min(max(m.X-inner.X, 0), inner.W-1)
+	hy := m.Y - inner.Y
+	if !popup {
+		hy = min(max(hy, 0), inner.H-1)
 	}
-	if hx >= s.inner.W {
-		hx = s.inner.W - 1
-	}
+	hy += top
 	s.hx, s.hy = hx, hy
 	if hx != s.ax || hy != s.ay {
 		s.moved = true
