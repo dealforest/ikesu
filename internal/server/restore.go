@@ -8,6 +8,8 @@ package server
 // "--last", "resume --last", or a cwd/mtime-latest guess.
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -19,6 +21,7 @@ import (
 	"github.com/kazuph/ikesu/internal/runtime"
 	"github.com/kazuph/ikesu/internal/session"
 	"github.com/kazuph/ikesu/internal/tui"
+	sqlite3 "github.com/ncruces/go-sqlite3"
 )
 
 // resumeSubmitDelay separates typing the resume command from the Enter
@@ -132,7 +135,12 @@ type ledgerWrite struct {
 	row        dispatch.PaneSession
 	delete     bool
 	generation uint64
+	retried    bool
 }
+
+var ledgerShutdownWait = 30 * time.Second
+
+const ledgerInitialBackoff = 50 * time.Millisecond
 
 func (s *Server) enqueueLedger(w ledgerWrite) {
 	s.ledgerMu.Lock()
@@ -147,33 +155,54 @@ func (s *Server) enqueueLedger(w ledgerWrite) {
 		s.ledgerRunning = true
 		s.ledgerIdle = make(chan struct{})
 		s.ledgerWG.Add(1)
-		go s.runLedgerWrites()
+		ctx := context.Background()
+		if s.ledgerGiveUpAt.IsZero() {
+			ctx, s.ledgerCancel = context.WithCancel(ctx)
+		} else {
+			ctx, s.ledgerCancel = context.WithDeadline(ctx, s.ledgerGiveUpAt)
+		}
+		go s.runLedgerWrites(ctx, s.ledgerCancel)
 	}
 	s.ledgerMu.Unlock()
 }
 
-func (s *Server) runLedgerWrites() {
+func (s *Server) runLedgerWrites(ctx context.Context, cancel context.CancelFunc) {
 	defer s.ledgerWG.Done()
+	defer cancel()
 	var ledgerStore *dispatch.Store
 	defer func() {
 		if ledgerStore != nil {
 			ledgerStore.Close()
 		}
 	}()
+	backoff := ledgerInitialBackoff
 	for {
 		s.ledgerMu.Lock()
 		if len(s.ledgerQueue) == 0 {
 			s.ledgerRunning = false
+			s.ledgerCancel = nil
 			close(s.ledgerIdle)
 			s.ledgerMu.Unlock()
 			return
 		}
 		w := s.ledgerQueue[0]
 		s.ledgerQueue = s.ledgerQueue[1:]
+		superseded := w.retried && s.ledgerVersion[w.row.PaneID] != w.generation
+		giveUpAt := s.ledgerGiveUpAt
 		s.ledgerMu.Unlock()
-		_, err := s.db()
+		if superseded {
+			continue
+		}
+		_, initErr := s.db()
+		err := initErr
 		if err == nil && ledgerStore == nil {
 			ledgerStore, err = dispatch.OpenLedger(dispatch.DBPath(s.session))
+		}
+		if err == nil && !giveUpAt.IsZero() {
+			// SQLite can block in the OS lock call. Limit each new attempt
+			// to the remaining budget as well as bounding the retry timer.
+			timeout := max(0, min(dispatch.LedgerBusyTimeout, time.Until(giveUpAt)))
+			err = ledgerStore.SetLedgerBusyTimeout(timeout)
 		}
 		if err == nil {
 			if w.delete {
@@ -183,11 +212,46 @@ func (s *Server) runLedgerWrites() {
 			}
 		}
 		if err != nil {
+			// db() caches schema initialization errors. Only errors from
+			// the dedicated ledger connection can clear on a retry.
+			if initErr == nil && errors.Is(err, sqlite3.BUSY) {
+				s.ledgerMu.Lock()
+				if s.ledgerVersion[w.row.PaneID] != w.generation {
+					s.ledgerMu.Unlock()
+					continue
+				}
+				if !s.ledgerGiveUpAt.IsZero() && !time.Now().Before(s.ledgerGiveUpAt) {
+					s.ledgerMu.Unlock()
+					fmt.Fprintf(os.Stderr, "ikesu: save session ledger pane %d: shutdown deadline: %v\n", w.row.PaneID, err)
+					continue
+				}
+				firstRetry := !w.retried
+				w.retried = true
+				s.ledgerQueue = append(s.ledgerQueue, ledgerWrite{})
+				copy(s.ledgerQueue[1:], s.ledgerQueue)
+				s.ledgerQueue[0] = w
+				s.ledgerMu.Unlock()
+
+				if firstRetry {
+					message := fmt.Sprintf("pane %d: 会話の記録がほかのプロセスにロックされています。外れるまで書き込みを待ちます", w.row.PaneID)
+					fmt.Fprintf(os.Stderr, "ikesu: %s\n", message)
+					s.enqueueAppCleanup(func() { s.app.ShowToast("session ledger", message, "warning", -1) })
+				}
+				timer := time.NewTimer(backoff)
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+					timer.Stop()
+				}
+				backoff = min(2*backoff, time.Second)
+				continue
+			}
 			fmt.Fprintf(os.Stderr, "ikesu: save session ledger pane %d: %v\n", w.row.PaneID, err)
 			message := fmt.Sprintf("pane %d: %v", w.row.PaneID, err)
 			s.enqueueAppCleanup(func() { s.app.ShowToast("session ledger", message, "error", -1) })
 			continue
 		}
+		backoff = ledgerInitialBackoff
 		s.ledgerMu.Lock()
 		if s.ledgerRowsMap == nil {
 			s.ledgerRowsMap = map[int]dispatch.PaneSession{}

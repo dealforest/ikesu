@@ -308,11 +308,25 @@ func OpenLedger(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := conn.Exec("PRAGMA busy_timeout=5000"); err != nil {
+	if err := conn.Exec(fmt.Sprintf("PRAGMA busy_timeout=%d", LedgerBusyTimeout.Milliseconds())); err != nil {
 		conn.Close()
 		return nil, err
 	}
 	return &Store{db: conn}, nil
+}
+
+// LedgerBusyTimeout is the SQLite lock wait for a single ledger attempt.
+var LedgerBusyTimeout = 5 * time.Second
+
+// SetLedgerBusyTimeout shortens the lock wait on a dedicated ledger connection
+// during shutdown. Round down so SQLite cannot wait beyond the remaining time.
+func (s *Store) SetLedgerBusyTimeout(timeout time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.db == nil {
+		return errStoreClosed
+	}
+	return s.db.BusyTimeout(timeout.Truncate(time.Millisecond))
 }
 
 // walBusyWait is how long enableWAL keeps retrying; it matches the

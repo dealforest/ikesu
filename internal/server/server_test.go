@@ -156,6 +156,10 @@ func startTestEndpoint(t *testing.T, peer endpoint.Peer) (dir string, done chan 
 }
 
 func startTestEndpointWithClock(t *testing.T, peer endpoint.Peer, clock graphicsReceiptClock) (dir string, done chan int) {
+	return startTestEndpointWithSetup(t, peer, clock, nil)
+}
+
+func startTestEndpointWithSetup(t *testing.T, peer endpoint.Peer, clock graphicsReceiptClock, setup func()) (dir string, done chan int) {
 	t.Helper()
 	pinTestConfig(t)
 	// unix sockets cap sun_path around 104 bytes; t.TempDir() paths on
@@ -167,6 +171,9 @@ func startTestEndpointWithClock(t *testing.T, peer endpoint.Peer, clock graphics
 	t.Cleanup(func() { os.RemoveAll(base) })
 	teststate.Setenv(t, "IKESU_STATE_DIR", base)
 	teststate.Setenv(t, "SHELL", "/bin/sh")
+	if setup != nil {
+		setup()
+	}
 	dir = api.SessionDir("test")
 	done = make(chan int, 1)
 	go func() {
