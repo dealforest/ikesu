@@ -91,6 +91,7 @@ export async function remotePairing(stateDir) {
   let socket;
   try { socket = await connect(path.join(stateDir, 'pair.sock')); } catch { return null; }
   const waiting = []; const listeners = []; let buffer = '';
+  const closeListeners = [];
   let closed = false;
   const disconnected = { ok: false, error: '接続が切れました' };
   socket.on('data', chunk => {
@@ -104,6 +105,7 @@ export async function remotePairing(stateDir) {
   socket.on('close', () => {
     closed = true;
     waiting.splice(0).forEach(resolve => resolve(disconnected));
+    closeListeners.splice(0).forEach(listener => listener());
   });
   const call = value => new Promise(resolve => {
     if (closed || socket.destroyed) { resolve(disconnected); return; }
@@ -118,6 +120,10 @@ export async function remotePairing(stateDir) {
       return reply.ok ? { device: reply.device } : { device: null, active: reply.active };
     },
     onCandidate(listener) { listeners.push(listener); },
+    onClose(listener) {
+      if (closed) listener();
+      else closeListeners.push(listener);
+    },
     async cancel() { await call({ op: 'pair_cancel' }); },
     close() { socket.destroy(); },
   };
@@ -129,6 +135,7 @@ export function localPairing(mobile) {
     async start(options) { return hub.startPairing(options).qr(); },
     async confirm(code) { const device = await hub.confirmPairing(code); return device ? { device: device.device } : { device: null, active: Boolean(hub.pairing?.active) }; },
     onCandidate(listener) { hub.onCandidate = candidate => listener({ name: candidate.name }); },
+    onClose(_listener) {},
     async cancel() { hub.closePairing(); },
     close() {},
   };
