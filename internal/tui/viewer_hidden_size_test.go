@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"io"
+	"maps"
 	"testing"
 
 	"github.com/kazuph/ikesu/internal/config"
@@ -126,15 +127,33 @@ func TestViewerVisibleTabUpdatesAtSizeEvents(t *testing.T) {
 
 func hiddenSizeNavigation(t *testing.T, a *App, v *Viewer) {
 	t.Helper()
-	check := func() {
+	check := func(before map[*model.Tab]ptySizeBasis, sizes map[int][2]int) {
 		t.Helper()
-		v.with(a, func(ui *App) { checkCurrentTabSizes(t, a, v.cols, v.rows) })
+		v.with(a, func(ui *App) {
+			tab := ui.currentSizeTab()
+			if basis, ok := before[tab]; ok && !basis.provisional {
+				after := viewerTerminalSizes(a)
+				for _, pid := range tab.Layout.PaneIDs() {
+					if after[pid] != sizes[pid] {
+						t.Fatalf("navigation changed pane %d size: %v -> %v", pid, sizes[pid], after[pid])
+					}
+				}
+				return
+			}
+			checkCurrentTabSizes(t, a, v.cols, v.rows)
+		})
 	}
-	v.Input(a, []byte{2, '2'})
+	navigate := func(data []byte) {
+		t.Helper()
+		before := maps.Clone(a.sizeOwners)
+		sizes := viewerTerminalSizes(a)
+		v.Input(a, data)
+		check(before, sizes)
+	}
+	navigate([]byte{2, '2'})
 	if v.tabs[a.st.Workspaces[0].ID] != a.st.Workspaces[0].Tabs[1].ID {
 		t.Fatal("tab key did not select second tab")
 	}
-	check()
 	var region render.Output
 	workspaceY := -1
 	v.SetSnapshotSink(func(in render.Input) error {
@@ -152,8 +171,7 @@ func hiddenSizeNavigation(t *testing.T, a *App, v *Viewer) {
 		t.Fatal("tab click targets absent")
 	}
 	click := func(x, y int) {
-		v.Input(a, []byte(fmt.Sprintf("\x1b[<0;%d;%dM\x1b[<0;%d;%dm", x+1, y+1, x+1, y+1)))
-		check()
+		navigate([]byte(fmt.Sprintf("\x1b[<0;%d;%dM\x1b[<0;%d;%dm", x+1, y+1, x+1, y+1)))
 	}
 	click(region.TabHits[0].X, region.TabHits[0].Y)
 	if v.tabs[a.st.Workspaces[0].ID] != a.st.Workspaces[0].Tabs[0].ID {
@@ -166,14 +184,13 @@ func hiddenSizeNavigation(t *testing.T, a *App, v *Viewer) {
 	if v.workspace != a.st.Workspaces[1].ID {
 		t.Fatal("workspace click did not select second workspace")
 	}
-	v.Input(a, []byte{2, 'o'})
-	check()
+	navigate([]byte{2, 'o'})
 	if v.workspace != a.st.Workspaces[0].ID {
 		t.Fatal("workspace key did not return to first workspace")
 	}
 }
 
-func TestViewerSelectedTabsAcquireViewerSizeOnKeyOrClick(t *testing.T) {
+func TestViewerSelectedTabsKeepRecordedSizeOnKeyOrClick(t *testing.T) {
 	teststate.Lock(t)
 	for _, peers := range []int{1, 2, 3} {
 		t.Run(fmt.Sprint(peers), func(t *testing.T) {
