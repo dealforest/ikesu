@@ -69,7 +69,7 @@ func TestViewerMouseDoesNotReportPTYPadding(t *testing.T) {
 	a := sizeOwnerRuntimeApp(t)
 	pid := a.focusedPane()
 	path := filepath.Join(t.TempDir(), "mouse")
-	const want = "\x1b[<0;1;1M"
+	const want = "\x1b[<0;2;1M"
 	command := fmt.Sprintf("stty raw -echo; printf '\\033[?1003h\\033[?1006hREADY'; dd bs=1 count=%d of='%s' 2>/dev/null; exec sleep 60", len(want), path)
 	p, err := a.sup.SpawnWith(pid, a.cwd, 22, 26, nil, []string{"/bin/sh", "-c", command})
 	if err != nil {
@@ -85,6 +85,6 @@ func TestViewerMouseDoesNotReportPTYPadding(t *testing.T) {
 	press := func(x, y int) { large.Input(a, []byte(fmt.Sprintf("\x1b[<0;%d;%dM", x+1, y+1))) }
 	press(inner.X, inner.Y)       // ten blank rows above the live screen
 	press(inner.X+22, inner.Y+10) // right of the live screen
-	press(inner.X, inner.Y+10)    // first cell of the live screen
+	press(inner.X+1, inner.Y+10)  // second cell of the live screen
 	specWaitFile(t, path, []byte(want))
 }
