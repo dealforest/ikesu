@@ -246,6 +246,9 @@ func (a *Assets) restoreCheckpointLocked(c *RuntimeCheckpoint) error {
 		if err = restoreRuntimeGeneration(shell, c.files["current"].target, c.generation); err != nil {
 			return err
 		}
+		if err = retireCurrentGeneration(shell, c.files["current"].target); err != nil {
+			return err
+		}
 		if err = restoreRuntimeFile(shell, "current", c.files["current"]); err != nil {
 			return err
 		}

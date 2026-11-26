@@ -85,6 +85,10 @@ func TestRuntimeGenerationCrossProcessPublication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	aged := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(old, aged, aged); err != nil {
+		t.Fatal(err)
+	}
 	native, err := os.ReadFile(a.Executable)
 	if err != nil {
 		t.Fatal(err)

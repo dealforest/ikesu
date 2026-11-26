@@ -43,8 +43,8 @@ func TestEnsureGenerationPrunesExpiredGenerations(t *testing.T) {
 	}
 	now := time.Now()
 	for path, age := range map[string]time.Duration{
-		previous: 11 * time.Minute, old: 11 * time.Minute,
-		recent: 9 * time.Minute, blocked: 11 * time.Minute,
+		previous: 2 * time.Hour, old: 61 * time.Minute,
+		recent: 59 * time.Minute, blocked: 61 * time.Minute,
 	} {
 		when := now.Add(-age)
 		if err := os.Chtimes(path, when, when); err != nil {
@@ -75,21 +75,25 @@ func TestEnsureGenerationPrunesExpiredGenerations(t *testing.T) {
 	if name, err := shell.readlink("current"); err != nil || name != filepath.Base(current) {
 		t.Fatalf("current points to %q, error %v", name, err)
 	}
-	for _, path := range []string{old, previous} {
+	for _, path := range []string{old} {
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {
 			t.Errorf("expired generation remains: %s (%v)", filepath.Base(path), err)
 		}
 	}
-	for _, path := range []string{current, recent, payload, neighbor, link} {
+	for _, path := range []string{current, previous, recent, payload, neighbor, link} {
 		if _, err := os.Lstat(path); err != nil {
 			t.Errorf("expected %s to remain: %v", filepath.Base(path), err)
 		}
+	}
+	retired, err := os.Stat(previous)
+	if err != nil || retired.ModTime().Before(now) {
+		t.Fatalf("previous generation did not get a retirement time: %v, %v", retired, err)
 	}
 	// Independently verify the exemption for current even with an old mtime.
 	if err := os.Chtimes(current, expired, expired); err != nil {
 		t.Fatal(err)
 	}
-	pruneGenerations(shell, filepath.Base(current), now.Add(-10*time.Minute))
+	pruneGenerations(shell, filepath.Base(current), now.Add(-time.Hour))
 	if _, err := os.Stat(filepath.Join(current, "manifest.json")); err != nil {
 		t.Fatalf("current generation was pruned: %v", err)
 	}

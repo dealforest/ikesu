@@ -176,6 +176,26 @@ func (a *Assets) stableEntries(shell *privateDirectory) error {
 	return shell.link("ikesu", filepath.Join("current", "ikesu"))
 }
 
+const generationRetention = time.Hour
+
+// Stamp the previous generation under the publication lock before replacing
+// current. This protects a shell that just obtained its immutable startup path.
+func retireCurrentGeneration(shell *privateDirectory, next string) error {
+	previous, err := shell.readlink("current")
+	if err != nil || previous == next || !generationName(previous) {
+		return nil
+	}
+	dir, err := shell.child(previous, false)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer dir.close()
+	return unix.Futimes(dir.fd(), nil)
+}
+
 // Caller holds the cross-process exclusive lock from validation through the
 // one atomic publication. A refresh never edits a published generation.
 func (a *Assets) ensureGeneration(shell *privateDirectory, entries bool) (string, error) {
@@ -204,12 +224,15 @@ func (a *Assets) ensureGeneration(shell *privateDirectory, entries bool) (string
 			return "", err
 		}
 	}
+	if err = retireCurrentGeneration(shell, name); err != nil {
+		return "", err
+	}
 	if err = shell.link("current", name); err != nil {
 		return "", err
 	}
 	published = true
 	if created {
-		pruneGenerations(shell, name, time.Now().Add(-10*time.Minute))
+		pruneGenerations(shell, name, time.Now().Add(-generationRetention))
 	}
 	return filepath.Join(shell.path, name), nil
 }
