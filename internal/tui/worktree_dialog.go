@@ -213,17 +213,3 @@ func (a *App) filterWorktrees() {
 	}
 	m.m.Scroll = 0
 }
-
-func (a *App) closeWorkspaceTargets(index int) []model.WorkspaceID {
-	ws := a.st.Workspaces[index]
-	ids := []model.WorkspaceID{ws.ID}
-	if ws.Worktree == nil || ws.Worktree.IsLinkedWorktree {
-		return ids
-	}
-	for _, other := range a.st.Workspaces {
-		if other.ID != ws.ID && other.Worktree != nil && other.Worktree.RepoKey == ws.Worktree.RepoKey {
-			ids = append(ids, other.ID)
-		}
-	}
-	return ids
-}
