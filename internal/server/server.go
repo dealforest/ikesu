@@ -761,17 +761,17 @@ func runEndpointWithClock(session, version string, peer endpoint.Peer, clock gra
 		close(appDone)
 	}()
 	if imported != nil {
+		var final handoffResult
 		if err := imported.Encoder.Encode(handoffResult{State: "running"}); err != nil {
 			s.handedOff = true
 			s.sup.ReleaseHandoff()
 			s.app.Do(s.app.RetireHandoff)
+		} else if err := imported.Control.SetReadDeadline(time.Now().Add(handoffFinalWait)); err == nil {
+			if err := imported.Decoder.Decode(&final); err != nil || final.State != "mail_input_times" {
+				final.MailInputTimes = nil
+			}
 		}
-		var final handoffResult
-		if err := imported.Decoder.Decode(&final); err != nil || final.State != "mail_input_times" {
-			final.MailInputTimes = nil
-		} else {
-			releaseGuardPruning()
-		}
+		releaseGuardPruning()
 		s.sup.RestorePendingInputs(final.PendingInputs)
 		s.sup.RestoreMailInputTimes(final.MailInputTimes)
 		s.sup.RestoreIdleActivities(final.IdleActivities)

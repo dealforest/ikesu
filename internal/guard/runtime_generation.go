@@ -326,7 +326,7 @@ func (a *Assets) trustedSource() (string, os.FileInfo, error) {
 }
 
 // HoldGenerationPruning keeps older senders' on-disk generations available
-// until the importer receives confirmation that the sender has committed.
+// through the importer's handoff handshake.
 func HoldGenerationPruning(root string) (func(), error) {
 	file, err := openHandoffPruneFile(root)
 	if err != nil {

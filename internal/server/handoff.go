@@ -24,6 +24,10 @@ import (
 // after 30 seconds; preserve that externally visible failure window.
 const handoffWait = 30 * time.Second
 
+// Once running is sent the final input state is best-effort. Bound the
+// importer's wait independently of the pre-commit handshake deadline.
+const handoffFinalWait = 2 * time.Minute
+
 var handoffTransferWait = handoffWait
 
 type handoffIdentity struct {
