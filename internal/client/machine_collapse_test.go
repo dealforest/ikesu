@@ -239,3 +239,57 @@ func TestMachineHeaderInOneColumnSidebarShowsToggle(t *testing.T) {
 		t.Fatalf("expanded one-column header glyph=%q rows=%d", glyph, rows)
 	}
 }
+
+// A left click on a machine heading in the right list folds that machine's
+// agent rows; the heading sits between two rules and a second click opens it.
+func TestRightMachineHeaderClickFoldsAgentRows(t *testing.T) {
+	h := newRightMachineHarness(t)
+	m := h.m
+	h.modes(0, 0, 160, 35)
+	read := func() (header render.MachineHit, rows map[string]int, frame *render.Frame) {
+		frame = render.ComposeClient(*m.endpoints[m.active].snapshot, &m.sidebar, "test", false).Frame
+		rows = map[string]int{}
+		for _, hit := range m.sidebar.Hits {
+			if !hit.Right {
+				continue
+			}
+			if hit.Header && hit.Machine == "remote" && frame.Cell(hit.Rect.X, hit.Rect.Y).Content != " " {
+				header = hit
+			}
+			if !hit.Header {
+				rows[hit.Machine]++
+			}
+		}
+		if header.Machine == "" {
+			t.Fatal("remote heading not drawn in the right list")
+		}
+		return header, rows, frame
+	}
+	header, before, frame := read()
+	if before["remote"] == 0 || before["local"] == 0 {
+		t.Fatalf("fixture needs agent rows on both machines: %+v", before)
+	}
+	if got := frame.Cell(header.Rect.X, header.Rect.Y).Content; got != "▾" {
+		t.Fatalf("open glyph = %q", got)
+	}
+	for _, y := range []int{header.Rect.Y - 1, header.Rect.Y + 1} {
+		if got := frame.Cell(header.Rect.X, y).Content; got != "─" {
+			t.Fatalf("no rule at y=%d next to the heading: %q", y, got)
+		}
+	}
+	clickCell(t, h, header.Rect.X+3, header.Rect.Y)
+	folded, after, frame := read()
+	if got := frame.Cell(folded.Rect.X, folded.Rect.Y).Content; got != "▸" {
+		t.Fatalf("folded glyph = %q", got)
+	}
+	if after["remote"] != 0 || after["local"] != before["local"] {
+		t.Fatalf("fold hid the wrong rows: before=%+v after=%+v", before, after)
+	}
+	if m.sidebar.Collapsed["remote"] {
+		t.Fatal("right fold also folded the left space list")
+	}
+	clickCell(t, h, folded.Rect.X, folded.Rect.Y)
+	if _, again, _ := read(); again["remote"] != before["remote"] {
+		t.Fatalf("second click did not open: %+v", again)
+	}
+}

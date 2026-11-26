@@ -350,13 +350,18 @@ func (m *machineClient) input(event input.Event) error {
 					return m.createWorkspace(hit.Machine)
 				}
 				if hit.Header && event.Kind == input.KindMouseClick {
-					// The left list's ▾/▸ header folds that machine's space rows.
-					toggled := !hit.Right && event.Mouse.Button == uv.MouseLeft
+					// A ▾/▸ header folds that machine's rows: space rows on the left,
+					// agent or job rows on the right.
+					toggled := event.Mouse.Button == uv.MouseLeft
 					if toggled {
-						if m.sidebar.Collapsed == nil {
-							m.sidebar.Collapsed = map[string]bool{}
+						folded := &m.sidebar.Collapsed
+						if hit.Right {
+							folded = &m.sidebar.RightCollapsed
 						}
-						m.sidebar.Collapsed[hit.Machine] = !m.sidebar.Collapsed[hit.Machine]
+						if *folded == nil {
+							*folded = map[string]bool{}
+						}
+						(*folded)[hit.Machine] = !(*folded)[hit.Machine]
 					}
 					if !m.endpoints[hit.Machine].profile.Enabled {
 						m.suppressRelease = true

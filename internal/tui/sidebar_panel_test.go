@@ -26,7 +26,7 @@ func TestSidebarPanelHeadingFolds(t *testing.T) {
 	}}
 	a.layoutSidebarPanel()
 	before := a.st.SidebarPanelRows
-	if before != 5 {
+	if before != 9 {
 		t.Fatalf("panel rows = %d", before)
 	}
 	if a.panel.columns(sidebarplugin.Left) <= 0 {
@@ -41,7 +41,7 @@ func TestSidebarPanelHeadingFolds(t *testing.T) {
 		t.Fatal("heading did not fold only its plugin")
 	}
 	a.layoutSidebarPanel()
-	if a.st.SidebarPanelRows != before-2 {
+	if a.st.SidebarPanelRows != before-3 {
 		t.Fatalf("folded rows = %d", a.st.SidebarPanelRows)
 	}
 	heads = render.SidebarPanelLayout(a.st, a.sidebarPanel(sidebarplugin.Left))
@@ -178,12 +178,13 @@ func TestRightSidebarPluginHeadingFoldsOnlyItsSection(t *testing.T) {
 	if !a.panel.collapsed[heads[0].Key] || a.panel.collapsed[heads[1].Key] || a.panel.collapsed["left/usage.30s.sh"] {
 		t.Fatalf("folded = %+v", a.panel.collapsed)
 	}
-	if got := a.sidebarView().Agents.Rect.H; got != height+1 {
-		t.Fatalf("jobs viewport after folding = %d, want %d", got, height+1)
+	// The fold frees the line and the rule shared with the next heading.
+	if got := a.sidebarView().Agents.Rect.H; got != height+2 {
+		t.Fatalf("jobs viewport after folding = %d, want %d", got, height+2)
 	}
 	panel = a.sidebarPanel(sidebarplugin.Right)
 	r := render.RightSidebarPanelRect(a.st, panel)
-	a.click(uv.Mouse{X: r.X + 1, Y: r.Y, Button: uv.MouseLeft})
+	a.click(uv.Mouse{X: r.X + 1, Y: r.Y + 1, Button: uv.MouseLeft}) // under the top rule
 	if a.panel.collapsed[heads[0].Key] {
 		t.Fatal("second click did not reopen right plugin")
 	}

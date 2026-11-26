@@ -19,7 +19,7 @@ func TestSidebarPanelDrawsPluginLinesWithColorsAboveFooter(t *testing.T) {
 	}}
 	area := s.SidebarArea()
 	s.SidebarPanelRows = SidebarPanelRows(panel, area.H-5)
-	if s.SidebarPanelRows != 5 {
+	if s.SidebarPanelRows != 9 { // rule, heading, rule, then lines, per section
 		t.Fatalf("panel rows = %d", s.SidebarPanelRows)
 	}
 	f := NewFrame(120, 40)
@@ -27,7 +27,7 @@ func TestSidebarPanelDrawsPluginLinesWithColorsAboveFooter(t *testing.T) {
 	drawSidebarMenu(f, s, false, false)
 	fr := SidebarFooter(s)
 	lines := []string{}
-	for y := fr.Y - 5; y < fr.Y; y++ {
+	for y := fr.Y - 9; y < fr.Y; y++ {
 		lines = append(lines, frameLine(f, y))
 	}
 	text := strings.Join(lines, "\n")
@@ -39,18 +39,25 @@ func TestSidebarPanelDrawsPluginLinesWithColorsAboveFooter(t *testing.T) {
 	if strings.Contains(text, "\x1b") || strings.Contains(text, "[38;2") {
 		t.Fatalf("escape sequence drawn as text:\n%s", text)
 	}
-	if c := f.Cell(fr.X+7, fr.Y-4); c == nil || c.Content != "█" || !reflect.DeepEqual(c.Style.Fg, color.RGBA{229, 72, 77, 255}) {
+	if c := f.Cell(fr.X+7, fr.Y-6); c == nil || c.Content != "█" || !reflect.DeepEqual(c.Style.Fg, color.RGBA{229, 72, 77, 255}) {
 		t.Fatalf("colored cell = %+v", c)
 	}
 	if !strings.Contains(frameLine(f, s.Rows-1), "[menu]") {
 		t.Fatal("footer moved")
 	}
 	heads := SidebarPanelLayout(s, panel)
-	if len(heads) != 2 || heads[0].Rect.Y != fr.Y-5 || heads[1].Rect.Y != fr.Y-2 {
+	if len(heads) != 2 || heads[0].Rect.Y != fr.Y-8 || heads[1].Rect.Y != fr.Y-3 {
 		t.Fatalf("headings = %+v", heads)
 	}
+	// Each heading sits between two rules, like the space list's machine headings.
+	for _, y := range []int{fr.Y - 9, fr.Y - 7, fr.Y - 4, fr.Y - 2} {
+		if line := strings.TrimSpace(frameLine(f, y)); !strings.HasPrefix(line, "────") {
+			t.Fatalf("row %d is not a rule: %q\n%s", y, line, text)
+		}
+	}
 	panel.Sections[0].Collapsed = true
-	if got := SidebarPanelRows(panel, area.H-5); got != 3 {
+	// A folded section shares its lower rule with the next heading.
+	if got := SidebarPanelRows(panel, area.H-5); got != 6 {
 		t.Fatalf("collapsed rows = %d", got)
 	}
 }
