@@ -16,6 +16,8 @@ import (
 
 var startupPayloadNames = []string{"bash-env.current", ".zshenv.current", ".zprofile.current", ".zshrc.current", ".zlogin.current"}
 
+var runtimeGenerationNames = append([]string{"manifest.json", "ikesu"}, startupPayloadNames...)
+
 type runtimeGeneration struct {
 	Executable string
 	Native     executableIdentity
@@ -302,10 +304,8 @@ func discardGeneration(shell *privateDirectory, name string) {
 }
 
 func removeGeneration(shell, dir *privateDirectory, name string) {
-	for _, file := range startupPayloadNames {
+	for _, file := range runtimeGenerationNames {
 		unix.Unlinkat(dir.fd(), file, 0)
 	}
-	unix.Unlinkat(dir.fd(), "manifest.json", 0)
-	unix.Unlinkat(dir.fd(), "ikesu", 0)
 	unix.Unlinkat(shell.fd(), name, unix.AT_REMOVEDIR)
 }
