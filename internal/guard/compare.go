@@ -1,7 +1,6 @@
 package guard
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,28 +20,37 @@ type entry struct {
 }
 
 func readEntries(path string, ai bool) ([]entry, int, error) {
-	f, e := os.Open(path)
-	if os.IsNotExist(e) {
-		return nil, 0, nil
+	var files []*os.File
+	if ai {
+		f, err := os.Open(path)
+		if os.IsNotExist(err) {
+			return nil, 0, nil
+		}
+		if err != nil {
+			return nil, 0, err
+		}
+		files = []*os.File{f}
+	} else {
+		var err error
+		files, err = openDecisionLogFiles(path)
+		if err != nil {
+			return nil, 0, err
+		}
 	}
-	if e != nil {
-		return nil, 0, e
-	}
-	defer f.Close()
+	defer closeLogFiles(files)
 	var rows []entry
 	bad := 0
-	s := bufio.NewScanner(f)
-	for s.Scan() {
-		line := s.Text()
+	err := scanLogLines(files, func(line string) {
 		if strings.TrimSpace(line) == "" {
-			continue
+			return
 		}
 		var row entry
+		var e error
 		if ai {
 			parts := strings.Split(line, "\t")
 			if len(parts) < 3 {
 				bad++
-				continue
+				return
 			}
 			var ts time.Time
 			for _, layout := range []string{time.RFC3339Nano, "2006-01-02 15:04:05", "2006-01-02T15:04:05-0700"} {
@@ -53,20 +61,20 @@ func readEntries(path string, ai bool) ([]entry, int, error) {
 			}
 			if e != nil || parts[2] == "" {
 				bad++
-				continue
+				return
 			}
 			row = entry{epoch: ts.Unix(), line: parts[2], verdict: strings.ToUpper(parts[1])}
 		} else {
 			var r Record
 			if e = json.Unmarshal([]byte(line), &r); e != nil || r.CommandLine == "" || r.Epoch == 0 || !has([]string{"allow", "ask", "block", "deny"}, r.Decision) {
 				bad++
-				continue
+				return
 			}
 			row = entry{r.Epoch, r.CommandLine, r.Decision, r.Rule}
 		}
 		rows = append(rows, row)
-	}
-	return rows, bad, s.Err()
+	})
+	return rows, bad, err
 }
 func aiVerdict(s string) string {
 	switch s {
@@ -150,32 +158,35 @@ func Compare(o CompareOptions, w io.Writer) (int, error) {
 	return 0, nil
 }
 func ReadLog(path string, lines *int, w io.Writer, jsonMode bool) error {
-	f, e := os.Open(path)
-	if os.IsNotExist(e) {
-		return nil
+	files, err := openDecisionLogFiles(path)
+	if err != nil {
+		return err
 	}
-	if e != nil {
-		return e
-	}
-	defer f.Close()
+	defer closeLogFiles(files)
 	var records []string
-	s := bufio.NewScanner(f)
-	for s.Scan() {
-		records = append(records, s.Text())
+	start := 0
+	err = scanLogLines(files, func(line string) {
+		if lines != nil && *lines == 0 {
+			return
+		}
+		if lines == nil || len(records) < *lines {
+			records = append(records, line)
+			return
+		}
+		records[start] = line
+		start = (start + 1) % len(records)
+	})
+	if err != nil {
+		return err
 	}
-	if e = s.Err(); e != nil {
-		return e
-	}
-	if lines != nil && len(records) > *lines {
-		records = records[len(records)-*lines:]
-	}
-	for _, raw := range records {
+	for offset := range records {
+		raw := records[(start+offset)%len(records)]
 		if jsonMode {
 			fmt.Fprintln(w, raw)
 			continue
 		}
 		var r Record
-		if e = json.Unmarshal([]byte(raw), &r); e != nil {
+		if err := json.Unmarshal([]byte(raw), &r); err != nil {
 			fmt.Fprintln(w, "malformed:", raw)
 			continue
 		}
