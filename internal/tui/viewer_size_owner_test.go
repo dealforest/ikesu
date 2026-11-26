@@ -225,6 +225,8 @@ func TestViewerDisconnectKeepsFrozenBasisUntilOneRemains(t *testing.T) {
 			check(192, 51)
 			fresh := a.NewViewer(io.Discard, 100, 30, nil)
 			fresh.Begin(a, 0, 0)
+			check(192, 51)
+			fresh.Input(a, []byte("x"))
 			check(72, 26)
 		})
 	}

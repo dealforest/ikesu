@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -148,9 +149,29 @@ func TestMultiClientFrozenHiddenPTYAcrossDetachAndLiveHandoff(t *testing.T) {
 			if _, err := client.WriteString("\x021"); err != nil {
 				t.Fatal(err)
 			}
+			deadline := time.Now().Add(10 * time.Second)
+			for {
+				var views api.ClientViewListResult
+				s.rpc(api.MethodClientViewList, nil, &views)
+				if slices.ContainsFunc(views.Views, func(v api.ClientView) bool { return slices.Contains(v.PaneIDs, hidden) }) {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("client did not paint selected tab", views)
+				}
+				s.pump(time.Now().Add(10 * time.Millisecond))
+			}
+			// Selection alone leaves the frozen PTY untouched. The
+			// subsequent hover is an explicit size-owning input.
+			if selected := s.observedPTYGeometry(hidden); selected != before {
+				t.Fatal("viewing frozen T changed its geometry", before, selected)
+			}
+			if _, err := client.WriteString("\x1b[<35;40;10M"); err != nil {
+				t.Fatal(err)
+			}
 			selected := s.waitPTYGeometry(hidden, func(g sizeGeometry) bool { return g.Rows == small.Rows && g.Cols == small.Cols })
 			if selected.Rows != small.Rows || selected.Cols != small.Cols || selected.X != small.X || selected.Y != small.Y || selected.PID != before.PID {
-				t.Fatal("T did not follow B on selection", before, selected, small)
+				t.Fatal("T did not follow B on operation", before, selected, small)
 			}
 			t.Logf("handoff=%t frozen T=%+v split U=%+v selected T=%+v", handoff, before, split, selected)
 			stop()

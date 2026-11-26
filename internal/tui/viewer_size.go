@@ -83,7 +83,7 @@ func (a *App) ptyRectForPane(pid int) (r layout.Rect) {
 }
 
 func (v *Viewer) takeSizeIfAvailable(a *App) {
-	if owner := a.sizeOwners[a.currentSizeTab()].viewer; owner == nil || owner == v {
+	if basis, recorded := a.sizeOwners[a.currentSizeTab()]; !recorded || basis.viewer == v {
 		v.takeSize(a)
 	}
 }
@@ -113,12 +113,14 @@ func (v *Viewer) Detach(a *App) {
 				v.releaseSizeTab(a, tab)
 			}
 		}
-		if len(a.sizeViewers) == 0 {
+		if a.sizeViewer == v {
 			a.sizeViewer = nil
+			if len(a.sizeViewers) > 0 {
+				a.sizeViewer = a.sizeViewers[0]
+			}
 		}
 		if len(a.sizeViewers) == 1 {
 			remaining := a.sizeViewers[0]
-			remaining.with(a, func(ui *App) { remaining.takeSize(a); ui.syncLayout() })
 			a.st.Cols, a.st.Rows = remaining.cols, remaining.rows
 		}
 		return

@@ -20,14 +20,18 @@ func (v *Viewer) applyInput(ui *App, event input.Event) {
 	root.sizeInputOrder++
 	pending := viewerInput{event, root.sizeInputOrder}
 	if event.Kind == input.KindFocus {
-		v.focusEpoch++
-		v.focusUntil = time.Now().Add(time.Second) // SPEC G11: at most one second
+		v.awaitFocusFrame()
 	}
 	if time.Now().Before(v.focusUntil) && (event.Kind == input.KindKey || event.Kind == input.KindPaste) {
 		v.heldKeys = append(v.heldKeys, pending)
 		return
 	}
 	v.deliverInput(ui, pending)
+}
+
+func (v *Viewer) awaitFocusFrame() {
+	v.focusEpoch++
+	v.focusUntil = time.Now().Add(time.Second) // SPEC G11: at most one second
 }
 
 // Classify the event by its actual effect on this viewer's selection.
