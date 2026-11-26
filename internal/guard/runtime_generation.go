@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -205,6 +206,9 @@ func (a *Assets) ensureGeneration(shell *privateDirectory, entries bool) (string
 		return "", err
 	}
 	published = true
+	if created {
+		pruneGenerations(shell, name, time.Now().Add(-10*time.Minute))
+	}
 	return filepath.Join(shell.path, name), nil
 }
 
@@ -255,8 +259,33 @@ func (a *Assets) trustedSource() (string, os.FileInfo, error) {
 	return target, info, nil
 }
 
-// Only unpublished directories allocated by this operation are discarded.
-// Published generations remain available to already-started readers.
+// Called with the same exclusive lock as publication. Recent generations may
+// still be needed by a shell that has received its startup path.
+func pruneGenerations(shell *privateDirectory, current string, cutoff time.Time) {
+	fd, err := unix.Openat(shell.fd(), ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return
+	}
+	listing := os.NewFile(uintptr(fd), shell.path)
+	names, _ := listing.Readdirnames(-1)
+	listing.Close()
+	for _, name := range names {
+		if name == current || !generationName(name) {
+			continue
+		}
+		dir, err := shell.child(name, false)
+		if err != nil {
+			continue
+		}
+		info, err := dir.file.Stat()
+		if err == nil && info.ModTime().Before(cutoff) {
+			removeGeneration(shell, dir, name)
+		}
+		dir.close()
+	}
+}
+
+// Discard a generation whose creation or publication failed.
 func discardGeneration(shell *privateDirectory, name string) {
 	if !generationName(name) {
 		return
@@ -269,8 +298,14 @@ func discardGeneration(shell *privateDirectory, name string) {
 		return
 	}
 	defer dir.close()
-	for _, file := range append(append([]string{}, startupPayloadNames...), "manifest.json", "ikesu") {
+	removeGeneration(shell, dir, name)
+}
+
+func removeGeneration(shell, dir *privateDirectory, name string) {
+	for _, file := range startupPayloadNames {
 		unix.Unlinkat(dir.fd(), file, 0)
 	}
+	unix.Unlinkat(dir.fd(), "manifest.json", 0)
+	unix.Unlinkat(dir.fd(), "ikesu", 0)
 	unix.Unlinkat(shell.fd(), name, unix.AT_REMOVEDIR)
 }
