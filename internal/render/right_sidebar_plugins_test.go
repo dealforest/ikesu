@@ -19,7 +19,7 @@ func TestRightSidebarPluginReservesRowsForAgentsJobsAndKoi(t *testing.T) {
 		for range 40 {
 			in.Jobs = append(in.Jobs, JobRow{Label: "job-row"})
 		}
-		panel := &SidebarPanel{Sections: []SidebarPanelSection{{Key: "right/status.30s.sh", Title: "Right plugin"}}}
+		panel := &SidebarPanel{Rules: true, Sections: []SidebarPanelSection{{Key: "right/status.30s.sh", Title: "Right plugin"}}}
 		for range 30 {
 			panel.Sections[0].Lines = append(panel.Sections[0].Lines, SidebarPanelLine{Text: "\x1b[31mPlugin output\x1b[0m"})
 		}
@@ -38,13 +38,17 @@ func TestRightSidebarPluginReservesRowsForAgentsJobsAndKoi(t *testing.T) {
 		for _, sidebar := range []*MachineSidebar{nil, machines} {
 			f := ComposeMachines(in, sidebar).Frame
 			var heading strings.Builder
+			// A rule, the heading, a rule, then the lines.
 			for x := reserved.X; x < reserved.X+reserved.W; x++ {
-				heading.WriteString(f.Cell(x, reserved.Y).Content)
+				heading.WriteString(f.Cell(x, reserved.Y+1).Content)
+			}
+			if got := f.Cell(reserved.X, reserved.Y).Content; got != "─" {
+				t.Fatalf("no rule above the heading: %q", got)
 			}
 			if !strings.Contains(heading.String(), "Right plugin") {
 				t.Fatalf("right plugin heading = %q", heading.String())
 			}
-			if got := f.Cell(reserved.X+1, reserved.Y+1); got.Content != "P" || got.Style.Fg != ansi.BasicColor(1) {
+			if got := f.Cell(reserved.X+1, reserved.Y+3); got.Content != "P" || got.Style.Fg != ansi.BasicColor(1) {
 				t.Fatalf("right plugin did not render SGR text: %+v", got)
 			}
 			scene := f.KoiScene
@@ -140,7 +144,7 @@ func TestRightSidebarPluginGeometryAtNormalAndCompactWidths(t *testing.T) {
 		if compact {
 			in.State.RightSidebarMode, in.State.RightSidebarSize = "compact", 0
 		}
-		p := &SidebarPanel{Sections: []SidebarPanelSection{{Key: "probe", Title: "Probe", Lines: []SidebarPanelLine{{Text: "body"}}}}}
+		p := &SidebarPanel{Rules: true, Sections: []SidebarPanelSection{{Key: "probe", Title: "Probe", Lines: []SidebarPanelLine{{Text: "body"}}}}}
 		in.RightSidebarPanel = p
 		area := in.State.RightSidebarArea()
 		for _, machines := range []*MachineSidebar{nil, {Groups: []MachineGroup{{ID: "a", Input: &in}, {ID: "b", Input: &in}}}} {
@@ -153,15 +157,15 @@ func TestRightSidebarPluginGeometryAtNormalAndCompactWidths(t *testing.T) {
 				}
 				continue
 			}
-			if area.W != 16 || r.W != 15 || r.H != 2 || list.Y+list.H != r.Y {
+			if area.W != 16 || r.W != 15 || r.H != 4 || list.Y+list.H != r.Y {
 				t.Fatalf("normal width geometry: area=%+v panel=%+v list=%+v", area, r, list)
 			}
 			var heading strings.Builder
 			for x := r.X; x < r.X+r.W; x++ {
-				heading.WriteString(frame.Cell(x, r.Y).Content)
+				heading.WriteString(frame.Cell(x, r.Y+1).Content)
 			}
-			if !strings.Contains(heading.String(), "Probe") || frame.Cell(r.X+1, r.Y+1).Content != "b" {
-				t.Fatalf("missing narrow plugin drawing: %q, %+v", heading.String(), frame.Cell(r.X+1, r.Y+1))
+			if !strings.Contains(heading.String(), "Probe") || frame.Cell(r.X+1, r.Y+3).Content != "b" {
+				t.Fatalf("missing narrow plugin drawing: %q, %+v", heading.String(), frame.Cell(r.X+1, r.Y+3))
 			}
 			scene := frame.KoiScene
 			if len(scene.Fish) == 0 || scene.Pond.Y+scene.Pond.H != r.Y || scene.ClickPond.Y+scene.ClickPond.H > r.Y {
@@ -173,15 +177,15 @@ func TestRightSidebarPluginGeometryAtNormalAndCompactWidths(t *testing.T) {
 
 func TestSidebarPluginANSIRejectsMalformedDecorationOnBothSides(t *testing.T) {
 	in := koiFixture(t, 0)
-	in.State.SidebarPanelRows = 2
-	p := &SidebarPanel{Sections: []SidebarPanelSection{{Key: "probe", Title: "Probe", Lines: []SidebarPanelLine{
+	in.State.SidebarPanelRows = 4
+	p := &SidebarPanel{Rules: true, Sections: []SidebarPanelSection{{Key: "probe", Title: "Probe", Lines: []SidebarPanelLine{
 		{Text: "\x1bmA\x1b[?31mB\x1b[123\x1b[32mC\x1b[0mD\x1b["},
 	}}}}
 	in.SidebarPanel, in.RightSidebarPanel = p, p
 	frame := Compose(in).Frame
 	for _, r := range []layout.Rect{leftSidebarPanelRect(in.State), RightSidebarPanelRect(in.State, p)} {
 		for i, want := range []string{"A", "B", "C", "D"} {
-			cell := frame.Cell(r.X+1+i, r.Y+1)
+			cell := frame.Cell(r.X+1+i, r.Y+3)
 			fg := frame.Palette.Text
 			if want == "C" {
 				fg = ansi.BasicColor(2)
@@ -190,7 +194,7 @@ func TestSidebarPluginANSIRejectsMalformedDecorationOnBothSides(t *testing.T) {
 				t.Fatalf("side at X=%d cell %s = %+v, color want %v", r.X, want, cell, fg)
 			}
 		}
-		if got := frame.Cell(r.X+5, r.Y+1).Content; got != " " {
+		if got := frame.Cell(r.X+5, r.Y+3).Content; got != " " {
 			t.Fatalf("incomplete sequence rendered as text: %q", got)
 		}
 	}

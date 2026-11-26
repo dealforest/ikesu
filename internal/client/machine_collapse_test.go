@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/kazuph/ikesu/internal/api"
+	"github.com/kazuph/ikesu/internal/layout"
 	"github.com/kazuph/ikesu/internal/render"
 )
 
@@ -237,5 +238,135 @@ func TestMachineHeaderInOneColumnSidebarShowsToggle(t *testing.T) {
 	clickCell(t, h, hit.Rect.X, hit.Rect.Y)
 	if _, glyph, rows := header(); glyph != "▾" || rows == 0 {
 		t.Fatalf("expanded one-column header glyph=%q rows=%d", glyph, rows)
+	}
+}
+
+// A left click on a machine heading in the right list folds that machine's
+// agent rows; the heading sits between two rules and a second click opens it.
+func TestRightMachineHeaderClickFoldsAgentRows(t *testing.T) {
+	h := newRightMachineHarness(t)
+	m := h.m
+	h.modes(0, 0, 160, 35)
+	// rules are the drawn rule rows of the right list, found in the frame
+	// itself so a rule that is drawn but not registered is still clicked.
+	var rules []layout.Rect
+	read := func() (header render.MachineHit, rows map[string]int, frame *render.Frame) {
+		rules = rules[:0]
+		frame = render.ComposeClient(*m.endpoints[m.active].snapshot, &m.sidebar, "test", false).Frame
+		rows = map[string]int{}
+		for _, hit := range m.sidebar.Hits {
+			if !hit.Right {
+				continue
+			}
+			if hit.Fold && hit.Machine == "remote" {
+				header = hit
+			}
+			if !hit.Header && !hit.Rule {
+				rows[hit.Machine]++
+			}
+		}
+		if header.Machine == "" {
+			t.Fatal("remote heading not drawn in the right list")
+		}
+		list := render.RightSidebarListRect(m.endpoints[m.active].snapshot.State, m.endpoints[m.active].snapshot.RightSidebarPanel)
+		for y := list.Y; y < list.Y+list.H; y++ {
+			if frame.Cell(list.X, y).Content == "─" && frame.Cell(list.X+list.W-1, y).Content == "─" {
+				rules = append(rules, layout.Rect{X: list.X, Y: y, W: list.W, H: 1})
+			}
+		}
+		return header, rows, frame
+	}
+	header, before, frame := read()
+	if before["remote"] == 0 || before["local"] == 0 {
+		t.Fatalf("fixture needs agent rows on both machines: %+v", before)
+	}
+	if got := frame.Cell(header.Rect.X, header.Rect.Y).Content; got != "▾" {
+		t.Fatalf("open glyph = %q", got)
+	}
+	for _, y := range []int{header.Rect.Y - 1, header.Rect.Y + 1} {
+		if got := frame.Cell(header.Rect.X, y).Content; got != "─" {
+			t.Fatalf("no rule at y=%d next to the heading: %q", y, got)
+		}
+	}
+	// A rule takes a row but is not a target: the row at the same place in
+	// the server's own list (an agent or a job) must not get the click.
+	focused := m.endpoints[m.active].snapshot.State.FocusedPane()
+	sent := func() uint64 {
+		c := m.endpoints[m.active].connection
+		c.queueMu.Lock()
+		defer c.queueMu.Unlock()
+		return c.sentInput
+	}
+	sentBefore := sent()
+	for _, rule := range rules {
+		clickCell(t, h, rule.X+2, rule.Y)
+		if m.pending != nil || m.sidebar.RightCollapsed["remote"] || m.sidebar.RightCollapsed["local"] {
+			t.Fatalf("rule y=%d acted: pending=%+v folded=%+v", rule.Y, m.pending, m.sidebar.RightCollapsed)
+		}
+	}
+	if got := sent(); got != sentBefore {
+		t.Fatalf("rule clicks sent %d inputs to the server", got-sentBefore)
+	}
+	// A press in a pane released over a rule still sends the release, so the
+	// pane that got the press is not left holding the mouse.
+	pane := m.endpoints[m.active].snapshot.State.DisplayPaneRects()[0].Rect
+	for _, ev := range []string{fmt.Sprintf("\x1b[<0;%d;%dM", pane.X+3, pane.Y+3), fmt.Sprintf("\x1b[<0;%d;%dm", rules[0].X+3, rules[0].Y+1)} {
+		if err := m.input(mouseEvent(t, ev)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := sent(); got != sentBefore+2 {
+		t.Fatalf("pane press and rule release sent %d inputs, want 2", got-sentBefore)
+	}
+	sentBefore = sent()
+	if got := m.endpoints[m.active].snapshot.State.FocusedPane(); got != focused {
+		t.Fatalf("rule click moved focus %d -> %d", focused, got)
+	}
+	clickCell(t, h, header.Rect.X+3, header.Rect.Y)
+	folded, after, frame := read()
+	// The pond starts below the folded machine's lower rule.
+	snap := *m.endpoints[m.active].snapshot
+	snap.Koi = true
+	if pond := render.KoiSceneFor(frame, snap, &m.sidebar).ClickPond; len(rules) == 0 || pond.H > 0 && pond.Y <= rules[len(rules)-1].Y {
+		t.Fatalf("pond %+v covers the last rule %+v", pond, rules)
+	}
+	if got := frame.Cell(folded.Rect.X, folded.Rect.Y).Content; got != "▸" {
+		t.Fatalf("folded glyph = %q", got)
+	}
+	if after["remote"] != 0 || after["local"] != before["local"] {
+		t.Fatalf("fold hid the wrong rows: before=%+v after=%+v", before, after)
+	}
+	if m.sidebar.Collapsed["remote"] {
+		t.Fatal("right fold also folded the left space list")
+	}
+	// With both machines folded, the empty rows below them are not the rows
+	// the server has there: a press on them sends nothing.
+	local := folded
+	for _, hit := range m.sidebar.Hits {
+		if hit.Right && hit.Fold && hit.Machine == "local" {
+			local = hit
+		}
+	}
+	clickCell(t, h, local.Rect.X+3, local.Rect.Y)
+	_, _, _ = read()
+	if !m.sidebar.RightCollapsed["local"] || len(rules) == 0 {
+		t.Fatal("local machine did not fold")
+	}
+	// Without the koi taking the click (the jobs list has none).
+	koiOff := false
+	m.endpoints[m.active].snapshot.SidebarConfig.UI.Koi = &koiOff
+	if err := m.paint(); err != nil {
+		t.Fatal(err)
+	}
+	sentBefore = sent()
+	clickCell(t, h, rules[len(rules)-1].X+3, rules[len(rules)-1].Y+2)
+	if got := sent(); got != sentBefore || m.pending != nil {
+		t.Fatalf("empty row press sent %d inputs pending=%+v", got-sentBefore, m.pending)
+	}
+	clickCell(t, h, local.Rect.X+3, local.Rect.Y)
+	_, _, _ = read()
+	clickCell(t, h, folded.Rect.X, folded.Rect.Y)
+	if _, again, _ := read(); again["remote"] != before["remote"] {
+		t.Fatalf("second click did not open: %+v", again)
 	}
 }

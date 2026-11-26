@@ -25,6 +25,10 @@ type MachineHit struct {
 	Oyagoi        bool
 	OfflineOyagoi bool
 	OyagoiHeading bool
+	// Fold is the right list's ▾/▸ heading; a left click folds the machine.
+	Fold bool
+	// Rule is a right-list rule: it takes a row and swallows clicks.
+	Rule bool
 }
 
 type MachineSidebar struct {
@@ -36,12 +40,14 @@ type MachineSidebar struct {
 	RightScroll    int
 	RightMaxScroll int
 	Hits           []MachineHit
-	PaneStatus  []string
-	DropMachine string
-	DropIndex   *int
-	DropSection model.Section
+	PaneStatus     []string
+	DropMachine    string
+	DropIndex      *int
+	DropSection    model.Section
 	// Collapsed hides a machine's space rows; only the client remembers it.
 	Collapsed map[string]bool
+	// RightCollapsed hides a machine's agent or job rows in the right list.
+	RightCollapsed map[string]bool
 }
 
 type Oyagoi struct {

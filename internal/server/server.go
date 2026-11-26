@@ -1107,6 +1107,8 @@ func (s *Server) attach(conn net.Conn) {
 		c.viewer.SetContinuousSidebarRows(endpoint.Allows(available, 1, hello.Methods, "sidebar_continuous"))
 		c.viewer.SetRightSidebarPlugins(endpoint.Allows(available, 1, hello.Methods, endpoint.RightSidebarPlugins) &&
 			endpoint.Allows(available, 1, s.endpointPeer.Methods, endpoint.RightSidebarPlugins))
+		c.viewer.SetSidebarPanelRules(endpoint.Allows(available, 1, hello.Methods, endpoint.SidebarPanelRules) &&
+			endpoint.Allows(available, 1, s.endpointPeer.Methods, endpoint.SidebarPanelRules))
 		if hello.Visible != nil && !*hello.Visible {
 			c.viewer.SetVisible(s.app, false)
 		}

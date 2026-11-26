@@ -94,7 +94,8 @@ func (a *App) sidebarPanel(position sidebarplugin.Position) *render.SidebarPanel
 	if position == sidebarplugin.Right && a.viewerContext != nil && !a.viewerContext.rightSidebarPlugins {
 		return nil
 	}
-	p := &render.SidebarPanel{}
+	// A display that predates the rules draws and hit-tests the old layout.
+	p := &render.SidebarPanel{Rules: a.viewerContext == nil || a.viewerContext.panelRules}
 	for _, it := range a.panel.plugins {
 		if (it.Position == sidebarplugin.Right) != (position == sidebarplugin.Right) {
 			continue
