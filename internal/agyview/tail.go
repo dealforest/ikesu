@@ -77,12 +77,37 @@ func quotaRow(line string) bool {
 	if line == "quota: --" {
 		return true
 	}
-	for _, part := range strings.Split(line, "│") {
-		if !quotaPart(strings.TrimSpace(part)) {
+	parts := strings.Split(line, "│")
+	for i, part := range parts {
+		part = strings.TrimSpace(part)
+		// After a whole part and a separator, the pane edge may cut the next part
+		// anywhere: "│ Claude/GPT 5", "│ Cl", or right after "│".
+		if i > 0 && i == len(parts)-1 && quotaPartCut(part) {
+			continue
+		}
+		if !quotaPart(part) {
 			return false
 		}
 	}
 	return true
+}
+
+var quotaWindowCut = regexp.MustCompile(`^[0-9]+h?$`)
+
+func quotaPartCut(part string) bool {
+	if part == "" {
+		return true
+	}
+	fields := strings.Fields(part)
+	for _, name := range []string{"Gemini", "Claude/GPT", "Argon"} {
+		if len(fields) == 1 && strings.HasPrefix(name, fields[0]) {
+			return true
+		}
+		if len(fields) == 2 && fields[0] == name && (name == "Argon" && strings.HasPrefix("wk", fields[1]) || name != "Argon" && quotaWindowCut.MatchString(fields[1])) {
+			return true
+		}
+	}
+	return false
 }
 
 // Tail accepts only the observed cancel/status line and the optional quota rows.
@@ -108,12 +133,13 @@ func Tail(lines []string) bool {
 
 var questionHeader = regexp.MustCompile(`^\s*Question ([1-9][0-9]*)/([1-9][0-9]*):`)
 
-// ShortFooter is the footer of a lone question: no Next and no Submit. It is
-// valid only under "Question 1/1:"; in a longer set the last one shows Submit.
+// ShortFooter is the footer of a lone question on a choice: "enter Select" with
+// no Next and no Submit. It is valid only under "Question 1/1:"; in a longer set
+// the last one shows Submit. A Write-in row ("enter Write-in") is the last
+// question's own footer for any set size and is not a short footer.
 func ShortFooter(line string) bool {
 	return strings.Contains(line, "↑/↓ Navigate") && !strings.Contains(line, "→ Next") && !strings.Contains(line, "Submit") &&
-		!strings.Contains(line, "Toggle") && (strings.Contains(line, "enter Select") || strings.Contains(line, "enter Write-in")) &&
-		strings.Contains(line, "esc Skip")
+		!strings.Contains(line, "Toggle") && strings.Contains(line, "enter Select") && strings.Contains(line, "esc Skip")
 }
 
 func HasCurrentFooter(lines []string) bool {

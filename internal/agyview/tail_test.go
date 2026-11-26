@@ -12,6 +12,10 @@ func TestTailAcceptsObservedStatusAndQuotaRows(t *testing.T) {
 		"quota wrapped":        {status, "Gemini 5h 11% (<1m) · wk 3% (6d18h)", "Claude/GPT 5h 100% (<1m) · wk 50% (2d1h)"},
 		"quota cut off":        {status, "Gemini 5h 19% (11m) · wk 6%", "Claude/GPT 5h 0% (<1m) · wk"},
 		"quota not yet":        {status, "quota: --"},
+		"cut after separator":  {status, "Gemini 5h 3% (2h33m) · wk 6% (6d16h) │"},
+		"cut in next name":     {status, "Gemini 5h 3% (2h33m) · wk 6% (6d16h) │ Cl"},
+		"cut at next name":     {status, "Gemini 5h 3% (2h33m) · wk 6% (6d16h) │ Claude/GPT"},
+		"cut in next window":   {status, "Gemini 5h 3% (2h33m) · wk 6% (6d16h) │ Claude/GPT 5"},
 		"status with tasks":    {"esc to cancel                  auto · Gemini 4 Neon · medium · 1 task(s) · /tasks", "Gemini 5h 2% (2h46m) · wk 5% (6d16h) │ Claude/GPT 5h 0% (<1m) · wk 50% (1d22h)"},
 		"blank rows":           {"", status, "", "quota: --", ""},
 		"status without mode":  {"esc to cancel                                       Gemini 4 Neon · high", "Gemini 5h 3% (2h36m) · wk 6% (6d16h) │ Claude/GPT 5h 0% (<1m) · wk 50% (1d22h)"},
@@ -34,6 +38,8 @@ func TestTailRejectsOtherRows(t *testing.T) {
 		"model name output":   {status, "Gemini finished"},
 		"bare model names":    {status, "Argon"},
 		"model then words":    {status, "Claude/GPT says hello"},
+		"cut part alone":      {status, "Claude/GPT 5"},
+		"words after a part":  {status, "Gemini 5h 3% (2h33m) · wk 6% (6d16h) │ Claude/GPT says"},
 	} {
 		if Tail(rows) {
 			t.Errorf("%s: accepted %q", name, rows)

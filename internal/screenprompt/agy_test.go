@@ -113,6 +113,15 @@ func TestAgySingleQuestionObservedForm(t *testing.T) {
 	if Parse("agy", strings.Split(strings.Replace(screen, "Question 1/1:", "Question 2/2:", 1), "\n")) != nil {
 		t.Fatal("accepted the short footer on the last of several questions")
 	}
+	// On the Write-in row the last question of any set is answerable, the same as detection decides.
+	for _, header := range []string{"Question 1/1:", "Question 2/2:"} {
+		s := strings.Replace(screen, "Question 1/1:", header, 1)
+		s = strings.Replace(strings.Replace(s, "> 1.", "  1.", 1), "  4. Write-in", "> 4. Write-in", 1)
+		s = strings.Replace(s, "enter Select", "enter Write-in", 1)
+		if p := Parse("agy", strings.Split(s, "\n")); p == nil || p.Cursor != 3 {
+			t.Fatalf("%s on Write-in: %+v", header, p)
+		}
+	}
 	if Parse("agy", strings.Split(strings.TrimRight(screen, "\n")+"\nGemini finished\n", "\n")) != nil {
 		t.Fatal("old question kept after ordinary output")
 	}

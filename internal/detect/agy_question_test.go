@@ -49,6 +49,16 @@ func TestAgySingleQuestionDetection(t *testing.T) {
 			t.Fatalf("%s with the short footer detected as waiting: %+v", header, d)
 		}
 	}
+	// On the Write-in row the footer reads "enter Write-in · esc Skip" for the last question of any set:
+	// detection and the reader agree on 1/1 and 2/2 (the reader's own check is in screenprompt).
+	for _, header := range []string{"Question 1/1:", "Question 2/2:"} {
+		s := strings.Replace(screen, "Question 1/1:", header, 1)
+		s = strings.Replace(strings.Replace(s, "> 1.", "  1.", 1), "  4. Write-in", "> 4. Write-in", 1)
+		s = strings.Replace(s, "enter Select", "enter Write-in", 1)
+		if d := Detect("agy", Input{Screen: s}); d.State != Blocked || d.RuleID != "question_prompt" {
+			t.Fatalf("%s on Write-in not waiting: %+v", header, d)
+		}
+	}
 	// Ordinary output under the status row ends the question.
 	if d := Detect("agy", Input{Screen: strings.TrimRight(screen, "\n") + "\nGemini finished\n"}); d.RuleID == "question_prompt" {
 		t.Fatalf("old question kept after output: %+v", d)
