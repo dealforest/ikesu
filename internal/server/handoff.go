@@ -8,6 +8,7 @@ import (
 	"github.com/kazuph/ikesu/internal/api"
 	"github.com/kazuph/ikesu/internal/childenv"
 	"github.com/kazuph/ikesu/internal/endpoint"
+	"github.com/kazuph/ikesu/internal/guard"
 	"github.com/kazuph/ikesu/internal/runtime"
 	"github.com/kazuph/ikesu/internal/tui"
 	"golang.org/x/sys/unix"
@@ -398,6 +399,17 @@ func handoffStreamError(err error) error {
 		return fmt.Errorf("timed out waiting for handoff import connection")
 	}
 	return fmt.Errorf("handoff stream closed while reading line")
+}
+
+// A legacy sender checkpoints only the current link. The importer must put
+// the on-disk protection in place before rebinding any of the imported panes.
+func (in *handoffImport) holdGuardPruning() (func(), error) {
+	for _, pane := range in.State.Panes {
+		if g := pane.Guard; g != nil && g.Injected && !g.ConfigDisabled && g.Config.Active() {
+			return guard.HoldGenerationPruning(g.Root)
+		}
+	}
+	return func() {}, nil
 }
 
 func (s *Server) restoreLive(in *handoffImport, socket string) error {

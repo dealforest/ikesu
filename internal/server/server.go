@@ -725,8 +725,15 @@ func runEndpointWithClock(session, version string, peer endpoint.Peer, clock gra
 
 	// Restore the saved session when session.json exists; otherwise start
 	// the initial shell. A corrupt file fails closed to a fresh state.
+	var releaseGuardPruning func()
 	if imported != nil {
-		if err := s.restoreLive(imported, apiSock); err != nil {
+		release, err := imported.holdGuardPruning()
+		if err == nil {
+			releaseGuardPruning = sync.OnceFunc(release)
+			defer releaseGuardPruning()
+			err = s.restoreLive(imported, apiSock)
+		}
+		if err != nil {
 			s.handedOff = true
 			s.sup.ReleaseHandoff()
 			s.cleanup()
@@ -762,6 +769,8 @@ func runEndpointWithClock(session, version string, peer endpoint.Peer, clock gra
 		var final handoffResult
 		if err := imported.Decoder.Decode(&final); err != nil || final.State != "mail_input_times" {
 			final.MailInputTimes = nil
+		} else {
+			releaseGuardPruning()
 		}
 		s.sup.RestorePendingInputs(final.PendingInputs)
 		s.sup.RestoreMailInputTimes(final.MailInputTimes)
