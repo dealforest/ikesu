@@ -31,6 +31,9 @@ func TestTailRejectsOtherRows(t *testing.T) {
 		"too many quota rows": {status, "quota: --", "quota: --", "quota: --", "quota: --"},
 		"other status":        {"? for shortcuts                   auto · Gemini 4 Neon · high"},
 		"quota then text":     {status, "Gemini 5h 3% (2h39m) · wk 6% (6d16h)", "Thinking..."},
+		"model name output":   {status, "Gemini finished"},
+		"bare model names":    {status, "Argon"},
+		"model then words":    {status, "Claude/GPT says hello"},
 	} {
 		if Tail(rows) {
 			t.Errorf("%s: accepted %q", name, rows)

@@ -113,6 +113,9 @@ func TestAgySingleQuestionObservedForm(t *testing.T) {
 	if Parse("agy", strings.Split(strings.Replace(screen, "Question 1/1:", "Question 2/2:", 1), "\n")) != nil {
 		t.Fatal("accepted the short footer on the last of several questions")
 	}
+	if Parse("agy", strings.Split(strings.TrimRight(screen, "\n")+"\nGemini finished\n", "\n")) != nil {
+		t.Fatal("old question kept after ordinary output")
+	}
 	for _, footer := range []string{"↑/↓ Navigate · → Next · enter Select · esc Skip", "↑/↓ Navigate · space Toggle · esc Skip", "↑/↓ Navigate · enter Select"} {
 		if Parse("agy", strings.Split(strings.Replace(screen, "↑/↓ Navigate · enter Select · esc Skip", footer, 1), "\n")) != nil {
 			t.Fatalf("accepted footer %q", footer)

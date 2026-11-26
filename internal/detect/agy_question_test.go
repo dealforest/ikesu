@@ -41,6 +41,18 @@ func TestAgySingleQuestionDetection(t *testing.T) {
 	if d := Detect("agy", Input{Screen: strings.Replace(screen, "esc Skip", "", 1)}); d.RuleID == "question_prompt" {
 		t.Fatalf("false question: %+v", d)
 	}
+	// The short footer waits only under 1/1, the same rule the reader uses: 1/2 and 2/2 with it
+	// are neither waiting nor answerable.
+	for _, header := range []string{"Question 1/2:", "Question 2/2:"} {
+		s := strings.Replace(screen, "Question 1/1:", header, 1)
+		if d := Detect("agy", Input{Screen: s}); d.RuleID == "question_prompt" {
+			t.Fatalf("%s with the short footer detected as waiting: %+v", header, d)
+		}
+	}
+	// Ordinary output under the status row ends the question.
+	if d := Detect("agy", Input{Screen: strings.TrimRight(screen, "\n") + "\nGemini finished\n"}); d.RuleID == "question_prompt" {
+		t.Fatalf("old question kept after output: %+v", d)
+	}
 }
 
 func TestAgyIdleAndActivePriority(t *testing.T) {

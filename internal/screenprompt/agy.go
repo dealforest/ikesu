@@ -107,11 +107,9 @@ func parseAgy(screen []string) *Prompt {
 }
 
 // A lone question (1/1, observed in agy 1.5.17 on 2026-11-26) has no Next and no
-// Submit: "↑/↓ Navigate · enter Select · esc Skip", and enter answers it.
-func agySingleFooter(line string) bool {
-	return strings.Contains(line, "↑/↓ Navigate") && !strings.Contains(line, "→ Next") && !strings.Contains(line, "Toggle") &&
-		(strings.Contains(line, "enter Select") || strings.Contains(line, "enter Write-in")) && strings.Contains(line, "esc Skip")
-}
+// Submit: "↑/↓ Navigate · enter Select · esc Skip", and enter answers it. The
+// caller checks 1/1; detection uses the same footer rule (agyview.ShortFooter).
+func agySingleFooter(line string) bool { return agyview.ShortFooter(line) }
 
 // The final question submits its answer directly; no separate submit key is sent.
 func agyFooter(line string, final bool) bool {
