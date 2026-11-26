@@ -307,6 +307,18 @@ func TestRightMachineHeaderClickFoldsAgentRows(t *testing.T) {
 	if got := sent(); got != sentBefore {
 		t.Fatalf("rule clicks sent %d inputs to the server", got-sentBefore)
 	}
+	// A press in a pane released over a rule still sends the release, so the
+	// pane that got the press is not left holding the mouse.
+	pane := m.endpoints[m.active].snapshot.State.DisplayPaneRects()[0].Rect
+	for _, ev := range []string{fmt.Sprintf("\x1b[<0;%d;%dM", pane.X+3, pane.Y+3), fmt.Sprintf("\x1b[<0;%d;%dm", rules[0].X+3, rules[0].Y+1)} {
+		if err := m.input(mouseEvent(t, ev)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := sent(); got != sentBefore+2 {
+		t.Fatalf("pane press and rule release sent %d inputs, want 2", got-sentBefore)
+	}
+	sentBefore = sent()
 	if got := m.endpoints[m.active].snapshot.State.FocusedPane(); got != focused {
 		t.Fatalf("rule click moved focus %d -> %d", focused, got)
 	}
@@ -327,6 +339,32 @@ func TestRightMachineHeaderClickFoldsAgentRows(t *testing.T) {
 	if m.sidebar.Collapsed["remote"] {
 		t.Fatal("right fold also folded the left space list")
 	}
+	// With both machines folded, the empty rows below them are not the rows
+	// the server has there: a press on them sends nothing.
+	local := folded
+	for _, hit := range m.sidebar.Hits {
+		if hit.Right && hit.Fold && hit.Machine == "local" {
+			local = hit
+		}
+	}
+	clickCell(t, h, local.Rect.X+3, local.Rect.Y)
+	_, _, _ = read()
+	if !m.sidebar.RightCollapsed["local"] || len(rules) == 0 {
+		t.Fatal("local machine did not fold")
+	}
+	// Without the koi taking the click (the jobs list has none).
+	koiOff := false
+	m.endpoints[m.active].snapshot.SidebarConfig.UI.Koi = &koiOff
+	if err := m.paint(); err != nil {
+		t.Fatal(err)
+	}
+	sentBefore = sent()
+	clickCell(t, h, rules[len(rules)-1].X+3, rules[len(rules)-1].Y+2)
+	if got := sent(); got != sentBefore || m.pending != nil {
+		t.Fatalf("empty row press sent %d inputs pending=%+v", got-sentBefore, m.pending)
+	}
+	clickCell(t, h, local.Rect.X+3, local.Rect.Y)
+	_, _, _ = read()
 	clickCell(t, h, folded.Rect.X, folded.Rect.Y)
 	if _, again, _ := read(); again["remote"] != before["remote"] {
 		t.Fatalf("second click did not open: %+v", again)
