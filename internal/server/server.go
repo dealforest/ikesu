@@ -172,9 +172,8 @@ type Server struct {
 	cleanupRunning bool
 
 	// durable mailbox / jobs
-	dbMu               sync.Mutex
+	dbOnce             sync.Once
 	store              *dispatch.Store
-	dbReady            atomic.Bool // publishes store to existing-store readers
 	dbErr              error
 	mailCh             chan mailWrite
 	mailWG             sync.WaitGroup
@@ -857,8 +856,8 @@ func (s *Server) cleanup() {
 	s.mailWG.Wait()
 	s.stopJobMonitors()
 	s.ledgerWG.Wait()
-	if store := s.loadedStore(); store != nil {
-		store.Close()
+	if s.store != nil {
+		s.store.Close()
 	}
 	if !s.handedOff {
 		os.Remove(api.APISocketPath(s.dir))

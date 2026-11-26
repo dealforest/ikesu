@@ -1,56 +1,11 @@
 package dispatch
 
 import (
-	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
-	"time"
-
-	sqlite3 "github.com/ncruces/go-sqlite3"
 )
-
-func TestOpenForStoppingLedgerBoundsSchemaLock(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "ikesu.db")
-	store, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	if err := store.exec("ALTER TABLE pane_sessions DROP COLUMN session_start_source"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.exec("BEGIN IMMEDIATE"); err != nil {
-		t.Fatal(err)
-	}
-	defer store.exec("ROLLBACK")
-
-	start := time.Now()
-	opened, err := OpenForStoppingLedger(path, start.Add(100*time.Millisecond))
-	if opened != nil {
-		opened.Close()
-	}
-	if !errors.Is(err, sqlite3.BUSY) || time.Since(start) > time.Second {
-		t.Fatalf("locked schema open took %v and returned %v", time.Since(start), err)
-	}
-	if err := store.exec("COMMIT"); err != nil {
-		t.Fatal(err)
-	}
-	opened, err = OpenForStoppingLedger(path, time.Now().Add(time.Second))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer opened.Close()
-	stmt, _, err := opened.db.Prepare("PRAGMA busy_timeout")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stmt.Close()
-	if !stmt.Step() || stmt.ColumnInt(0) != 5000 {
-		t.Fatal("the shared store did not restore the regular busy timeout", stmt.Err())
-	}
-}
 
 // A CLI process opens the server's live store while the server holds a write
 // transaction. Open on an existing WAL database must not need the write lock,

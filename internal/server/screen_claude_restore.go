@@ -149,7 +149,7 @@ func restoredUnidentifiedClaudeQuestion(pane *runtime.Pane, expected string, pro
 // A visible match alone cannot identify a decision created before a later call.
 func (s *Server) claudeDecisionMatchesIdentity(pid int, decisionID, identity string) bool {
 	pane := s.sup.Get(pid)
-	if pane == nil || s.loadedStore() == nil {
+	if pane == nil || s.store == nil {
 		return false
 	}
 	paneID, sessionID, start, found, err := s.store.ClaudeScreenContext(decisionID)
@@ -166,7 +166,7 @@ func (s *Server) claudeDecisionMatchesIdentity(pid int, decisionID, identity str
 
 // Only identified records can be associated safely with an answered call.
 func (s *Server) prepareClaudeQuestionRestore() {
-	if s.loadedStore() == nil {
+	if s.store == nil {
 		return
 	}
 	pending, err := s.store.Decisions("pending")

@@ -27,7 +27,7 @@ func (s *Server) completeDecisionOrigin(origin *api.DecisionOrigin) {
 }
 
 func (s *Server) syncDecisionAttention() {
-	if s.loadedStore() == nil {
+	if s.store == nil {
 		return
 	}
 	pending, err := s.pendingDecisionsCached()

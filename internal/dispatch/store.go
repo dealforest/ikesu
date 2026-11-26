@@ -6,7 +6,6 @@
 package dispatch
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -259,16 +258,6 @@ type Store struct {
 // when absent. WAL mode, a 5 s busy timeout, and synchronous=NORMAL keep
 // concurrent readers fast and safe.
 func Open(path string) (*Store, error) {
-	return openBefore(path, time.Time{})
-}
-
-// OpenForStoppingLedger initializes the shared store within the ledger's
-// shutdown lock budget. A successful open restores the regular busy timeout.
-func OpenForStoppingLedger(path string, deadline time.Time) (*Store, error) {
-	return openBefore(path, deadline)
-}
-
-func openBefore(path string, deadline time.Time) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
@@ -285,15 +274,10 @@ func openBefore(path string, deadline time.Time) (*Store, error) {
 	if err := conn.Exec("PRAGMA busy_timeout=5000"); err != nil {
 		return fail(err)
 	}
-	if !deadline.IsZero() {
-		if err := limitOpenLockWait(conn, deadline); err != nil {
-			return fail(err)
-		}
-	}
 	if err := conn.Exec("PRAGMA synchronous=NORMAL"); err != nil {
 		return fail(err)
 	}
-	if err := enableWAL(conn, deadline); err != nil {
+	if err := enableWAL(conn); err != nil {
 		return fail(err)
 	}
 	if err := conn.Exec(schemaSQL); err != nil {
@@ -314,35 +298,7 @@ func openBefore(path string, deadline time.Time) (*Store, error) {
 	if err := s.MigrateJobRecipients(); err != nil {
 		return fail(err)
 	}
-	if !deadline.IsZero() {
-		if err := conn.Exec("PRAGMA busy_timeout=5000"); err != nil {
-			return fail(err)
-		}
-	}
 	return s, nil
-}
-
-func limitOpenLockWait(conn *sqlite3.Conn, deadline time.Time) error {
-	// Disable the kernel lock wait. This handler limits subsequent lock waits
-	// across all schema statements, including migrations with multiple writes.
-	if err := conn.BusyTimeout(0); err != nil {
-		return err
-	}
-	var attemptDeadline time.Time
-	return conn.BusyHandler(func(_ context.Context, count int) bool {
-		if count == 0 {
-			attemptDeadline = time.Now().Add(walBusyWait)
-			if deadline.Before(attemptDeadline) {
-				attemptDeadline = deadline
-			}
-		}
-		remaining := time.Until(attemptDeadline)
-		if remaining <= 0 {
-			return false
-		}
-		time.Sleep(min(5*time.Millisecond, remaining))
-		return time.Now().Before(attemptDeadline)
-	})
 }
 
 // OpenLedger opens a separate connection after Open has initialized the schema.
@@ -385,21 +341,14 @@ const walBusyWait = 5 * time.Second
 // attempt already running may still wait inside SQLite, so walBusyWait is
 // the retry window, not a hard limit on the whole call. Any other error is
 // returned at once.
-func enableWAL(conn *sqlite3.Conn, openDeadline time.Time) error {
+func enableWAL(conn *sqlite3.Conn) error {
 	deadline := time.Now().Add(walBusyWait)
-	if !openDeadline.IsZero() && openDeadline.Before(deadline) {
-		deadline = openDeadline
-	}
 	for {
 		err := conn.Exec("PRAGMA journal_mode=WAL")
 		if err == nil || !errors.Is(err, sqlite3.BUSY) || time.Now().After(deadline) {
 			return err
 		}
-		pause := 5 * time.Millisecond
-		if !openDeadline.IsZero() {
-			pause = min(pause, time.Until(deadline))
-		}
-		time.Sleep(pause)
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

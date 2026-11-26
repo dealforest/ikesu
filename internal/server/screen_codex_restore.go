@@ -19,7 +19,7 @@ const legacyCodexQuestionWindow = 15 * time.Second
 // restoreLateCodexQuestions only examines decisions that existed at startup.
 // An uncertain match remains pending and keeps its attention indicator.
 func (s *Server) restoreLateCodexQuestions() {
-	if !s.cfg.ScreenPrompts() || s.loadedStore() == nil {
+	if !s.cfg.ScreenPrompts() || s.store == nil {
 		return
 	}
 	pending, err := s.store.Decisions("pending")

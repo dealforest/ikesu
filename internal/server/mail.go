@@ -13,7 +13,6 @@ import (
 	"github.com/kazuph/ikesu/internal/api"
 	"github.com/kazuph/ikesu/internal/dispatch"
 	"github.com/kazuph/ikesu/internal/runtime"
-	sqlite3 "github.com/ncruces/go-sqlite3"
 )
 
 // Durable mail is persisted by global pane ID and acknowledged after PTY writes.
@@ -338,40 +337,12 @@ func (s *Server) mailInFlightSet() map[int64]bool {
 	return out
 }
 
-// db lazily opens the shared dispatch store. A transient lock does not cache
-// a failed initialization, so the next caller can try again.
+// db lazily opens the shared dispatch store; the error is cached.
 func (s *Server) db() (*dispatch.Store, error) {
-	return s.openDB(time.Time{})
-}
-
-func (s *Server) openDB(deadline time.Time) (*dispatch.Store, error) {
-	s.dbMu.Lock()
-	defer s.dbMu.Unlock()
-	if s.store != nil || s.dbErr != nil {
-		return s.store, s.dbErr
-	}
-	path := dispatch.DBPath(s.session)
-	var store *dispatch.Store
-	var err error
-	if deadline.IsZero() {
-		store, err = dispatch.Open(path)
-	} else {
-		store, err = dispatch.OpenForStoppingLedger(path, deadline)
-	}
-	if !errors.Is(err, sqlite3.BUSY) {
-		s.store, s.dbErr = store, err
-		s.dbReady.Store(store != nil)
-	}
-	return store, err
-}
-
-// loadedStore observes a published connection without starting or waiting
-// for initialization.
-func (s *Server) loadedStore() *dispatch.Store {
-	if !s.dbReady.Load() {
-		return nil
-	}
-	return s.store
+	s.dbOnce.Do(func() {
+		s.store, s.dbErr = dispatch.Open(dispatch.DBPath(s.session))
+	})
+	return s.store, s.dbErr
 }
 
 // --- target resolution ---

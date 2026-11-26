@@ -1,17 +1,13 @@
 package server
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
-	"sync"
 	"testing"
 	"time"
 
@@ -365,80 +361,6 @@ func TestLedgerWriteRetriesPastBusyTimeout(t *testing.T) {
 	}
 }
 
-func TestLedgerRetriesBusySharedDBInitialization(t *testing.T) {
-	if runIsolatedParallelEarly(t) {
-		return
-	}
-	teststate.Lock(t)
-	s := newTestServer(t, "old-ledger")
-	enableLedgerTestTrace(t)
-	tracePath := filepath.Join(t.TempDir(), "trace")
-	s.trace = latency.Open(tracePath)
-	defer s.trace.Close()
-	path := dispatch.DBPath(s.session)
-	store, err := dispatch.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	legacy, err := sqlite3.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := legacy.Exec("ALTER TABLE pane_sessions DROP COLUMN session_start_source"); err != nil {
-		legacy.Close()
-		t.Fatal(err)
-	}
-	if err := legacy.Close(); err != nil {
-		t.Fatal(err)
-	}
-	unlock := lockLedgerInChild(t, path)
-	defer func() {
-		_ = unlock()
-		s.ledgerMu.Lock()
-		s.ledgerGiveUpAt = time.Now()
-		if s.ledgerCancel != nil {
-			s.ledgerCancel()
-		}
-		s.ledgerMu.Unlock()
-		s.ledgerWG.Wait()
-		if store := s.loadedStore(); store != nil {
-			store.Close()
-		}
-	}()
-	if err := s.app.StartInitialPane(); err != nil {
-		t.Fatal(err)
-	}
-	defer s.sup.KillAll()
-	appDone := make(chan struct{})
-	go func() { s.app.Run(); close(appDone) }()
-	defer func() { s.app.Stop(); <-appDone }()
-	id := "init-retry-session"
-	var response api.Response
-	s.app.Do(func() {
-		response = s.dispatchOnLoop(&api.Request{ID: "report", Method: api.MethodPaneReportAgent,
-			Params: api.MarshalParams(api.PaneReportAgentParams{
-				PaneID: "p1", Agent: "codex", State: "idle", Source: "test", SessionID: &id,
-			})})
-	})
-	if response.Err != nil {
-		t.Fatalf("pane.report_agent: %+v", response.Err)
-	}
-	// The first real initialization attempt must exhaust Open's unchanged
-	// five-second SQLite timeout before we release the other process's lock.
-	waitLedgerLog(t, tracePath, "event=ledger.retry pane=1 stopping=false", 1, 7*time.Second)
-	if s.loadedStore() != nil {
-		t.Fatal("shared store initialized before the lock was released")
-	}
-	if err := unlock(); err != nil {
-		t.Fatal(err)
-	}
-	waitPromptCondition(t, func() bool { return s.loadedStore() != nil })
-	waitLedgerRow(t, s.session, id)
-}
-
 func TestLedgerRetryWithoutApp(t *testing.T) {
 	if teststate.RunIsolatedParallel(t) {
 		return
@@ -491,6 +413,51 @@ func TestServerShutdownRetriesLockedLedgerWrite(t *testing.T) {
 	}
 	waitLedgerServerExit(t, done, writer)
 	waitLedgerRow(t, "test", id)
+}
+
+func TestServerShutdownSavesLedgerUnlockedDuringLastBackoff(t *testing.T) {
+	if teststate.RunIsolatedParallel(t) {
+		return
+	}
+	teststate.Lock(t)
+	setLedgerTestTimeouts(t, 50*time.Millisecond, 300*time.Millisecond)
+	dir, done := startLedgerTestEndpoint(t)
+	defer stopServer(t, dir, done)
+	apiOK(t, dir, api.MethodPaneSplit, api.PaneSplitParams{Direction: "right"}, nil)
+	writer := lockTestLedger(t, "test")
+	defer writer.Close()
+	reportAgent(t, dir, "p1", "codex", "last-backoff-first")
+	reportAgent(t, dir, "p2", "codex", "last-backoff-next")
+	tracePath := api.LogPath(dir)
+	// The shutdown budget fits inside this backoff. Releasing the lock
+	// after shutdown starts leaves the deadline to wake the worker.
+	waitLedgerLog(t, tracePath, "event=ledger.retry pane=1 stopping=false backoff=800ms", 1, 3*time.Second)
+	apiOK(t, dir, api.MethodServerStop, api.EmptyParams{}, nil)
+	waitLedgerLog(t, tracePath, "event=ledger.shutdown", 1, time.Second)
+	if err := writer.Exec("COMMIT"); err != nil {
+		t.Fatal(err)
+	}
+	waitLedgerServerExit(t, done, writer)
+	reader, err := dispatch.OpenLedger(dispatch.DBPath("test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	rows, err := reader.PaneSessions("test")
+	if err != nil || len(rows) != 2 ||
+		rows[0].PaneID != 1 || rows[0].SessionID != "last-backoff-first" ||
+		rows[1].PaneID != 2 || rows[1].SessionID != "last-backoff-next" {
+		t.Fatalf("ledger after shutdown should contain both unlocked writes: %+v %v", rows, err)
+	}
+	trace, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{"event=ledger.final_attempt pane=1", "event=ledger.final_attempt pane=2"} {
+		if bytes.Count(trace, []byte(marker)) != 1 {
+			t.Fatalf("expected one %q: %s", marker, trace)
+		}
+	}
 }
 
 func TestServerShutdownGivesUpLockedLedgerWrite(t *testing.T) {
@@ -713,58 +680,6 @@ func lockTestLedger(t *testing.T, session string) *sqlite3.Conn {
 		t.Fatal(err)
 	}
 	return writer
-}
-
-func lockLedgerInChild(t *testing.T, path string) func() error {
-	t.Helper()
-	cmd := exec.CommandContext(t.Context(), os.Args[0], "--ledger-test-lock", path)
-	in, err := cmd.StdinPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	unlock := sync.OnceValue(func() error {
-		_ = in.Close()
-		return cmd.Wait()
-	})
-	t.Cleanup(func() { _ = unlock() })
-	ready := make(chan string, 1)
-	go func() {
-		line, _ := bufio.NewReader(out).ReadString('\n')
-		ready <- line
-	}()
-	select {
-	case line := <-ready:
-		if line != "locked\n" {
-			t.Fatalf("external lock didn't start: %q, %v", line, unlock())
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for the external SQLite lock")
-	}
-	return unlock
-}
-
-func holdLedgerTestLock(path string) error {
-	conn, err := sqlite3.Open(path)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	if err := conn.Exec("BEGIN IMMEDIATE"); err != nil {
-		return err
-	}
-	fmt.Println("locked")
-	if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
-		return err
-	}
-	return conn.Exec("COMMIT")
 }
 
 func captureLedgerStderr(t *testing.T) string {

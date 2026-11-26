@@ -47,7 +47,7 @@ func (s *Server) validateScreenAnswer(d api.Decision, p api.DecisionAnswerParams
 		w.signature = current.Signature()
 	}
 	if ok && w != nil && w.decisionID == d.DecisionID && w.transcriptID == "" && current != nil {
-		if s.loadedStore() != nil {
+		if s.store != nil {
 			paneID, expected, start, found, err := s.store.ClaudeScreenContext(d.DecisionID)
 			if err != nil {
 				return nil, 0, &api.Error{Code: api.ErrDecisionStale, Message: "cannot verify recorded question context"}
@@ -141,7 +141,7 @@ func (s *Server) startScreenAnswer(pid int, w *screenPromptWatch, answer api.Dec
 	result := make(chan error, 1)
 	w.delivery = result
 	w.resolved = true
-	if w.prompt.CodexQuestion && w.codex != nil && w.codex.identity != "" && s.loadedStore() != nil {
+	if w.prompt.CodexQuestion && w.codex != nil && w.codex.identity != "" && s.store != nil {
 		identity, err := s.store.ScreenQuestionIdentity(w.decisionID)
 		if err == nil && identity == w.codex.identity {
 			d, err := s.store.Decision(w.decisionID)
