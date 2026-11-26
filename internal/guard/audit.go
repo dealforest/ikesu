@@ -32,7 +32,7 @@ var auditRuleKinds = map[string]string{
 	"http-write": KindOutward, "sql-write": KindOutward, "aws": KindOutward, "wrangler": KindOutward,
 	"gh-write": KindOutward, "git-main": KindOutward, "git-push-force": KindOutward,
 	"danger-word": KindOutward, "danger-word-line": KindOutward,
-	"rm-paths":   KindDelete,
+	"rm-paths": KindDelete, "mv-paths": KindDelete,
 	"shell-line": KindUnjudged, "shell-script": KindUnjudged,
 	"guard-boundary": KindBoundary, "ownership": KindBoundary,
 	"d1-sql-write": KindOutward, "git-alias": KindBoundary,

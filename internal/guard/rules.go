@@ -326,8 +326,8 @@ func commandRules(c Config, i Input, cmd string, a []string) Verdict {
 		}
 		return allow
 	case "mv":
-		if strings.Contains(strings.Join(a, " "), "bak") || strings.Contains(strings.Join(a, " "), "backup") {
-			return askL1
+		if !safeMove(i, a) {
+			return askAt("mv-paths", "移動は確認が必要です", TierL3, "")
 		}
 	case "dd", "mkfs", "fdisk", "diskutil", "format", "parted", "gparted":
 		return askL3
