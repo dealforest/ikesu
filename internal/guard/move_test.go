@@ -14,8 +14,19 @@ func TestMovePaths(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.Symlink(f.other+"/sub/f", filepath.Join(f.wt, "out", "plain.txt")); err != nil {
-		t.Fatal(err)
+	for link, target := range map[string]string{
+		f.wt + "/out/plain.txt":                f.other + "/sub/f",
+		f.root + "/Library/link":               f.wt + "/plain.txt",
+		f.wt + "/outside-parent":               f.root + "/Library",
+		f.wt + "/.artifacts/outside-parent":    f.root + "/Library",
+		f.in.Env["TMPDIR"] + "/outside-parent": f.root + "/Library",
+		f.root + "/Library/temp-parent":        f.in.Env["TMPDIR"],
+		f.root + "/Library/artifact-parent":    f.wt + "/.artifacts",
+		f.in.Env["TMPDIR"] + "/external-leaf":  f.other + "/sub/f",
+	} {
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
 	}
 	cases := []struct {
 		name string
@@ -38,7 +49,17 @@ func TestMovePaths(t *testing.T) {
 		{"git destination", true, []string{"plain.txt", ".git"}},
 		{"git directory destination", true, []string{"plain.txt", f.repo + "/.git"}},
 		{"current directory", false, []string{"plain.txt", "."}},
-		{"destination child leads outside", true, []string{"plain.txt", "out"}},
+		{"destination child link stays inside", false, []string{"plain.txt", "out"}},
+		{"source link stays inside", false, []string{"out/plain.txt", "renamed"}},
+		{"source link stays outside", true, []string{f.root + "/Library/link", "renamed"}},
+		{"destination link stays outside", true, []string{"plain.txt", f.root + "/Library/link"}},
+		{"source parent resolves outside", true, []string{"outside-parent/link", "renamed"}},
+		{"destination parent resolves outside", true, []string{"plain.txt", "outside-parent/new"}},
+		{"artifacts parent resolves outside", true, []string{"plain.txt", ".artifacts/outside-parent/new"}},
+		{"TMPDIR parent resolves outside", true, []string{"plain.txt", f.in.Env["TMPDIR"] + "/outside-parent/new"}},
+		{"parent resolves into TMPDIR", false, []string{"plain.txt", f.root + "/Library/temp-parent/new"}},
+		{"parent resolves into artifacts", false, []string{"plain.txt", f.root + "/Library/artifact-parent/new"}},
+		{"source link stays in TMPDIR", false, []string{f.in.Env["TMPDIR"] + "/external-leaf", "renamed"}},
 		{"short target directory", false, []string{"-t", "out", "out/a.jpg", "out/b.jpg"}},
 		{"short attached target directory", false, []string{"-vftout", "out/*.jpg"}},
 		{"long target directory", false, []string{"--target-directory=out", "out/a.jpg"}},

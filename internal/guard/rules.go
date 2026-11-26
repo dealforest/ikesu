@@ -563,6 +563,10 @@ func safeTemporaryRemoval(i Input, path string, probes map[string]string) bool {
 		}
 		dir = parent
 	}
+	return safeTemporaryParent(i, dir, probes)
+}
+
+func safeTemporaryParent(i Input, dir string, probes map[string]string) bool {
 	repoRoot := ""
 	for {
 		_, err := os.Lstat(filepath.Join(dir, ".git"))
