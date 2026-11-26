@@ -3,7 +3,8 @@ package kazuph.ikesu.decisions
 import com.termux.terminal.TerminalBuffer
 import com.termux.terminal.WcWidth
 
-internal data class PressedTerminalContent(val text: String, val url: String?)
+/** text: the pane's rows as drawn. copyText: the same rows with the program's wraps and shared indent undone, for copying. */
+internal data class PressedTerminalContent(val text: String, val url: String?, val copyText: String = text)
 
 internal object TerminalPress {
     private val paneTitle = Regex("^ +(?:ZOOM )?%[0-9]+(?: |$)")
@@ -170,6 +171,7 @@ internal object TerminalPress {
             } || Regex("%(?![0-9A-Fa-f]{2})").containsMatchIn(authCandidate!!)
         )
         val url = if (truncated || incompleteAuth) null else hardWrappedUrl ?: ordinaryUrl
-        return PressedTerminalContent(text, url)
+        val copyText = CopyText.unwrap((bounds.top until bounds.bottom).map { lines[it].subList(bounds.left, bounds.right).joinToString("") }, bounds.right - bounds.left)
+        return PressedTerminalContent(text, url, copyText)
     }
 }

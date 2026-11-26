@@ -22,7 +22,7 @@ internal fun showTerminalLongPressMenu(
         items += "リンクを開く" to { openTerminalLink(activity, url) }
         items += "リンクをコピー" to { copyTerminalText(activity, "リンク", url) }
     }
-    content?.text?.takeIf { it.isNotBlank() }?.let { value ->
+    content?.copyText?.takeIf { it.isNotBlank() }?.let { value ->
         items += "ペインの文字をコピー" to { showSelectableTerminalText(activity, value) }
     }
     items += actions
