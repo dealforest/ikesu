@@ -499,8 +499,6 @@ type missedLine struct {
 	Pane    string `json:"pane_id"`
 }
 
-const tailChunk = 1 << 20
-
 // SampleMissed は決定記録を本体、.1 の順に末尾から読み、sinceEpoch より古い行で止まる。
 // 「未確定を通した: 」で allow になり外向きの語を含む行から n 件を無作為に選ぶ。
 func SampleMissed(path string, sinceEpoch int64, n int, rng *rand.Rand) ([]MissedSample, int64, error) {
@@ -509,7 +507,6 @@ func SampleMissed(path string, sinceEpoch int64, n int, rng *rand.Rand) ([]Misse
 		return nil, 0, err
 	}
 	defer closeLogFiles(files)
-	var read int64
 	var picked []MissedSample
 	seen := 0
 	handle := func(line []byte) bool {
@@ -540,52 +537,12 @@ func SampleMissed(path string, sinceEpoch int64, n int, rng *rand.Rand) ([]Misse
 		}
 		return false
 	}
-	for index := len(files) - 1; index >= 0 && read < maxMissedScanBytes; index-- {
-		size, done, err := scanMissedTail(files[index], maxMissedScanBytes-read, handle)
-		read += size
-		if err != nil {
-			return picked, read, err
-		}
-		if done {
-			break
-		}
+	read, err := walkLogLines(files, maxMissedScanBytes, handle)
+	if err != nil {
+		return picked, read, err
 	}
 	sort.Slice(picked, func(a, b int) bool { return picked[a].TS < picked[b].TS })
 	return picked, read, nil
-}
-
-func scanMissedTail(f *os.File, budget int64, stop func([]byte) bool) (int64, bool, error) {
-	st, err := f.Stat()
-	if err != nil {
-		return 0, false, err
-	}
-	pos := st.Size()
-	var carry []byte
-	var read int64
-	for pos > 0 && read < budget {
-		size := min(tailChunk, pos, budget-read)
-		pos -= size
-		buf := make([]byte, size)
-		if _, err := f.ReadAt(buf, pos); err != nil && err != io.EOF {
-			return read, false, err
-		}
-		read += size
-		data := append(buf, carry...)
-		lines := bytes.Split(data, []byte{'\n'})
-		start := 0
-		if pos > 0 {
-			carry = lines[0]
-			start = 1
-		} else {
-			carry = nil
-		}
-		for k := len(lines) - 1; k >= start; k-- {
-			if stop(lines[k]) {
-				return read, true, nil
-			}
-		}
-	}
-	return read, false, nil
 }
 
 func fmtWait(ms int64) string {

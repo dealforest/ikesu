@@ -40,9 +40,10 @@ func readEntries(path string, ai bool) ([]entry, int, error) {
 	defer closeLogFiles(files)
 	var rows []entry
 	bad := 0
-	err := scanLogLines(files, func(line string) {
+	_, err := walkLogLines(files, 0, func(raw []byte) bool {
+		line := string(raw)
 		if strings.TrimSpace(line) == "" {
-			return
+			return false
 		}
 		var row entry
 		var e error
@@ -50,7 +51,7 @@ func readEntries(path string, ai bool) ([]entry, int, error) {
 			parts := strings.Split(line, "\t")
 			if len(parts) < 3 {
 				bad++
-				return
+				return false
 			}
 			var ts time.Time
 			for _, layout := range []string{time.RFC3339Nano, "2006-01-02 15:04:05", "2006-01-02T15:04:05-0700"} {
@@ -61,18 +62,19 @@ func readEntries(path string, ai bool) ([]entry, int, error) {
 			}
 			if e != nil || parts[2] == "" {
 				bad++
-				return
+				return false
 			}
 			row = entry{epoch: ts.Unix(), line: parts[2], verdict: strings.ToUpper(parts[1])}
 		} else {
 			var r Record
-			if e = json.Unmarshal([]byte(line), &r); e != nil || r.CommandLine == "" || r.Epoch == 0 || !has([]string{"allow", "ask", "block", "deny"}, r.Decision) {
+			if e = json.Unmarshal(raw, &r); e != nil || r.CommandLine == "" || r.Epoch == 0 || !has([]string{"allow", "ask", "block", "deny"}, r.Decision) {
 				bad++
-				return
+				return false
 			}
 			row = entry{r.Epoch, r.CommandLine, r.Decision, r.Rule}
 		}
 		rows = append(rows, row)
+		return false
 	})
 	return rows, bad, err
 }
@@ -165,16 +167,18 @@ func ReadLog(path string, lines *int, w io.Writer, jsonMode bool) error {
 	defer closeLogFiles(files)
 	var records []string
 	start := 0
-	err = scanLogLines(files, func(line string) {
+	_, err = walkLogLines(files, 0, func(raw []byte) bool {
+		line := string(raw)
 		if lines != nil && *lines == 0 {
-			return
+			return false
 		}
 		if lines == nil || len(records) < *lines {
 			records = append(records, line)
-			return
+			return false
 		}
 		records[start] = line
 		start = (start + 1) % len(records)
+		return false
 	})
 	if err != nil {
 		return err
