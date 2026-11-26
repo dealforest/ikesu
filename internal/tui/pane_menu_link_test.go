@@ -40,6 +40,7 @@ func TestPaneMenuLinkUsesClickedCellAndWrappedURL(t *testing.T) {
 
 	var output bytes.Buffer
 	v := a.NewViewer(&output, a.st.Cols, a.st.Rows, nil)
+	v.with(a, func(ui *App) { ui.draw() })
 	var opened []string
 	v.SetLinkOpener(func(url string) error {
 		opened = append(opened, url)

@@ -26,20 +26,24 @@ func (a *App) fillPaneGrid(snap *render.PaneSnap, p *runtime.Pane, off int, inne
 	cw, ch := p.CellPixels()
 	benchstage.Values("panegrid.materialized", h*w, 0)
 	var g [][]uv.Cell
-	p.WithEmu(func(e *vt.Emulator) {
+	menuLinks := p.WithViewport(off, h, w, a.viewerContext != nil, !a.sidebarConfig.UI.NativeMenus, func(e *vt.Emulator, top int) {
 		sb := e.ScrollbackLen()
 		eh := e.Height()
-		top := runtime.PaneViewportTop(e, off, h, a.viewerContext != nil)
+		// A URL may continue past the right edge of a narrower viewer.
+		rowWidth := w
+		if a.pluginHost != nil {
+			rowWidth = max(w, e.Width())
+		}
 		snap.Viewport = render.PaneViewport{Inner: inner, BufferTop: top, ScreenTop: top - sb, Cols: e.Width(), Rows: eh, CellW: cw, CellH: ch}
 		for r := 0; r < h; r++ {
 			i := top + r
-			row := make([]uv.Cell, w)
+			row := make([]uv.Cell, rowWidth)
 			if vt.ExperimentalFlatScreen && i >= sb && i-sb < eh {
 				e.CopyScreenRow(row, 0, i-sb)
 				g = append(g, row)
 				continue
 			}
-			for x := 0; x < w; x++ {
+			for x := range row {
 				var c *uv.Cell
 				switch {
 				case i < 0:
@@ -64,6 +68,14 @@ func (a *App) fillPaneGrid(snap *render.PaneSnap, p *runtime.Pane, off int, inne
 			benchstage.Values("screen.ids.live", p.ID, info.LiveIDs)
 		}
 	})
+	links := &render.PaneLinks{Menu: menuLinks}
+	if a.pluginHost != nil {
+		links.Plugin = pluginLinks(g, min(w, snap.Viewport.Cols))
+		for y := range g {
+			g[y] = g[y][:w]
+		}
+	}
+	snap.Viewport.Links = links
 	snap.Grid = g
 }
 

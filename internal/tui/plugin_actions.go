@@ -1,12 +1,13 @@
 package tui
 
 import (
+	"bytes"
 	"fmt"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/kazuph/ikesu/internal/plugin"
+	"github.com/kazuph/ikesu/internal/weblink"
 	"regexp"
-	"strings"
 )
 
 func (a *App) SetPluginHost(engine func() *plugin.Engine, context func() plugin.Context) {
@@ -61,6 +62,33 @@ func (a *App) actionContext(source string) plugin.Context {
 
 var terminalURL = regexp.MustCompile(`https?://[^\s<>"']+`)
 
+func pluginLinks(grid [][]uv.Cell, width int) []weblink.Span {
+	var spans []weblink.Span
+	var text []byte
+	for y, cells := range grid {
+		text = text[:0]
+		for x, cell := range cells {
+			if url := cell.Link.URL; x < width && url != "" {
+				spans = weblink.AppendSpan(spans, weblink.Span{Row: y, Start: x, End: x + 1, URL: url})
+			}
+			text = append(text, cell.Content...)
+		}
+		if !bytes.Contains(text, []byte("://")) {
+			continue
+		}
+		line := string(text)
+		for _, match := range terminalURL.FindAllStringIndex(line, -1) {
+			left := ansi.StringWidth(line[:match[0]])
+			if left < width {
+				url := line[match[0]:match[1]]
+				right := min(width, left+ansi.StringWidth(url))
+				spans = append(spans, weblink.Span{Row: y, Start: left, End: right, URL: url})
+			}
+		}
+	}
+	return spans
+}
+
 func (a *App) pluginLinkClick(pid int, m uv.Mouse) bool {
 	if a.pluginHost == nil || m.Button != uv.MouseLeft || !m.Mod.Contains(uv.ModCtrl) {
 		return false
@@ -78,26 +106,14 @@ func (a *App) pluginLinkClick(pid int, m uv.Mouse) bool {
 		return false
 	}
 	x, y := m.X-r.X, m.Y-r.Y
-	lines := p.BufferLines()
-	row := view.BufferTop + y
-	if row < 0 || row >= len(lines) || x >= view.Cols || x >= len(lines[row]) {
-		return false
-	}
-	url := lines[row][x].Link.URL
-	if url == "" {
-		var text strings.Builder
-		for _, cell := range lines[row] {
-			text.WriteString(cell.Content)
-		}
-		line := text.String()
-		for _, span := range terminalURL.FindAllStringIndex(line, -1) {
-			left := ansi.StringWidth(line[:span[0]])
-			right := left + ansi.StringWidth(line[span[0]:span[1]])
-			if x >= left && x < right {
-				url = line[span[0]:span[1]]
-				break
-			}
-		}
+	var url string
+	if view.Links != nil {
+		url = weblink.At(view.Links.Plugin, x, y)
+	} else if x < view.Cols {
+		// Before the first frame (or with an older client), retain the old
+		// lookup against just the clicked buffer row.
+		row := a.bufferLine(p, view.BufferTop+y)
+		url = weblink.At(pluginLinks([][]uv.Cell{row}, len(row)), x, 0)
 	}
 	if url == "" {
 		return false

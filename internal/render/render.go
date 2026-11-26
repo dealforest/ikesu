@@ -10,6 +10,7 @@ import (
 	"github.com/kazuph/ikesu/internal/kitty"
 	"github.com/kazuph/ikesu/internal/layout"
 	"github.com/kazuph/ikesu/internal/model"
+	"github.com/kazuph/ikesu/internal/weblink"
 	"image/color"
 	"strings"
 )
@@ -51,6 +52,13 @@ type PaneViewport struct {
 	Inner                    layout.Rect
 	BufferTop, ScreenTop     int
 	Cols, Rows, CellW, CellH int
+	Links                    *PaneLinks `json:",omitempty"`
+}
+
+// PaneLinks contains the link targets captured with the grid. A nil value
+// denotes a viewport from a client that did not report link metadata.
+type PaneLinks struct {
+	Menu, Plugin []weblink.Span
 }
 
 // PaneSnap is everything render needs to draw one pane.

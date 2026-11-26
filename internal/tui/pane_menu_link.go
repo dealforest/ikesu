@@ -1,5 +1,7 @@
 package tui
 
+import "github.com/kazuph/ikesu/internal/weblink"
+
 func (a *App) paneMenuLinkAt(x, y, pid int) string {
 	if a.sup == nil || a.sidebarConfig.UI.NativeMenus {
 		return ""
@@ -13,7 +15,15 @@ func (a *App) paneMenuLinkAt(x, y, pid int) string {
 			if !pointIn(x, y, view.Inner) {
 				return ""
 			}
-			return p.WebLinkAtBufferRow(x-view.Inner.X, view.BufferTop+y-view.Inner.Y)
+			x, y := x-view.Inner.X, y-view.Inner.Y
+			if view.Links != nil {
+				url := weblink.At(view.Links.Menu, x, y)
+				if weblink.Valid(url) {
+					return url
+				}
+				return ""
+			}
+			return p.WebLinkAtBufferRow(x, view.BufferTop+y)
 		}
 		inner := a.innerRect(pid)
 		if !pointIn(x, y, inner) {
