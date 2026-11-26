@@ -175,3 +175,48 @@ func TestTruncatedScreenQuestionStillMatchesTranscript(t *testing.T) {
 		t.Fatalf("presentation = %q", got.Title)
 	}
 }
+
+// 画面に質問の最後の段落しか見えないと、題は取り込めなかった旨の文だけになり、見えた部分は本文へ入る。
+// それでも会話記録の質問と照合でき、スマホには全文が出る（2026-11-26 に題が案内文だけで届いた）。
+func TestTruncatedQuestionWithOnlyTheNoticeAsTitleMatchesTranscript(t *testing.T) {
+	body := screenprompt.TruncatedNotice + "\n\nだと聞かれ、外の大事なフォルダは聞かれずに動く。\n\nあーしの推奨は「外も聞く」。"
+	desc := "ワークツリーの中・/tmp ・.artifacts は聞かない"
+	p := &screenprompt.Prompt{Truncated: true, Params: api.DecisionCreateParams{Kind: "agent_prompt", Title: screenprompt.TruncatedNotice, Body: &body,
+		Options: []api.DecisionOption{{ID: "1", Label: "外も聞く（推奨）", Description: &desc}, {ID: "2", Label: "中だけ緩める"}}}}
+	q := session.ClaudeQuestion{Question: "mv を rm と同じ決まりにする？\n\n今の mv: ワークツリーの中でも bak だと聞かれ、外の大事なフォルダは聞かれずに動く。\n\nあーしの推奨は「外も聞く」。",
+		Options: []session.ClaudeQuestionOption{{Label: "外も聞く（推奨）", Description: "ワークツリーの中・/tmp・.artifacts は聞かない"}, {Label: "中だけ緩める"}}}
+	if !matchClaudeQuestion(p, q) {
+		t.Fatal("a question whose visible part is only in the body did not match its transcript question")
+	}
+	// The visible tail must still belong to the question: a different question does not match.
+	other := q
+	other.Question = "別の質問。あーしの推奨は「中だけ」。"
+	if matchClaudeQuestion(p, other) {
+		t.Fatal("matched a transcript question that does not contain the visible tail")
+	}
+	// A title that is only the notice with nothing visible below it is not enough to match.
+	empty := screenprompt.TruncatedNotice
+	bare := &screenprompt.Prompt{Truncated: true, Params: api.DecisionCreateParams{Kind: "agent_prompt", Title: screenprompt.TruncatedNotice, Body: &empty, Options: p.Params.Options}}
+	if matchClaudeQuestion(bare, q) {
+		t.Fatal("matched with no visible question text")
+	}
+}
+
+// 末尾と選択肢が同じ過去の回答済み質問しか会話記録に無いとき、画面の新しい質問を回答済みと扱わない
+// （2026-11-26 の1回目のレビューの指摘。届くはずの判断待ちが止まる）。
+func TestTailOnlyQuestionIsNotResolvedByAnEarlierAnsweredQuestion(t *testing.T) {
+	body := screenprompt.TruncatedNotice + "\n\nこの設定で進めますか？"
+	p := &screenprompt.Prompt{Truncated: true, Params: api.DecisionCreateParams{Kind: "agent_prompt", Title: screenprompt.TruncatedNotice, Body: &body,
+		Options: []api.DecisionOption{{ID: "1", Label: "はい"}, {ID: "2", Label: "いいえ"}}}}
+	earlier := session.ClaudeQuestion{Question: "対象 A を消します。\n\nこの設定で進めますか？", Answered: true,
+		Options: []session.ClaudeQuestionOption{{Label: "はい"}, {Label: "いいえ"}}}
+	match, _, resolved := chooseClaudeQuestion(p, []session.ClaudeQuestion{earlier})
+	if match != nil || resolved {
+		t.Fatalf("an earlier answered question with the same tail resolved the new one: match=%v resolved=%v", match, resolved)
+	}
+	// A title that was on screen still lets an answered question resolve it (unchanged).
+	full := &screenprompt.Prompt{Params: api.DecisionCreateParams{Kind: "agent_prompt", Title: "対象 A を消します。\n\nこの設定で進めますか？", Options: p.Params.Options}}
+	if _, _, resolved := chooseClaudeQuestion(full, []session.ClaudeQuestion{earlier}); !resolved {
+		t.Fatal("a fully visible answered question is no longer recognized")
+	}
+}
