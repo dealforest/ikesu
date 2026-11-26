@@ -401,31 +401,16 @@ func (a *App) openCloseWorkspaceDialog(idx int) {
 			}
 		}
 	}
-	targets := a.closeWorkspaceTargets(idx)
+	// Closing a space closes only that space. Other spaces of the same
+	// repository, and worktree spaces shown under it, stay open.
+	targets := []model.WorkspaceID{ws.ID}
 	title := "Close workspace?"
-	detail := ""
 	panes := ws.TabRef().Layout.PaneCount()
-	if len(targets) > 1 {
-		title = "Close worktree group?"
-		panes = 0
-		for _, id := range targets {
-			for _, other := range a.st.Workspaces {
-				if other.ID == id {
-					for _, tab := range other.Tabs {
-						panes += tab.Layout.PaneCount()
-					}
-				}
-			}
-		}
-		detail = fmt.Sprintf("%s — %d workspaces, %d panes", name, len(targets), panes)
-	}
 	noun := "panes"
 	if panes == 1 {
 		noun = "pane"
 	}
-	if detail == "" {
-		detail = fmt.Sprintf("%s — %d %s", name, panes, noun)
-	}
+	detail := fmt.Sprintf("%s — %d %s", name, panes, noun)
 	a.workspaceNavigate = false
 	a.navigateHint = false
 	a.dialog = &uiDialog{

@@ -284,31 +284,55 @@ func TestStage6aWorktreePickerFiltersRealCheckouts(t *testing.T) {
 	}
 }
 
-func TestStage6aWorktreeGroupConfirmationCountsAndClosesTargets(t *testing.T) {
+// A space's "Close space" closes that space only. Other spaces opened on
+// the same repository's main checkout, and worktree spaces of that
+// repository, stay open (2026-11-26: closing one mangene2 space in
+// favorites closed all four of them).
+func TestCloseSpaceClosesOnlyTheChosenSpace(t *testing.T) {
 	teststate.Lock(t)
-	a, _ := worktreeApp(t)
+	a, r := worktreeApp(t)
 	branch := "existing"
 	if _, err := executeTestWorktree(t, a, WorktreeRequest{Operation: "create", Branch: &branch}); err != nil {
 		t.Fatal(err)
 	}
+	main := a.st.Workspaces[0]
+	if main.Worktree == nil || main.Worktree.IsLinkedWorktree {
+		t.Fatal("the first space is not the main checkout", main.Worktree)
+	}
 	child := a.st.Workspaces[1]
-	a.exec(model.CmdNewTab{Workspace: 1})
-	a.openCloseWorkspaceDialog(0)
-	if a.dialog.d.Title != "Close worktree group?" || !strings.Contains(a.dialog.d.Detail, "2 workspaces, 3 panes") {
-		t.Fatal(a.dialog.d)
+	a.exec(model.CmdNewWorkspace{Cwd: r})
+	info := *main.Worktree
+	a.exec(model.CmdSetWorktree{Index: len(a.st.Workspaces) - 1, Info: &info})
+	sibling := a.st.Workspaces[len(a.st.Workspaces)-1]
+	before := len(a.st.Workspaces)
+
+	a.buildWorkspaceMenu(0, 0, 0, nil)
+	close := -1
+	for i, item := range a.menu.m.Items {
+		if item.Label == "Close space" {
+			close = i
+		}
+	}
+	if close < 0 {
+		t.Fatal("the space menu has no Close space item")
+	}
+	a.activateMenu(close)
+	if a.dialog == nil || a.dialog.d.Title != "Close workspace?" || strings.Contains(a.dialog.d.Detail, "workspaces") {
+		t.Fatal("the close confirmation is not for one space", a.dialog)
 	}
 	d := a.dialog
 	a.dialog = nil
 	d.run(a)
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatal(err)
+
+	if len(a.st.Workspaces) != before-1 {
+		t.Fatalf("closed %d spaces, want 1", before-len(a.st.Workspaces))
 	}
-	if len(a.st.Workspaces) != 1 || a.st.Workspaces[0].ID == child.ID || a.st.Workspaces[0].Cwd != home || a.st.Workspaces[0].Name != filepath.Base(home) {
-		t.Fatal("closing the last group did not replace its targets with home", a.st.Workspaces)
+	ids := map[model.WorkspaceID]bool{}
+	for _, w := range a.st.Workspaces {
+		ids[w.ID] = true
 	}
-	if _, err := os.Stat(child.Cwd); err != nil {
-		t.Fatal("closing workspace deleted checkout", err)
+	if ids[main.ID] || !ids[child.ID] || !ids[sibling.ID] {
+		t.Fatal("the wrong spaces were closed", ids)
 	}
 }
 
