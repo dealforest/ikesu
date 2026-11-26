@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/kazuph/ikesu/internal/api"
@@ -192,5 +193,59 @@ func TestStage6aPopupMinimumPTYGeometry(t *testing.T) {
 		if r.W != tc.inner || r.H != 2 {
 			t.Fatal(tc, r)
 		}
+	}
+}
+
+func TestPopupWheelDuringSelectionCopiesThroughPaintedReleaseRow(t *testing.T) {
+	teststate.Lock(t)
+	teststate.Setenv(t, "SSH_CONNECTION", "isolated-test")
+	a := specRuntimeApp(t)
+	t.Cleanup(a.sup.KillAll)
+	width, height := api.PopupSize{Cells: 40}, api.PopupSize{Cells: 12}
+	command := `i=1; while [ "$i" -le 100 ]; do printf 'R%02d\r\n' "$i"; i=$((i+1)); done; printf READY; exec /bin/cat`
+	if _, err := a.OpenPluginPopup(a.cwd, []string{"/bin/sh", "-c", command}, nil, &width, &height); err != nil {
+		t.Fatal(err)
+	}
+	pid := a.st.Popup.PaneID
+	specWaitText(t, a.sup.Get(pid), "READY")
+	var clipboard bytes.Buffer
+	viewer := a.NewViewer(&clipboard, a.st.Cols, a.st.Rows, nil)
+	viewer.Begin(a, 0, 0)
+	var out *render.Output
+	viewer.SetSnapshotSink(func(in render.Input) error {
+		out = render.ComposeClient(in, nil, "", false)
+		return nil
+	})
+	draw := func() {
+		viewer.with(a, func(ui *App) { ui.draw() })
+		viewer.Rendered(a, *out, 0)
+	}
+	draw()
+	inner := out.PaneViewports[pid].Inner
+	visibleRow := func(y int) string {
+		var row strings.Builder
+		for x := inner.X; x < inner.X+3; x++ {
+			row.WriteString(out.Frame.Cell(x, y).Content)
+		}
+		return row.String()
+	}
+	y := inner.Y + inner.H - 1
+	if first, last := visibleRow(inner.Y), visibleRow(y); first != "R92" || last != "REA" {
+		t.Fatalf("before wheel, painted rows = %q to %q, want R92 to READY", first, last)
+	}
+	viewer.Input(a, []byte(fmt.Sprintf("\x1b[<0;%d;%dM", inner.X+1, inner.Y+1)))
+	viewer.Input(a, []byte(fmt.Sprintf("\x1b[<64;%d;%dM", inner.X+1, y+1)))
+	draw()
+	last := visibleRow(y)
+	if last != "R98" {
+		t.Fatalf("painted release row = %q, want R98 after scrolling", last)
+	}
+	clipboard.Reset()
+	viewer.Input(a, []byte(fmt.Sprintf("\x1b[<0;%d;%dm", inner.X+3, y+1)))
+	want := "R92\nR93\nR94\nR95\nR96\nR97\n" + last
+	payload, ok := strings.CutPrefix(clipboard.String(), "\x1b]52;c;")
+	got, err := base64.StdEncoding.DecodeString(strings.TrimSuffix(payload, "\a"))
+	if !ok || err != nil || string(got) != want {
+		t.Fatalf("clipboard = %q, want %q ending at the painted release row", got, want)
 	}
 }

@@ -574,22 +574,19 @@ func (a *App) wheel(m uv.Mouse) {
 
 // hostScroll moves a pane's host scrollback by three lines per notch.
 func (a *App) hostScroll(pid, scrollN int, up bool) {
-	a.showPaneScrollbar(pid)
 	off := a.scroll[pid]
 	if up {
-		off += a.sidebarConfig.MouseScrollLines()
-		if off > scrollN {
-			off = scrollN
-		}
-		a.scroll[pid] = off
+		off = min(off+a.sidebarConfig.MouseScrollLines(), scrollN)
 	} else {
 		off -= a.sidebarConfig.MouseScrollLines()
-		if off <= 0 {
-			delete(a.scroll, pid)
-		} else {
-			a.scroll[pid] = off
+	}
+	if s := a.sel; s != nil && s.pane == pid {
+		if p := a.sup.Get(pid); p != nil {
+			a.scrollSelection(p, s, off)
+			return
 		}
 	}
+	a.setScrollOff(pid, off)
 }
 
 // --- drag states ---
