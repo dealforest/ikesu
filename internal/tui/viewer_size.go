@@ -25,10 +25,12 @@ type ptySizeBasis struct {
 	viewer                   *Viewer
 	cols, rows, cellW, cellH int
 	display                  displayState
+	provisional              bool
+	inputOrder               uint64
 }
 
 func (v *Viewer) sizeBasis() ptySizeBasis {
-	return ptySizeBasis{v, v.cols, v.rows, v.app.cellW, v.app.cellH, v.display}
+	return ptySizeBasis{viewer: v, cols: v.cols, rows: v.rows, cellW: v.app.cellW, cellH: v.app.cellH, display: v.display}
 }
 
 func (a *App) withPTYGeometry(fn func()) {
@@ -43,6 +45,7 @@ func (a *App) withTabPTYGeometry(tab *model.Tab, fn func()) {
 	basis, ok := root.sizeOwners[tab]
 	if !ok && root.sizeViewer != nil {
 		basis = root.sizeViewer.sizeBasis()
+		basis.provisional = true
 		root.sizeOwners[tab] = basis
 		ok = true
 	}
@@ -92,7 +95,9 @@ func (v *Viewer) takeSize(a *App) {
 	}
 	basis := v.sizeBasis()
 	basis.display = captureDisplay(a.st)
-	a.sizeOwners[a.currentSizeTab()] = basis
+	tab := a.currentSizeTab()
+	basis.inputOrder = a.sizeOwners[tab].inputOrder
+	a.sizeOwners[tab] = basis
 }
 
 // Detach replaces a departing size owner with the first remaining display
@@ -146,6 +151,7 @@ func (v *Viewer) releaseSizeTab(a *App, tab *model.Tab) {
 	}
 	basis := a.sizeOwners[tab]
 	basis.viewer = nil
+	basis.provisional = false
 	a.sizeOwners[tab] = basis
 }
 

@@ -175,6 +175,7 @@ type App struct {
 	viewerOwner       *App
 	viewerContext     *Viewer
 	viewerActive      bool
+	sizeInputOrder    uint64
 	sizeViewer        *Viewer
 	sizeViewers       []*Viewer
 	sizeOwners        map[*model.Tab]ptySizeBasis

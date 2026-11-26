@@ -23,7 +23,7 @@ type Viewer struct {
 	pendingAt           time.Time
 	focusUntil          time.Time
 	focusEpoch          uint64
-	heldKeys            []input.Event
+	heldKeys            []viewerInput
 	display             displayState
 	legacySidebarRows   bool
 	rightSidebarPlugins bool

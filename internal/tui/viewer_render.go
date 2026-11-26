@@ -10,36 +10,60 @@ func (v *Viewer) onInput(ui *App, event input.Event) {
 	ui.resizeInput(event, func() { v.applyInput(ui, event) })
 }
 
+type viewerInput struct {
+	event input.Event
+	order uint64
+}
+
 func (v *Viewer) applyInput(ui *App, event input.Event) {
-	switch event.Kind {
-	case input.KindKey, input.KindPaste, input.KindMouseMotion, input.KindMouseWheel, input.KindFocus:
-		v.takeSize(ui.viewerOwner)
-		ui.syncLayout()
-	case input.KindMouseRelease:
-		if ui.resizeDragActive() {
-			v.takeSize(ui.viewerOwner)
-			ui.syncLayout()
-		}
-	}
+	root := ui.viewerOwner
+	root.sizeInputOrder++
+	pending := viewerInput{event, root.sizeInputOrder}
 	if event.Kind == input.KindFocus {
 		v.focusEpoch++
 		v.focusUntil = time.Now().Add(time.Second) // SPEC G11: at most one second
 	}
 	if time.Now().Before(v.focusUntil) && (event.Kind == input.KindKey || event.Kind == input.KindPaste) {
-		v.heldKeys = append(v.heldKeys, event)
+		v.heldKeys = append(v.heldKeys, pending)
 		return
 	}
-	v.deliverInput(ui, event)
+	v.deliverInput(ui, pending)
 }
 
-// Delivery can happen after another display has handled newer input.
-func (v *Viewer) deliverInput(ui *App, event input.Event) {
+// Classify the event by its actual effect on this viewer's selection.
+// Focus-held input can reach the pane after another viewer's newer input.
+func (v *Viewer) deliverInput(ui *App, pending viewerInput) {
+	event := pending.event
+	root := ui.viewerOwner
 	before := ui.currentSizeTab()
+	resizing := ui.resizeDragActive()
 	ui.onInput(event)
-	if ui.currentSizeTab() != before {
-		v.takeSize(ui.viewerOwner)
-		ui.syncLayout()
+	after := ui.currentSizeTab()
+	basis, exists := root.sizeOwners[after]
+	if after != before {
+		if !exists || basis.provisional {
+			v.takeSize(root)
+			ui.syncLayout()
+		}
+		return
 	}
+	if basis.inputOrder > pending.order {
+		return
+	}
+	switch event.Kind {
+	case input.KindKey, input.KindPaste, input.KindMouseMotion, input.KindMouseWheel, input.KindFocus:
+	case input.KindMouseRelease:
+		if !resizing {
+			return
+		}
+	default:
+		return
+	}
+	v.takeSize(root)
+	basis = root.sizeOwners[after]
+	basis.inputOrder = pending.order
+	root.sizeOwners[after] = basis
+	ui.syncLayout()
 }
 
 func (v *Viewer) releaseKeys(ui *App) {

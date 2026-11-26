@@ -26,20 +26,27 @@ func TestViewerWorkspaceRoundTripKeepsLastInputSize(t *testing.T) {
 	large.Begin(a, 0, 0)
 	small := a.NewViewer(io.Discard, 50, 30, nil)
 	small.Begin(a, 0, 0)
+	small.Input(a, []byte("\x1b2x"))
 	large.Input(a, []byte("x"))
-	pid := tabA.Layout.Focused()
-	want := viewerTerminalSizes(a)[pid]
-	for _, step := range []struct {
-		key       string
-		workspace int
-		tab       *model.Tab
-	}{{"\x1b2", 1, tabB}, {"\x1b1", 0, tabA}} {
-		large.Input(a, []byte(step.key))
-		if large.workspace != a.st.Workspaces[step.workspace].ID || a.sizeOwners[step.tab].viewer != large {
-			t.Fatalf("workspace %d was not selected and claimed", step.workspace)
+	paneA, paneB := tabA.Layout.Focused(), tabB.Layout.Focused()
+	sizes := viewerTerminalSizes(a)
+	if sizes[paneA] != [2]int{112, 36} || sizes[paneB] != [2]int{22, 26} {
+		t.Fatalf("unexpected initial pane sizes: %v", sizes)
+	}
+	for _, visit := range []struct {
+		viewer *Viewer
+		keys   string
+		target int
+	}{{large, "\x1b2", 1}, {large, "\x1b1", 0}, {small, "\x1b1", 0}, {small, "\x1b2", 1}} {
+		visit.viewer.Input(a, []byte(visit.keys))
+		if visit.viewer.workspace != a.st.Workspaces[visit.target].ID {
+			t.Fatalf("workspace %d was not selected", visit.target)
 		}
-		if got := viewerTerminalSizes(a)[pid]; got != want || a.sizeOwners[tabA].viewer != large {
-			t.Fatalf("workspace A after selecting workspace %d: size %v, want %v with original owner", step.workspace, got, want)
+		if a.sizeOwners[tabA].viewer != large || a.sizeOwners[tabB].viewer != small {
+			t.Fatalf("visiting workspace %d changed ownership", visit.target)
+		}
+		if got := viewerTerminalSizes(a); got[paneA] != sizes[paneA] || got[paneB] != sizes[paneB] {
+			t.Fatalf("visiting workspace %d changed PTY sizes: %v -> %v", visit.target, sizes, got)
 		}
 	}
 }
