@@ -143,6 +143,64 @@ func has(a []string, s string) bool {
 	}
 	return false
 }
+
+// wranglerInfoFlags only print help or the version. wrangler treats them as
+// plain booleans, so they are local only when nothing follows them
+// (`wrangler --version deploy` still deploys).
+var wranglerInfoFlags = map[string]bool{"--version": true, "-v": true, "--help": true, "-h": true}
+
+// wranglerTypesValueFlags and wranglerTypesBoolFlags are the `wrangler types`
+// options checked against wrangler 4.162.0. Anything else (--install-skills,
+// --profile, --cwd, --env-file, unknown flags) goes back to the normal check.
+var wranglerTypesValueFlags = map[string]bool{"-c": true, "--config": true, "-e": true, "--env": true, "--env-interface": true}
+var wranglerTypesBoolFlags = map[string]bool{"--check": true, "--include-runtime": true, "--include-env": true, "--strict-vars": true, "--include-main-module": true, "--help": true, "-h": true}
+
+// wranglerLocalOnly reports whether a wrangler command line only prints help
+// or the version, or generates/checks the Worker types with known options.
+func wranglerLocalOnly(a []string) bool {
+	if len(a) == 1 && wranglerInfoFlags[a[0]] {
+		return true
+	}
+	if arg(a, 0) != "types" {
+		return false
+	}
+	outputs := 0
+	for n := 1; n < len(a); n++ {
+		t := a[n]
+		if !strings.HasPrefix(t, "-") {
+			// The one optional positional is the declaration file to write.
+			outputs++
+			if outputs > 1 || !strings.HasSuffix(t, ".d.ts") {
+				return false
+			}
+			continue
+		}
+		name, value, hasValue := strings.Cut(t, "=")
+		switch {
+		case wranglerTypesValueFlags[name]:
+			if !hasValue {
+				n++
+				value = arg(a, n)
+			}
+			// A missing value, or another flag in its place, goes back to the check.
+			if value == "" || strings.HasPrefix(value, "-") {
+				return false
+			}
+		case wranglerTypesBoolFlags[name]:
+			if hasValue && value != "true" && value != "false" {
+				return false
+			}
+		case strings.HasPrefix(name, "--no-") && wranglerTypesBoolFlags["--"+strings.TrimPrefix(name, "--no-")]:
+			if hasValue {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func arg(a []string, n int) string {
 	if n < len(a) {
 		return a[n]
@@ -210,7 +268,9 @@ func classifyRules(c Config, i Input) Verdict {
 		return v
 	}
 	allow := result("allow", "default", "")
-	if cmd == "sqlite3" || localWrangler(i) {
+	// A direct `wrangler types` skips the generic --local match so that only
+	// wranglerLocalOnly decides it (a `--local` there is not a types option).
+	if cmd == "sqlite3" || localWrangler(i) && !(cmd == "wrangler" && arg(a, 0) == "types") {
 		return allow
 	}
 	if d1(i) {
@@ -289,6 +349,16 @@ func commandRules(c Config, i Input, cmd string, a []string) Verdict {
 	case "aws":
 		return awsAsk(i)
 	case "wrangler":
+		// types (and its --check) reads the config and asks a workerd it starts
+		// on localhost; on 2026-11-26 it succeeded under sandbox-exec with every
+		// non-loopback address blocked. Like `bun run build`, it may run the
+		// project's own build.command, and wrangler itself may look up a newer
+		// npm release or send telemetry. guard judges what the command line asks
+		// for, not what project code or a CLI does on its own; those are left to
+		// the OS fence, the same as for every other build tool.
+		if wranglerLocalOnly(a) {
+			return allow
+		}
 		if has(defaults(c.WranglerAllow, []string{"r2 put"}), arg(a, 0)+" "+arg(a, 1)) {
 			return allow
 		}
