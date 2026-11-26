@@ -7,6 +7,7 @@ import (
 	"github.com/kazuph/ikesu/internal/layout"
 	"github.com/kazuph/ikesu/internal/model"
 	"github.com/kazuph/ikesu/internal/teststate"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -124,4 +125,35 @@ func TestZoomedPaneReceivesMouseAtHiddenSplit(t *testing.T) {
 		}
 	}
 	specWaitFile(t, path, []byte(want.String()))
+}
+
+func TestMouseCaptureDisabledReleasesTrackingPaneOnBorder(t *testing.T) {
+	teststate.Lock(t)
+	a := specRuntimeApp(t)
+	capture := false
+	a.sidebarConfig.UI.MouseCapture = &capture
+	pid := a.focusedPane()
+	inner := a.innerRect(pid)
+	path := filepath.Join(t.TempDir(), "mouse")
+	command := `stty raw -echo icrnl; printf '\033[?1003h\033[?1006hREADY'; IFS= read -r events; printf '%s' "$events" > "$1"; printf '\r\nRECORDED'; exec /bin/cat`
+	p, err := a.sup.SpawnWith(pid, a.cwd, inner.W, inner.H, nil, []string{"/bin/sh", "-c", command, "test", path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	specWaitText(t, p, "READY")
+	a.draw()
+	y := inner.Y + 3
+	specFeed(a, fmt.Sprintf("\x1b[<0;%d;%dM\x1b[<32;%d;%dM\x1b[<0;%d;%dm\r", inner.X+3, y, inner.X, y, inner.X, y))
+	specWaitText(t, p, "RECORDED")
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "\x1b[<0;3;3M\x1b[<0;1;3m"
+	if string(got) != want {
+		t.Fatalf("PTY bytes = %q, want %q", got, want)
+	}
+	if a.fwd != -1 {
+		t.Fatal("release left the pane tracking the gesture")
+	}
 }

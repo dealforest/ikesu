@@ -21,11 +21,18 @@ func (a *App) onMouse(ev input.Event) {
 		return
 	}
 	if a.sidebarConfig.UI.MouseCapture != nil && !*a.sidebarConfig.UI.MouseCapture {
+		if ev.Kind == input.KindMouseRelease && a.fwd >= 0 {
+			a.forwardMouse(ev)
+			return
+		}
 		if pr, ok := a.paneAt(ev.Mouse.X, ev.Mouse.Y); ok {
 			if p := a.sup.Get(pr.ID); p != nil && p.Snapshot().MouseTracking {
 				switch ev.Kind {
 				case input.KindMouseClick:
-					a.forwardTo(pr.ID, uv.MouseClickEvent(ev.Mouse))
+					a.fwdStrip = 0
+					if a.forwardTo(pr.ID, uv.MouseClickEvent(ev.Mouse)) {
+						a.fwd = pr.ID
+					}
 				case input.KindMouseRelease:
 					a.forwardTo(pr.ID, uv.MouseReleaseEvent(ev.Mouse))
 				case input.KindMouseMotion:
