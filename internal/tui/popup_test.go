@@ -45,8 +45,9 @@ func TestG2PopupOwnerInputPasteLFReorderAndSelectionCleanupActualPTY(t *testing.
 	a.exec(model.CmdNewWorkspace{Cwd: a.cwd})
 	bID := a.focusedPane()
 	a.sup.Kill(bID)
+	bInner := a.innerRect(bID)
 	wantB := "B\x1b[27;2;13~P\x1b[<0;2;2M\x1b[<0;2;2m"
-	b, err := a.sup.SpawnWith(bID, a.cwd, 80, 20, nil, []string{"/bin/sh", "-c", capture(bFile, len(wantB), "\x1b[?1000h\x1b[?1006hBREADY")})
+	b, err := a.sup.SpawnWith(bID, a.cwd, bInner.W, bInner.H, nil, []string{"/bin/sh", "-c", capture(bFile, len(wantB), "\x1b[?1000h\x1b[?1006hBREADY")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +60,6 @@ func TestG2PopupOwnerInputPasteLFReorderAndSelectionCleanupActualPTY(t *testing.
 		t.Fatal("hidden popup was drawn")
 	}
 	specFeed(a, "B\x1b[27;2;13~\x1b[200~P\x1b[201~")
-	bInner := a.innerRect(bID)
 	bMouse := uv.Mouse{X: bInner.X + 1, Y: bInner.Y + 1, Button: uv.MouseLeft}
 	a.onMouse(input.Event{Kind: input.KindMouseClick, Mouse: bMouse})
 	a.onMouse(input.Event{Kind: input.KindMouseRelease, Mouse: bMouse})

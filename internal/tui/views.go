@@ -117,7 +117,7 @@ func (a *App) drawAt(started time.Time) {
 				for _, id := range tab.Layout.PaneIDs() {
 					if p := a.sup.Get(id); p != nil && panes[id] != nil {
 						r := a.innerRect(id)
-						panes[id].Grid = a.paneGrid(p, a.scroll[id], r.H, r.W)
+						a.fillPaneGrid(panes[id], p, a.scroll[id], r)
 						panes[id].ScrollOff = a.scroll[id]
 					}
 				}
@@ -128,14 +128,16 @@ func (a *App) drawAt(started time.Time) {
 		if p := a.sup.Get(a.st.Overlay.PaneID); p != nil {
 			r := a.innerRect(p.ID)
 			sn := p.Snapshot()
-			panes[p.ID] = &render.PaneSnap{Graphics: p.Graphics(), Grid: a.paneGrid(p, a.scroll[p.ID], r.H, r.W), Label: labelFor(sn, p), Title: sn.OSCTitle, Cursor: render.CursorInfo{X: sn.Cursor.X, Y: sn.Cursor.Y, Visible: sn.Cursor.Visible}, ScrollOff: a.scroll[p.ID], ScrollN: sn.ScrollbackLen, SuppressScrollbar: !sn.ScrollbarVisible}
+			panes[p.ID] = &render.PaneSnap{Graphics: p.Graphics(), Label: labelFor(sn, p), Title: sn.OSCTitle, Cursor: render.CursorInfo{X: sn.Cursor.X, Y: sn.Cursor.Y, Visible: sn.Cursor.Visible}, ScrollOff: a.scroll[p.ID], ScrollN: sn.ScrollbackLen, SuppressScrollbar: !sn.ScrollbarVisible}
+			a.fillPaneGrid(panes[p.ID], p, a.scroll[p.ID], r)
 		}
 	}
 	if a.st.PopupVisible() {
 		if p := a.sup.Get(a.st.Popup.PaneID); p != nil {
 			r := a.innerRect(p.ID)
 			sn := p.Snapshot()
-			panes[p.ID] = &render.PaneSnap{Graphics: p.Graphics(), Grid: a.paneGrid(p, a.scroll[p.ID], r.H, r.W), Label: "terminal", Title: sn.OSCTitle, Cursor: render.CursorInfo{X: sn.Cursor.X, Y: sn.Cursor.Y, Visible: sn.Cursor.Visible}, ScrollOff: a.scroll[p.ID], ScrollN: sn.ScrollbackLen, SuppressScrollbar: !sn.ScrollbarVisible}
+			panes[p.ID] = &render.PaneSnap{Graphics: p.Graphics(), Label: "terminal", Title: sn.OSCTitle, Cursor: render.CursorInfo{X: sn.Cursor.X, Y: sn.Cursor.Y, Visible: sn.Cursor.Visible}, ScrollOff: a.scroll[p.ID], ScrollN: sn.ScrollbackLen, SuppressScrollbar: !sn.ScrollbarVisible}
+			a.fillPaneGrid(panes[p.ID], p, a.scroll[p.ID], r)
 		}
 	}
 	for pid, snap := range panes {
@@ -153,7 +155,7 @@ func (a *App) drawAt(started time.Time) {
 				r := a.innerRect(pid)
 				off := max(a.bufferLen(p)-r.H-cm.top, 0)
 				// Inactive copy views retain the read position but normal pane chrome.
-				snap.Grid = a.paneGrid(p, off, r.H, r.W)
+				a.fillPaneGrid(snap, p, off, r)
 			}
 		}
 	}
@@ -248,7 +250,7 @@ func (a *App) drawAt(started time.Time) {
 		in.Dialog, in.Menu = a.prune.Render(layout.Rect{W: a.st.Cols, H: a.st.Rows}), nil
 	}
 	if a.sel != nil && a.sel.moved {
-		in.Sel = a.selRender()
+		in.Sel = a.selRender(panes)
 	}
 	if a.toastVisible() {
 		position := a.toast.position
@@ -321,6 +323,9 @@ func (a *App) drawAt(started time.Time) {
 	_, writeErr := a.out.Write(data)
 	endWrite()
 	benchstage.Values("ui.bytes", len(data), 0)
+	if writeErr == nil {
+		a.paintedPaneViews = out.PaneViewports
+	}
 	if err := writeErr; err != nil {
 		a.enc.Reset()
 		a.dirty = true
@@ -467,7 +472,7 @@ func (a *App) paneSnaps() map[int]*render.PaneSnap {
 				}
 				if active[pid] && a.drawViewers == nil {
 					r := a.innerRect(pid)
-					snap.Grid = a.paneGrid(p, a.scroll[pid], r.H, r.W)
+					a.fillPaneGrid(snap, p, a.scroll[pid], r)
 					snap.ScrollOff = a.scroll[pid]
 					snap.ScrollN = sn.ScrollbackLen
 					snap.SuppressScrollbar = !sn.ScrollbarVisible

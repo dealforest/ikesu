@@ -58,7 +58,8 @@ func TestResizeInputClaimsViewerAndAppliesFinalGeometryTogetherRealPTY(t *testin
 	small.Begin(a, 106*8, 38*16)
 	large := a.NewViewer(io.Discard, 160, 45, nil)
 	large.Begin(a, 160*8, 45*16)
-	large.AcquireSize(a)
+	// Claim the size without leaving text in the shell's command line.
+	large.Input(a, []byte("\x1b[I"))
 	before := viewerTerminalSizes(a)
 	small.with(a, func(ui *App) {
 		area := ui.st.PanesArea()
@@ -130,7 +131,7 @@ func TestSidebarResizeRoundTripStaysDragAndSavesReleasedWidth(t *testing.T) {
 		a.beginSidebarDivider(mouse, right, time.Now())
 		moved := mouse
 		moved.X += 4
-		a.dispatchInputEvents([]input.Event{{Kind: input.KindMouseMotion, Mouse: moved}, {Kind: input.KindMouseMotion, Mouse: mouse}}, a.onInput)
+		a.dispatchInputEvents([]input.Event{{Kind: input.KindMouseMotion, Mouse: moved}, {Kind: input.KindMouseMotion, Mouse: mouse}}, func(ev input.Event) { a.onInput(ev) })
 		if a.sidebarGesture == nil || !a.sidebarGesture.moved {
 			t.Fatal("roundtrip was converted into a click")
 		}

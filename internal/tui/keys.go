@@ -266,7 +266,11 @@ func (a *App) prefixKey(k uv.Key) {
 // cycleTab moves the active tab of the active workspace by dir, wrapping.
 func (a *App) cycleTab(dir int) {
 	ws := a.st.ActiveWorkspace()
-	if ws == nil || len(ws.Tabs) < 2 {
+	if ws == nil || len(ws.Tabs) == 0 {
+		return
+	}
+	if len(ws.Tabs) == 1 {
+		a.tabSelectionSeq++
 		return
 	}
 	a.exec(model.CmdSelectTab{

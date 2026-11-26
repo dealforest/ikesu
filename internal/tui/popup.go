@@ -228,11 +228,11 @@ func (a *App) popupMouse(ev input.Event) bool {
 	case input.KindMouseClick:
 		if p.Snapshot().MouseTracking {
 			a.fwdStrip = 0
-			a.forwardTo(pid, uv.MouseClickEvent(m))
-			a.fwd = pid
+			if a.forwardTo(pid, uv.MouseClickEvent(m)) {
+				a.fwd = pid
+			}
 		} else if m.Button == uv.MouseLeft && m.Mod == 0 {
-			x, y := m.X-inner.X, viewTop(p, a.scroll[pid], inner.H)+m.Y-inner.Y
-			a.sel = &selState{pane: pid, ax: x, ay: y, hx: x, hy: y, inner: inner, scrollAt: a.scroll[pid]}
+			a.beginSelection(p, inner, m)
 		}
 	}
 	return true
@@ -249,9 +249,8 @@ func (a *App) popupSelectionAutoScroll() {
 		return
 	}
 	// Use the existing terminal wheel step on the existing UI tick cadence.
-	a.setScrollOff(a.sel.pane, a.scroll[a.sel.pane]+3*a.popupAutoScroll)
 	if p := a.sup.Get(a.sel.pane); p != nil {
-		top := viewTop(p, a.scroll[a.sel.pane], a.sel.inner.H)
+		top := a.scrollSelection(p, a.sel, a.scroll[a.sel.pane]+3*a.popupAutoScroll)
 		a.sel.hy = top
 		if a.popupAutoScroll < 0 {
 			a.sel.hy += a.sel.inner.H - 1
