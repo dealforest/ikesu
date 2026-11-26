@@ -250,7 +250,7 @@ func (a *App) drawAt(started time.Time) {
 		in.Dialog, in.Menu = a.prune.Render(layout.Rect{W: a.st.Cols, H: a.st.Rows}), nil
 	}
 	if a.sel != nil && a.sel.moved {
-		in.Sel = a.selRender()
+		in.Sel = a.selRender(panes)
 	}
 	if a.toastVisible() {
 		position := a.toast.position

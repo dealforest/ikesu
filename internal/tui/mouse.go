@@ -255,13 +255,7 @@ func (a *App) click(m uv.Mouse) {
 	if a.sidebarConfig.UI.CopyOnSelect != nil && !*a.sidebarConfig.UI.CopyOnSelect {
 		return
 	}
-	off := a.scroll[pr.ID]
-	a.sel = &selState{
-		pane: pr.ID,
-		ax:   m.X - inner.X, ay: viewTop(p, off, inner.H) + m.Y - inner.Y,
-		hx: m.X - inner.X, hy: viewTop(p, off, inner.H) + m.Y - inner.Y,
-		inner: inner, scrollAt: off,
-	}
+	a.beginSelection(p, inner, m)
 	// Two same-cell left clicks within 500ms (down+up completed) open the
 	// pane menu on the second release (SPEC G1 pane menu). A click that
 	// drags into a selection never opens the menu.
@@ -622,7 +616,7 @@ func (a *App) selMouse(ev input.Event) {
 		a.sel = nil
 		return
 	}
-	top := viewTop(p, a.scroll[s.pane], s.inner.H)
+	top := a.selectionTop(p, s)
 	hx := m.X - s.inner.X
 	hy := top + m.Y - s.inner.Y
 	if !a.st.PopupVisible() && !a.st.OverlayVisible() {

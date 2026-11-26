@@ -112,15 +112,45 @@ func viewTop(p *runtime.Pane, off, h int) int {
 	return top
 }
 
+func (a *App) beginSelection(p *runtime.Pane, inner layout.Rect, m uv.Mouse) {
+	view, ok := a.paintedPaneViews[p.ID]
+	if !ok || !pointIn(m.X, m.Y, view.Inner) {
+		view = a.livePaneViewport(p, inner)
+	}
+	x, y := m.X-view.Inner.X, view.BufferTop+m.Y-view.Inner.Y
+	a.sel = &selState{pane: p.ID, ax: x, ay: y, hx: x, hy: y,
+		inner: view.Inner, viewTop: view.BufferTop, fixedView: true}
+}
+
+func (a *App) selectionTop(p *runtime.Pane, s *selState) int {
+	if s.fixedView {
+		return s.viewTop
+	}
+	return a.livePaneViewport(p, s.inner).BufferTop
+}
+
+// scrollSelection is the only action that moves a mouse drag's viewport.
+func (a *App) scrollSelection(p *runtime.Pane, s *selState, off int) int {
+	before := a.scroll[s.pane]
+	a.setScrollOff(s.pane, off)
+	if s.fixedView && a.scroll[s.pane] != before {
+		s.viewTop = a.livePaneViewport(p, s.inner).BufferTop
+	}
+	return a.selectionTop(p, s)
+}
+
 // selRender converts the in-progress selection (buffer coords) into render
 // coordinates of the pane's inner rect.
-func (a *App) selRender() *render.Selection {
+func (a *App) selRender(panes map[int]*render.PaneSnap) *render.Selection {
 	s := a.sel
 	p := a.sup.Get(s.pane)
 	if p == nil {
 		return nil
 	}
-	top := viewTop(p, a.scroll[s.pane], s.inner.H)
+	top := a.livePaneViewport(p, s.inner).BufferTop
+	if snap := panes[s.pane]; snap != nil && snap.Viewport.Cols > 0 {
+		top = snap.Viewport.BufferTop
+	}
 	// Normalize so From is before To in reading order.
 	ax, ay, hx, hy := s.ax, s.ay, s.hx, s.hy
 	if ay > hy || (ay == hy && ax > hx) {
