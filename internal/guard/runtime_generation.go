@@ -177,7 +177,29 @@ func (a *Assets) stableEntries(shell *privateDirectory) error {
 	return shell.link("ikesu", filepath.Join("current", "ikesu"))
 }
 
-const generationRetention = time.Hour
+const (
+	generationRetention         = time.Hour
+	generationRetirementFile    = "generation-retirements"
+	generationRetirementLimit   = 64
+	generationRecentRetirements = 8
+)
+
+// Both callers hold the publication lock. A missing file is expected for
+// installations that have not yet retired a generation with this version.
+func readGenerationRetirements(shell *privateDirectory) ([]string, error) {
+	data, err := shell.read(generationRetirementFile)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	if err := json.Unmarshal(data, &names); err != nil {
+		return nil, err
+	}
+	return names, nil
+}
 
 // Stamp the previous generation under the publication lock before replacing
 // current. This protects a shell that just obtained its immutable startup path.
@@ -200,7 +222,22 @@ func retireCurrentGeneration(shell *privateDirectory, next string) error {
 		return err
 	}
 	defer dir.close()
-	return unix.Futimes(dir.fd(), nil)
+	if err := unix.Futimes(dir.fd(), nil); err != nil {
+		return err
+	}
+	names, err := readGenerationRetirements(shell)
+	if err != nil {
+		return fmt.Errorf("read guard generation retirements: %w", err)
+	}
+	names = append(names, previous)
+	names = names[max(0, len(names)-generationRetirementLimit):]
+	data, err := json.Marshal(names)
+	if err != nil {
+		return err
+	}
+	// Persist protection before replacing current so sweeps cannot see
+	// a retired generation without its history entry.
+	return shell.write(generationRetirementFile, data, 0600)
 }
 
 // Caller holds the cross-process exclusive lock from validation through the
@@ -401,8 +438,13 @@ func (p *generationPruner) pruneBatch(shell *privateDirectory, names []string, c
 	if err != nil || !generationName(current) {
 		return false
 	}
+	retirements, err := readGenerationRetirements(shell)
+	if err != nil {
+		return false
+	}
+	recent := retirements[max(0, len(retirements)-generationRecentRetirements):]
 	for _, name := range names {
-		if name == current || !generationName(name) {
+		if name == current || !generationName(name) || slices.Contains(recent, name) {
 			continue
 		}
 		dir, err := shell.child(name, false)

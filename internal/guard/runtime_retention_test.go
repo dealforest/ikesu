@@ -2,10 +2,12 @@ package guard
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -226,5 +228,95 @@ func TestPublishGenerationRejectsCurrentReadlinkError(t *testing.T) {
 	}
 	if after, err := os.ReadFile(payload); err != nil || !bytes.Equal(after, before) {
 		t.Errorf("publication changed the previous startup file: %v", err)
+	}
+}
+
+func TestGenerationPruningRetainsLatestRetirementsAcrossClockChanges(t *testing.T) {
+	t.Parallel()
+	for _, direction := range []string{"forward", "backward"} {
+		t.Run(direction, func(t *testing.T) {
+			t.Parallel()
+			a := NewAssets(t.TempDir(), "p_1", "/usr/bin/true", Config{})
+			shell, err := a.privateShell(true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer shell.close()
+
+			var retired []string
+			var current string
+			for i := range 67 {
+				a.Config.AskTimeoutSeconds = &i
+				path, err := func() (string, error) {
+					unlock, err := shell.lock(true)
+					if err != nil {
+						return "", err
+					}
+					defer unlock()
+					return a.ensureGeneration(shell, true)
+				}()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if current != "" {
+					retired = append(retired, current)
+				}
+				current = path
+			}
+			// A shell acquired this immutable startup path before publication
+			// of the new current. Pruning must leave its contents readable.
+			acquired := filepath.Join(retired[len(retired)-1], "bash-env.current")
+			before, err := os.ReadFile(acquired)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			now := time.Now()
+			cutoff := now.Add(2*time.Hour - generationRetention)
+			if direction == "backward" {
+				// The worker chose its cutoff before the clock went back.
+				// Retirement times written after the jump precede that cutoff.
+				cutoff = now.Add(-generationRetention)
+				afterJump := now.Add(-2 * time.Hour)
+				for _, path := range retired {
+					if err := os.Chtimes(path, afterJump, afterJump); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			pruner, err := prepareGenerationPruner(a.Root, shell)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pruner.prune(shell, cutoff)
+
+			if after, err := os.ReadFile(acquired); err != nil || !bytes.Equal(after, before) {
+				t.Errorf("acquired startup file was lost after clock moved %s: %v", direction, err)
+			}
+			for i, path := range retired {
+				_, err := os.Stat(path)
+				if i >= len(retired)-8 {
+					if err != nil {
+						t.Errorf("recent retirement %d was pruned: %v", i, err)
+					}
+				} else if !os.IsNotExist(err) {
+					t.Errorf("expired retirement %d remains: %v", i, err)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(current, "bash-env.current")); err != nil {
+				t.Errorf("current startup file was pruned: %v", err)
+			}
+			data, err := shell.read("generation-retirements")
+			var want []string
+			for _, path := range retired[len(retired)-64:] {
+				want = append(want, filepath.Base(path))
+			}
+			var got []string
+			if err != nil {
+				t.Error(err)
+			} else if err := json.Unmarshal(data, &got); err != nil || !slices.Equal(got, want) {
+				t.Errorf("expected the last 64 retirements in order, got %d entries: %v", len(got), err)
+			}
+		})
 	}
 }
