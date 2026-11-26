@@ -8,11 +8,17 @@ func (a *App) paneMenuLinkAt(x, y, pid int) string {
 	if !ok || pane.ID != pid {
 		return ""
 	}
-	inner := a.innerRect(pid)
-	if !pointIn(x, y, inner) {
-		return ""
-	}
 	if p := a.sup.Get(pid); p != nil {
+		if view, ok := a.paintedPaneViews[pid]; ok && (a.cm == nil || a.cm.pane != pid) {
+			if !pointIn(x, y, view.Inner) {
+				return ""
+			}
+			return p.WebLinkAtBufferRow(x-view.Inner.X, view.BufferTop+y-view.Inner.Y)
+		}
+		inner := a.innerRect(pid)
+		if !pointIn(x, y, inner) {
+			return ""
+		}
 		if a.cm != nil && a.cm.pane == pid {
 			return p.WebLinkAtBufferRow(x-inner.X, a.cm.top+y-inner.Y)
 		}
