@@ -12,7 +12,7 @@ import (
 func TestViewerWorkspaceRoundTripKeepsLastInputSize(t *testing.T) {
 	teststate.Lock(t)
 	a := sizeOwnerRuntimeApp(t)
-	cfg, err := config.Decode([]byte("[keys]\nswitch_workspace='alt+1..9'\n"))
+	cfg, err := config.Decode([]byte("[keys]\nswitch_workspace='alt+1..9'\nnext_workspace='prefix+o'\nopen_notification_target=''\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,9 +23,9 @@ func TestViewerWorkspaceRoundTripKeepsLastInputSize(t *testing.T) {
 	a.exec(model.CmdNewWorkspace{Cwd: t.TempDir(), NoFocus: true})
 	tabA, tabB := a.st.Workspaces[0].TabRef(), a.st.Workspaces[1].TabRef()
 	large := a.NewViewer(io.Discard, 140, 40, nil)
-	large.Begin(a, 0, 0)
+	large.Begin(a, 140*8, 40*16)
 	small := a.NewViewer(io.Discard, 50, 30, nil)
-	small.Begin(a, 0, 0)
+	small.Begin(a, 50*10, 30*20)
 	small.Input(a, []byte("\x1b2x"))
 	large.Input(a, []byte("x"))
 	paneA, paneB := tabA.Layout.Focused(), tabB.Layout.Focused()
@@ -37,7 +37,8 @@ func TestViewerWorkspaceRoundTripKeepsLastInputSize(t *testing.T) {
 		viewer *Viewer
 		keys   string
 		target int
-	}{{large, "\x1b2", 1}, {large, "\x1b1", 0}, {small, "\x1b1", 0}, {small, "\x1b2", 1}} {
+	}{{large, "\x1b2", 1}, {large, "\x1b1", 0}, {small, "\x1b1", 0}, {small, "\x1b2", 1},
+		{large, "\x02o", 1}, {large, "\x02o", 0}, {small, "\x02o", 0}, {small, "\x02o", 1}} {
 		visit.viewer.Input(a, []byte(visit.keys))
 		if visit.viewer.workspace != a.st.Workspaces[visit.target].ID {
 			t.Fatalf("workspace %d was not selected", visit.target)
@@ -47,6 +48,17 @@ func TestViewerWorkspaceRoundTripKeepsLastInputSize(t *testing.T) {
 		}
 		if got := viewerTerminalSizes(a); got[paneA] != sizes[paneA] || got[paneB] != sizes[paneB] {
 			t.Fatalf("visiting workspace %d changed PTY sizes: %v -> %v", visit.target, sizes, got)
+		}
+		if w, h := a.sup.Get(paneA).CellPixels(); w != 8 || h != 16 {
+			t.Fatalf("visiting workspace %d changed A's pixels to %dx%d", visit.target, w, h)
+		}
+		if w, h := a.sup.Get(paneB).CellPixels(); w != 10 || h != 20 {
+			t.Fatalf("visiting workspace %d changed B's pixels to %dx%d", visit.target, w, h)
+		}
+		if visit.viewer == large && visit.target == 1 {
+			// A newer resize while Mac views B cannot reinterpret A's
+			// previously recorded cell geometry when Mac returns.
+			large.Resize(a, 140, 40, 140*9, 40*18)
 		}
 	}
 }

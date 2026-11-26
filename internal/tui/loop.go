@@ -387,9 +387,19 @@ func (a *App) exec(cmd model.Command) error {
 		prev = a.st.Capture()
 	}
 	closing := a.closingSpaceFor(cmd)
+	previousTab := a.currentSizeTab()
 	effects := a.st.Apply(cmd)
+	navigating := false
+	switch cmd.(type) {
+	case model.CmdSelectTab, model.CmdSelectWorkspace:
+		navigating = a.viewerContext != nil && previousTab != a.currentSizeTab()
+	}
 	a.recordClosedSpace(closing, effects)
 	for _, e := range effects {
+		if _, sync := e.(model.EffSyncLayout); sync && navigating {
+			a.viewerContext.sizeOnTabEntry(a)
+			continue
+		}
 		if killed, ok := e.(model.EffKillPane); ok && killed.Pane == beforeFocus {
 			beforeFocus = -1
 		}

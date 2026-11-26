@@ -41,14 +41,17 @@ func (v *Viewer) deliverInput(ui *App, pending viewerInput) {
 	root := ui.viewerOwner
 	before := ui.currentSizeTab()
 	resizing := ui.resizeDragActive()
+	hadPrefix := ui.prefix
 	ui.onInput(event)
 	after := ui.currentSizeTab()
-	basis, exists := root.sizeOwners[after]
+	basis := root.sizeOwners[after]
 	if after != before {
-		if !exists || basis.provisional {
-			v.takeSize(root)
-			ui.syncLayout()
-		}
+		v.sizeOnTabEntry(ui)
+		return
+	}
+	// The leader key only arms the next command. Classify that command
+	// at its own event so a prefixed switch also leaves the source alone.
+	if event.Kind == input.KindKey && !hadPrefix && ui.prefix {
 		return
 	}
 	if basis.inputOrder > pending.order {

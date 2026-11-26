@@ -82,6 +82,16 @@ func (a *App) ptyRectForPane(pid int) (r layout.Rect) {
 	return r
 }
 
+// Do not recompute recorded geometry on navigation. Even the same owner
+// may have resized while visiting a different tab.
+func (v *Viewer) sizeOnTabEntry(ui *App) {
+	root := ui.viewerOwner
+	if basis, recorded := root.sizeOwners[ui.currentSizeTab()]; !recorded || basis.provisional {
+		v.takeSize(root)
+		ui.syncLayout()
+	}
+}
+
 func (v *Viewer) takeSizeIfAvailable(a *App) {
 	if basis, recorded := a.sizeOwners[a.currentSizeTab()]; !recorded || basis.viewer == v {
 		v.takeSize(a)
