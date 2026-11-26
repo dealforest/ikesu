@@ -42,11 +42,14 @@ func (v *Viewer) deliverInput(ui *App, pending viewerInput) {
 	before := ui.currentSizeTab()
 	resizing := ui.resizeDragActive()
 	hadPrefix := ui.prefix
-	ui.onInput(event)
+	selected := ui.onInput(event)
 	after := ui.currentSizeTab()
 	basis := root.sizeOwners[after]
 	if after != before {
 		v.sizeOnTabEntry(ui)
+		return
+	}
+	if selected {
 		return
 	}
 	// The leader key only arms the next command. Classify that command

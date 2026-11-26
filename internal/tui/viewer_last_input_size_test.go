@@ -9,6 +9,56 @@ import (
 	"github.com/kazuph/ikesu/internal/teststate"
 )
 
+func TestViewerReselectKeepsLastInputSize(t *testing.T) {
+	teststate.Lock(t)
+	for _, tc := range []struct {
+		name, config, keys string
+	}{
+		{"default tab number", "", "\x021"},
+		{"configured tab number", "[keys]\nswitch_tab='alt+1..9'\n", "\x1b1"},
+		{"configured workspace number", "[keys]\nswitch_workspace='alt+1..9'\n", "\x1b1"},
+		{"only tab", "", "\x02n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := sizeOwnerRuntimeApp(t)
+			if tc.config != "" {
+				cfg, err := config.Decode([]byte(tc.config))
+				if err != nil {
+					t.Fatal(err)
+				}
+				a.sidebarConfig = cfg
+			}
+			if err := a.StartInitialPane(); err != nil {
+				t.Fatal(err)
+			}
+			large := a.NewViewer(io.Discard, 140, 40, nil)
+			large.Begin(a, 140*8, 40*16)
+			large.Input(a, []byte(" "))
+			small := a.NewViewer(io.Discard, 50, 30, nil)
+			small.Begin(a, 50*10, 30*20)
+			tab := a.currentSizeTab()
+			pid := tab.Layout.Focused()
+			workspace := large.workspace
+			if small.workspace != workspace || large.tabs[workspace] != tab.ID || small.tabs[workspace] != tab.ID {
+				t.Fatal("both viewers must start on the same tab")
+			}
+			reviewPTYSize(t, a, pid, 112, 36, 8, 16)
+
+			small.Input(a, []byte(tc.keys))
+			if small.workspace != workspace || small.tabs[workspace] != tab.ID || a.sizeOwners[tab].viewer != large {
+				t.Fatalf("reselection changed the tab or size owner (pane size %v)", viewerTerminalSizes(a)[pid])
+			}
+			reviewPTYSize(t, a, pid, 112, 36, 8, 16)
+
+			small.Input(a, []byte(" "))
+			if a.sizeOwners[tab].viewer != small {
+				t.Fatal("typing in the pane did not transfer ownership")
+			}
+			reviewPTYSize(t, a, pid, 22, 26, 10, 20)
+		})
+	}
+}
+
 func TestViewerWorkspaceRoundTripKeepsLastInputSize(t *testing.T) {
 	teststate.Lock(t)
 	a := sizeOwnerRuntimeApp(t)

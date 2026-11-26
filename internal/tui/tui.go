@@ -177,6 +177,7 @@ type App struct {
 	viewerContext     *Viewer
 	viewerActive      bool
 	paintedPaneViews  map[int]render.PaneViewport
+	tabSelectionSeq   uint64
 	sizeInputOrder    uint64
 	sizeViewer        *Viewer
 	sizeViewers       []*Viewer

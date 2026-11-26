@@ -16,11 +16,14 @@ import (
 	"time"
 )
 
-func (a *App) onInput(ev input.Event) {
+// onInput reports whether this event selected a tab or workspace, including a reselect.
+func (a *App) onInput(ev input.Event) (selected bool) {
+	selectionSeq := a.tabSelectionSeq
 	request := a.worktreeScreenRequest
 	dialog, menu, settings, help := a.dialog, a.menu, a.settings, a.help
 	navigator, copyMode, selection := a.navigator, a.cm, a.sel
 	defer func() {
+		selected = a.tabSelectionSeq != selectionSeq
 		if a.worktreeScreenRequest == request && (a.dialog != dialog || a.menu != menu || a.settings != settings || a.help != help || a.navigator != navigator || a.cm != copyMode || a.sel != selection) {
 			a.worktreeScreenRequest++
 		}
@@ -115,6 +118,7 @@ func (a *App) onInput(ev input.Event) {
 		a.windowBlurred = true
 	case input.KindUnknown:
 	}
+	return
 }
 
 // onRuntimeEvent handles supervisor notifications.
@@ -392,6 +396,9 @@ func (a *App) exec(cmd model.Command) error {
 	navigating := false
 	switch cmd.(type) {
 	case model.CmdSelectTab, model.CmdSelectWorkspace:
+		if len(effects) > 0 {
+			a.tabSelectionSeq++
+		}
 		navigating = a.viewerContext != nil && previousTab != a.currentSizeTab()
 	}
 	a.recordClosedSpace(closing, effects)

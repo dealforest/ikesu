@@ -131,7 +131,7 @@ func TestSidebarResizeRoundTripStaysDragAndSavesReleasedWidth(t *testing.T) {
 		a.beginSidebarDivider(mouse, right, time.Now())
 		moved := mouse
 		moved.X += 4
-		a.dispatchInputEvents([]input.Event{{Kind: input.KindMouseMotion, Mouse: moved}, {Kind: input.KindMouseMotion, Mouse: mouse}}, a.onInput)
+		a.dispatchInputEvents([]input.Event{{Kind: input.KindMouseMotion, Mouse: moved}, {Kind: input.KindMouseMotion, Mouse: mouse}}, func(ev input.Event) { a.onInput(ev) })
 		if a.sidebarGesture == nil || !a.sidebarGesture.moved {
 			t.Fatal("roundtrip was converted into a click")
 		}
