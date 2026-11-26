@@ -4,8 +4,11 @@ import (
 	"fmt"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/kazuph/ikesu/internal/input"
+	"github.com/kazuph/ikesu/internal/layout"
+	"github.com/kazuph/ikesu/internal/model"
 	"github.com/kazuph/ikesu/internal/teststate"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -88,4 +91,37 @@ func TestSPECWheelThreeRoutesActualPTYAndHostScroll(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestZoomedPaneReceivesMouseAtHiddenSplit(t *testing.T) {
+	teststate.Lock(t)
+	a := specRuntimeApp(t)
+	pid := a.focusedPane()
+	tab := a.st.ActiveWorkspace().TabRef()
+	tab.Layout.SplitFocused(layout.Vertical, pid+1)
+	border := tab.Layout.Splits(a.st.PanesArea())[0]
+	if err := a.exec(model.CmdZoomPane{Pane: pid, Mode: "on"}); err != nil {
+		t.Fatal(err)
+	}
+	inner := a.innerRect(pid)
+	y := inner.Y + 2
+	path := filepath.Join(t.TempDir(), "mouse")
+	var want strings.Builder
+	for _, x := range []int{border.Pos - 1, border.Pos, border.Pos + 1} {
+		fmt.Fprintf(&want, "\x1b[<0;%d;3M\x1b[<32;%d;3M\x1b[<0;%d;3m", x-inner.X+1, x-inner.X+5, x-inner.X+5)
+	}
+	command := fmt.Sprintf("stty raw -echo; printf '\\033[?1000h\\033[?1006hREADY'; dd bs=1 count=%d of='%s' 2>/dev/null; exec /bin/cat", want.Len(), path)
+	p, err := a.sup.SpawnWith(pid, a.cwd, inner.W, inner.H, nil, []string{"/bin/sh", "-c", command})
+	if err != nil {
+		t.Fatal(err)
+	}
+	specWaitText(t, p, "READY")
+	a.draw()
+	for _, x := range []int{border.Pos - 1, border.Pos, border.Pos + 1} {
+		specFeed(a, fmt.Sprintf("\x1b[<0;%d;%dM\x1b[<32;%d;%dM\x1b[<0;%d;%dm", x+1, y+1, x+5, y+1, x+5, y+1))
+		if ratio := tab.Layout.Root().Ratio; ratio != border.Ratio {
+			t.Fatalf("press at column %d changed the hidden split ratio from %g to %g", x, border.Ratio, ratio)
+		}
+	}
+	specWaitFile(t, path, []byte(want.String()))
 }

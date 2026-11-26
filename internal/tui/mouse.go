@@ -173,7 +173,8 @@ func (a *App) click(m uv.Mouse) {
 	if a.actionBarHit(m) {
 		return
 	}
-	if l := ws.ActiveLayout(); l != nil {
+	if tab := ws.TabRef(); tab != nil && tab.Layout != nil && tab.Zoomed == 0 {
+		l := tab.Layout
 		if b := l.SplitBorderAt(m.X, m.Y, area); b != nil {
 			grab := b.Pos - m.X
 			if b.Direction == layout.Horizontal {
