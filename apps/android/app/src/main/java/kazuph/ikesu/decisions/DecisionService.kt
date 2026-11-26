@@ -105,6 +105,7 @@ class DecisionService : Service() {
     companion object {
         const val CHANGED = "kazuph.ikesu.CHANGED"
         const val RECONNECT = "kazuph.ikesu.RECONNECT"
+        private const val ANSWER = "kazuph.ikesu.ANSWER"
         private const val CONNECTION = "connection"
         private const val QUESTIONS = "questions"
         private const val QUESTIONS_QUIET = "questions_quiet"
@@ -117,6 +118,10 @@ class DecisionService : Service() {
     private var nextNotification = 2
     /** Decisions that already rang on this phone (sound and pop-up happen once per decision). */
     private val alerted = mutableSetOf<String>()
+    /** The choice buttons each shown notification carries now (null: none, it opens the app). */
+    private val posted = mutableMapOf<String, List<Pair<String, String>>?>()
+    /** Answers sent from a notification button, by sequence, waiting for the PC's result. */
+    private val notificationAnswers = mutableMapOf<String, String>()
     private var generation = 0
     private val receiving = mutableMapOf<String, Pair<FileOutputStream, Int>>()
     /** Failed attempts in a row per source, for a growing wait before the next try. */
@@ -139,6 +144,12 @@ class DecisionService : Service() {
         connectivity.registerDefaultNetworkCallback(networkCallback)
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // A notification button answers over the open connections: reconnecting would end the unlock.
+        if (intent?.action == ANSWER) {
+            val key = intent.getStringExtra("decision"); val option = intent.getStringExtra("option")
+            if (key != null && option != null) answerFromNotification(key, option)
+            return START_STICKY
+        }
         connect()
         return START_STICKY
     }
@@ -222,6 +233,7 @@ class DecisionService : Service() {
         }
         keys.forEach { key -> DecisionState.videos.remove(key)?.delete() }
         source.decisions = DecisionState.headingsOnly(source.decisions)
+        refreshChoices(source)
         DecisionState.recompute()
     }
 
@@ -249,6 +261,7 @@ class DecisionService : Service() {
             "operate_expired" -> { lock(source); changed() }
             "beat" -> source.beat = message.optLong("n")
             "answer_result", "error" -> {
+                notificationAnswerResult(message)
                 DecisionState.result = message
                 if (message.optString("message") == "operate required") lock(source)
                 changed()
@@ -281,7 +294,7 @@ class DecisionService : Service() {
         val old = (0 until previous.length()).mapNotNull { previous.optJSONObject(it) }.associate { it.optString("id") to it.optBoolean("notify") }
         val currentKeys = (0 until items.length()).map { items.getJSONObject(it).getString("id") }.toSet()
         val sourcePrefix = DecisionState.key(source.id, "")
-        (old.keys.filter { it.startsWith(sourcePrefix) } - currentKeys).forEach { key -> notificationIds.remove(key)?.let(manager::cancel) }
+        (old.keys.filter { it.startsWith(sourcePrefix) } - currentKeys).forEach { key -> posted.remove(key); notificationIds.remove(key)?.let(manager::cancel) }
         // A decision that is gone may ring again only if it comes back as a new one.
         alerted.removeAll { it.startsWith(sourcePrefix) && it !in currentKeys }
         val before = source.decisions
@@ -298,20 +311,15 @@ class DecisionService : Service() {
             val item = items.optJSONObject(index) ?: continue
             val key = item.optString("id")
             val action = notifyAction(item.optBoolean("notify"), old[key] == true, key in alerted)
-            if (action == NotifyAction.CANCEL) { notificationIds[key]?.let(manager::cancel); continue }
-            if (action == NotifyAction.KEEP) continue
+            if (action == NotifyAction.CANCEL) { notificationIds[key]?.let(manager::cancel); posted.remove(key); continue }
+            if (action == NotifyAction.KEEP) {
+                // The choices arrived (unlocked) or went away (locked): update the shown notification without ringing.
+                if (posted[key] != notificationChoices(item, source.operable)) postDecision(key, item, source.operable, quietUpdate = true)
+                continue
+            }
             alerted.add(key)
-            val number = notificationIds.getOrPut(key) { nextNotification++ }
-            val intent = Intent(this, MainActivity::class.java).putExtra("decision", key)
-            val pending = panel(number, intent)
             // Shown again after the PC stopped showing it: the quiet channel has no sound and no pop-up over what the user is typing.
-            manager.notify(number, Notification.Builder(this, if (action == NotifyAction.SILENT) QUESTIONS_QUIET else QUESTIONS).setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle(decisionHeading(item.optString("raw_title"), item.optString("raw_body"), item.optString("kind")))
-                .setContentText(item.optString("location", "判断を待っています"))
-                .setColor(0xFF33FF66.toInt())
-                .setVisibility(Notification.VISIBILITY_PRIVATE)
-                .setStyle(Notification.BigTextStyle().bigText(item.optString("location", "判断を待っています")))
-                .setContentIntent(pending).setAutoCancel(true).build())
+            postDecision(key, item, source.operable, quiet = action == NotifyAction.SILENT)
         }
         // 通知を出している判断待ちを、出どころの PC に知らせる。つなぎ直した一覧でも同じ分をもう一度送る。
         DecisionState.shown(notifiedIds((0 until items.length()).mapNotNull { items.optJSONObject(it) }
@@ -325,6 +333,74 @@ class DecisionService : Service() {
         changed()
     }
     private fun jsonItems(array: JSONArray): List<JSONObject> = (0 until array.length()).mapNotNull { array.optJSONObject(it) }
+
+    /**
+     * Shows one decision's notification. While the phone is unlocked for its PC, each choice is a
+     * button, which a paired Pixel Watch shows too; otherwise tapping opens the app to unlock.
+     * quiet: the silent channel. quietUpdate: same channel, but an update that does not ring again.
+     */
+    private fun postDecision(key: String, item: JSONObject, operable: Boolean, quiet: Boolean = false, quietUpdate: Boolean = false, status: String? = null, buttons: Boolean = true) {
+        val number = notificationIds.getOrPut(key) { nextNotification++ }
+        val choices = notificationChoices(item, operable)
+        posted[key] = choices
+        val location = item.optString("location", "判断を待っています")
+        val builder = Notification.Builder(this, if (quiet) QUESTIONS_QUIET else QUESTIONS).setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(decisionHeading(item.optString("raw_title"), item.optString("raw_body"), item.optString("kind")))
+            .setContentText(status ?: location)
+            .setColor(0xFF33FF66.toInt())
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .setStyle(Notification.BigTextStyle().bigText(if (status == null) location else "$status\n$location"))
+            .setOnlyAlertOnce(quietUpdate)
+            .setContentIntent(panel(number, Intent(this, MainActivity::class.java).putExtra("decision", key))).setAutoCancel(true)
+        if (choices != null && buttons) {
+            val actions = choices.mapIndexed { index, (option, label) ->
+                val answer = Intent(this, DecisionService::class.java).setAction(ANSWER).putExtra("decision", key).putExtra("option", option)
+                Notification.Action.Builder(null, label, PendingIntent.getService(this, number * 16 + index, answer,
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build()
+            }
+            // The phone shows up to three buttons; the watch lists every choice.
+            actions.take(3).forEach(builder::addAction)
+            builder.extend(Notification.WearableExtender().addActions(actions))
+        }
+        manager.notify(number, builder.build())
+    }
+
+    /** A button on the notification (or the watch) was pressed: answer with that one choice. */
+    private fun answerFromNotification(key: String, option: String) {
+        val item = jsonItems(DecisionState.decisions).firstOrNull { it.optString("id") == key } ?: return
+        val source = DecisionState.split(key)?.let { DecisionState.sources[it.first] }
+        if (source == null || !DecisionState.reachable(key) || notificationChoices(item, source.operable)?.any { it.first == option } != true) {
+            postDecision(key, item, source?.operable == true, quietUpdate = true, status = "スマホで顔・指紋で開いてから答えてください", buttons = false)
+            return
+        }
+        val sequence = java.util.UUID.randomUUID().toString()
+        if (!DecisionState.answer(key, listOf(option), "", emptyList(), sequence)) {
+            postDecision(key, item, source.operable, quietUpdate = true, status = "送れませんでした。もう一度押してください")
+            return
+        }
+        notificationAnswers[sequence] = key
+        postDecision(key, item, source.operable, quietUpdate = true, status = "送信中…", buttons = false)
+    }
+
+    /** The PC's answer to a notification button: gone when answered, otherwise the reason on the notification. */
+    private fun notificationAnswerResult(message: JSONObject) {
+        val key = notificationAnswers.remove(message.optString("sequence")) ?: return
+        val status = message.optString("status")
+        if (status == "answered" || status == "answered_elsewhere" || status == "cancelled" || status == "expired") {
+            notificationIds[key]?.let(manager::cancel); posted.remove(key); return
+        }
+        val item = jsonItems(DecisionState.decisions).firstOrNull { it.optString("id") == key } ?: return
+        val operable = DecisionState.split(key)?.let { DecisionState.sources[it.first]?.operable } == true
+        postDecision(key, item, operable, quietUpdate = true, status = message.optString("message", "回答できませんでした"))
+    }
+
+    /** Unlocking or locking a PC adds or removes the choice buttons of its shown notifications, without ringing. */
+    private fun refreshChoices(source: DecisionSource) {
+        for (item in jsonItems(source.decisions)) {
+            val key = item.optString("id")
+            if (key in posted && posted[key] != notificationChoices(item, source.operable)) postDecision(key, item, source.operable, quietUpdate = true)
+        }
+    }
 
     private fun receiveVideo(source: DecisionSource, message: JSONObject) {
         val key = message.optString("key")

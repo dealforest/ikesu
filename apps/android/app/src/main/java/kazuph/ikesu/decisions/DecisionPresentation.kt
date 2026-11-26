@@ -104,3 +104,17 @@ fun sameForDisplay(old: List<org.json.JSONObject>, new: List<org.json.JSONObject
     val strip = { item: org.json.JSONObject -> org.json.JSONObject(item.toString()).apply { remove("notify") }.toString() }
     return old.indices.all { strip(old[it]) == strip(new[it]) }
 }
+
+/**
+ * The choices a notification (and so a Pixel Watch) may offer as buttons: only while the phone is
+ * unlocked with face or fingerprint for that PC (operable), for a decision whose options arrived,
+ * answered with a single choice. Otherwise null: the notification only opens the app to unlock.
+ */
+fun notificationChoices(item: org.json.JSONObject, operable: Boolean): List<Pair<String, String>>? {
+    if (!operable || item.optBoolean("locked") || item.optBoolean("multi_select")) return null
+    val options = item.optJSONArray("options") ?: return null
+    val choices = (0 until options.length()).mapNotNull { options.optJSONObject(it) }
+        .map { it.optString("id") to it.optString("label") }
+        .filter { it.first.isNotEmpty() && it.second.isNotEmpty() }
+    return choices.takeIf { it.isNotEmpty() }
+}

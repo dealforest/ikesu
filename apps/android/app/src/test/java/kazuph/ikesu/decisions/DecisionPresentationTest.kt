@@ -70,6 +70,17 @@ class DecisionPresentationTest {
         // The PC stops showing it: it comes back without sound or pop-up.
         assertEquals(NotifyAction.SILENT, notifyAction(notify = true, shownBefore = false, alerted = true))
     }
+    @Test fun notificationButtonsOnlyWhileUnlocked() {
+        fun item(locked: Boolean = false, multi: Boolean = false) = org.json.JSONObject().put("locked", locked).put("multi_select", multi)
+            .put("options", org.json.JSONArray().put(org.json.JSONObject().put("id", "1").put("label", "はい")).put(org.json.JSONObject().put("id", "2").put("label", "いいえ")))
+        assertEquals(listOf("1" to "はい", "2" to "いいえ"), notificationChoices(item(), operable = true))
+        // Locked by the PC (only the heading arrived), or the phone is not unlocked: no buttons.
+        assertEquals(null, notificationChoices(item(locked = true), operable = true))
+        assertEquals(null, notificationChoices(item(), operable = false))
+        // A multi-select answer needs the app.
+        assertEquals(null, notificationChoices(item(multi = true), operable = true))
+        assertEquals(null, notificationChoices(org.json.JSONObject().put("options", org.json.JSONArray()), operable = true))
+    }
     @Test fun onlyNotifyFlagChangesKeepTheScreen() {
         fun item(id: String, notify: Boolean, title: String = "t") =
             org.json.JSONObject().put("id", id).put("raw_title", title).put("notify", notify)
