@@ -144,8 +144,47 @@ func has(a []string, s string) bool {
 	return false
 }
 
-// wranglerLocal lists wrangler subcommands that only work on this machine.
-var wranglerLocal = map[string]bool{"types": true, "--version": true, "-v": true, "--help": true, "-h": true}
+// wranglerInfoFlags only print help or the version. wrangler treats them as
+// plain booleans, so they are local only when nothing follows them
+// (`wrangler --version deploy` still deploys).
+var wranglerInfoFlags = map[string]bool{"--version": true, "-v": true, "--help": true, "-h": true}
+
+// wranglerTypesValueFlags and wranglerTypesBoolFlags are the `wrangler types`
+// options checked against wrangler 4.162.0. Anything else (--install-skills,
+// --profile, --cwd, --env-file, unknown flags) goes back to the normal check.
+var wranglerTypesValueFlags = map[string]bool{"-c": true, "--config": true, "-e": true, "--env": true, "--env-interface": true}
+var wranglerTypesBoolFlags = map[string]bool{"--check": true, "--include-runtime": true, "--include-env": true, "--strict-vars": true, "--include-main-module": true, "--help": true, "-h": true}
+
+// wranglerLocalOnly reports whether a wrangler command line only prints help
+// or the version, or generates/checks the Worker types with known options.
+func wranglerLocalOnly(a []string) bool {
+	if len(a) == 1 && wranglerInfoFlags[a[0]] {
+		return true
+	}
+	if arg(a, 0) != "types" {
+		return false
+	}
+	for n := 1; n < len(a); n++ {
+		t := a[n]
+		if !strings.HasPrefix(t, "-") {
+			continue // output path of the declaration file
+		}
+		name, _, hasValue := strings.Cut(t, "=")
+		switch {
+		case wranglerTypesValueFlags[name]:
+			if !hasValue {
+				if n+1 >= len(a) {
+					return false
+				}
+				n++
+			}
+		case wranglerTypesBoolFlags[name], wranglerTypesBoolFlags["--"+strings.TrimPrefix(name, "--no-")] && strings.HasPrefix(name, "--no-"):
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 func arg(a []string, n int) string {
 	if n < len(a) {
@@ -293,10 +332,14 @@ func commandRules(c Config, i Input, cmd string, a []string) Verdict {
 	case "aws":
 		return awsAsk(i)
 	case "wrangler":
-		// These never leave the machine: types (and its --check) only reads the
-		// config and asks a workerd it starts on localhost; checked 2026-11-26
-		// under sandbox-exec with every non-loopback address blocked.
-		if wranglerLocal[arg(a, 0)] {
+		// types (and its --check) reads the config and asks a workerd it starts
+		// on localhost; on 2026-11-26 it succeeded under sandbox-exec with every
+		// non-loopback address blocked. Like `bun run build`, it may run the
+		// project's own build.command, and wrangler itself may look up a newer
+		// npm release or send telemetry. guard judges what the command line asks
+		// for, not what project code or a CLI does on its own; those are left to
+		// the OS fence, the same as for every other build tool.
+		if wranglerLocalOnly(a) {
 			return allow
 		}
 		if has(defaults(c.WranglerAllow, []string{"r2 put"}), arg(a, 0)+" "+arg(a, 1)) {

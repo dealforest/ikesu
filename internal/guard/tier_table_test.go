@@ -85,6 +85,23 @@ func askCase(line, rule string, tier int, dest string) tierCase {
 }
 func allowLine(line string) tierCase { return tierCase{line: line, decision: "allow"} }
 
+// wrangler types と表示用フラグだけを通し、ほかの引数が付いたら従来どおり聞く。
+func TestTierTableWranglerLocalOnly(t *testing.T) {
+	runTierCases(t, []tierCase{
+		askCase(`wrangler --version whoami`, "wrangler", 3, DestUnknown),
+		askCase(`wrangler -v secret list`, "wrangler", 3, DestUnknown),
+		askCase(`wrangler --help r2 bucket list`, "wrangler", 3, DestUnknown),
+		askCase(`wrangler types --install-skills`, "wrangler", 3, DestUnknown),
+		askCase(`wrangler types --profile work`, "wrangler", 3, DestUnknown),
+		askCase(`wrangler types --cwd ../other`, "wrangler", 3, DestUnknown),
+		askCase(`wrangler types --env-file .env.prod`, "wrangler", 3, ""), // 宛先はファイル名から prod と読まれる
+		askCase(`wrangler types --unknown-flag`, "wrangler", 3, DestUnknown),
+		askCase(`wrangler types --env`, "wrangler", 3, DestUnknown),
+		askCase(`wrangler --config x types`, "wrangler", 3, DestUnknown),
+		askCase(`wrangler secret list`, "wrangler", 3, DestUnknown),
+	})
+}
+
 // SPEC の試験の表 (A) L1
 func TestTierTableL1(t *testing.T) {
 	runTierCases(t, []tierCase{
@@ -122,10 +139,11 @@ func TestTierTableL1(t *testing.T) {
 		// wrangler types (and --check) only talks to a workerd on localhost.
 		allowLine(`wrangler types`),
 		allowLine(`wrangler types worker-configuration.d.ts --check`),
-		allowLine(`npx wrangler types worker-configuration.d.ts --check`),
-		allowLine(`bunx wrangler types --check`),
+		allowLine(`wrangler types --env dev -c wrangler.jsonc --env-interface=CloudflareEnv --no-include-runtime --strict-vars=false`),
 		allowLine(`wrangler types worker-configuration.d.ts --check && tsrs --noEmit`),
+		allowLine(`wrangler types --help`),
 		allowLine(`wrangler --version`),
+		allowLine(`wrangler -h`),
 	})
 }
 
