@@ -333,12 +333,12 @@ func TestIdleDialogEmptyListSaysSoAndEnterCloses(t *testing.T) {
 func TestIdleDialogShowsEachMachineWhileLoading(t *testing.T) {
 	machines := []idleMachine{{"local", "Local"}, {"mini", "Mac mini"}, {"old", "Old"}}
 	d := idleDialog{loading: true, machines: machines, pending: map[string]int{"mini": 1}, status: map[string]string{"local": "✓", "mini": "…", "old": "✗"}}
-	if got := d.dialog(200); !strings.Contains(got.Detail, "Local ✓ · Mac mini … · Old ✗") || got.Confirm != "close" || !got.ContinueOnly {
+	if got := d.dialog(200); !strings.Contains(got.Detail, "済み 2/3 · Mac mini … · Old ✗") || got.Confirm != "close" || !got.ContinueOnly {
 		t.Fatalf("%+v", got)
 	}
 	// Closing shows only the machines asked to close panes, and no buttons.
 	d.loading, d.deleting, d.targets = false, true, machines[1:2]
-	if got := d.dialog(200); got.Detail != "ペインを閉じています… Mac mini …" || !got.NoButtons {
+	if got := d.dialog(200); got.Detail != "ペインを閉じています… 済み 0/1 · Mac mini …" || !got.NoButtons {
 		t.Fatalf("%+v", got)
 	}
 }
@@ -449,6 +449,29 @@ func TestIdleManyFailuresStillFit(t *testing.T) {
 	}
 	empty := idleDialog{kept: 1}
 	if text := strings.Join(empty.dialog(200).Lines, "\n"); !strings.Contains(text, "調べたエージェントのペイン 1 個") {
+		t.Fatal(text)
+	}
+}
+
+// At 80 columns a long first machine name that already answered does not
+// hide the one still waiting.
+func TestIdleProgressShowsWaitingMachineFirst(t *testing.T) {
+	long := strings.Repeat("very-long-machine-label-", 4)
+	d := idleDialog{loading: true, machines: []idleMachine{{"a", long}, {"b", "mini"}}, status: map[string]string{"a": "✓", "b": "…"}}
+	if got := d.dialog(80).Detail; !strings.Contains(got, "済み 1/2 · mini …") {
+		t.Fatal(got)
+	}
+}
+
+// With nothing checked the key help says enter closes, matching the button.
+func TestIdleHelpMatchesEnterWhenNothingChecked(t *testing.T) {
+	m := &machineClient{idle: &idleDialog{entries: []idleEntry{{pane: endpoint.IdlePane{ID: 1, AgeNanos: int64(48 * time.Hour)}, keep: "HQ"}}}}
+	box := m.idle.dialog(200)
+	if text := strings.Join(box.Lines, "\n"); !strings.Contains(text, "enter でこの画面を閉じる") || box.Confirm != "close" {
+		t.Fatalf("%+v", box)
+	}
+	m.idleInput(input.Event{Kind: input.KindKey, Key: uv.Key{Code: ' '}})
+	if text := strings.Join(m.idle.dialog(200).Lines, "\n"); !strings.Contains(text, "enter で閉じる前の確認へ") {
 		t.Fatal(text)
 	}
 }

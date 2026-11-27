@@ -179,13 +179,24 @@ func idleMemory(kib int64) string {
 	return fmt.Sprintf("%d MiB", (kib+512)/1024)
 }
 
-// progress lists each machine with its state: … waiting, ✓ answered, ✗ failed.
+// progress puts the count first and then the machines still waiting, so a
+// cut line still shows who is left; failed machines come last.
 func (d *idleDialog) progress(machines []idleMachine) string {
-	parts := make([]string, 0, len(machines))
+	var waiting, failed []string
+	done := 0
 	for _, machine := range machines {
-		parts = append(parts, machine.label+" "+d.status[machine.id])
+		switch d.status[machine.id] {
+		case "…":
+			waiting = append(waiting, machine.label+" …")
+		case "✗":
+			failed = append(failed, machine.label+" ✗")
+			done++
+		default:
+			done++
+		}
 	}
-	return strings.Join(parts, " · ")
+	parts := append([]string{fmt.Sprintf("済み %d/%d", done, len(machines))}, waiting...)
+	return strings.Join(append(parts, failed...), " · ")
 }
 func (d *idleDialog) visible() []int {
 	var out []int
@@ -287,7 +298,11 @@ func (d *idleDialog) dialog(cols int) *render.Dialog {
 		default:
 			tail = append(tail, fmt.Sprintf("p%d: 残す（手で外した）。space で閉じる側へ", e.pane.ID))
 		}
-		tail = append(tail, "space で切替 · a で全部 · enter で閉じる前の確認へ")
+		if selected > 0 {
+			tail = append(tail, "space で切替 · a で全部 · enter で閉じる前の確認へ")
+		} else {
+			tail = append(tail, "space で切替 · a で全部 · enter でこの画面を閉じる")
+		}
 	}
 	if d.cursor >= len(visible) {
 		d.cursor = max(0, len(visible)-1)
