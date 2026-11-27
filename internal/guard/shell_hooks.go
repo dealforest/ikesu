@@ -69,12 +69,8 @@ func (a *Assets) debugHook(shell string) string {
 		for _, name := range a.Config.Commands() {
 			targets = append(targets, quote(name))
 		}
-		protectForward := ""
-		if len(targets) > 0 {
-			protectForward = "readonly -f _ikesu_guard_forward _ikesu_guard_command\n"
-		}
 		return fmt.Sprintf(`if [[ $- != *i* ]]; then
-%s%s%s_ikesu_guard_needs_check() {
+%s_ikesu_guard_needs_check() {
  local _ikesu_guard_line="$1" _ikesu_guard_word
  _ikesu_guard_line="${_ikesu_guard_line#"${_ikesu_guard_line%%%%[!$' \t\r\n']*}"}"
  _ikesu_guard_line="${_ikesu_guard_line%%%%"${_ikesu_guard_line##*[!$' \t\r\n']}"}"
@@ -159,7 +155,7 @@ _ikesu_guard_run_exit_trap() {
 }
 %sreadonly -f _ikesu_guard_debug _ikesu_guard_dispatch _ikesu_guard_needs_check _ikesu_guard_trap_check _ikesu_guard_trap_return _ikesu_guard_run_exit_trap trap
 fi
-`, a.shellCore(), protectForward, bashSimpleForms, strings.Join(append(targets, quote("")), "|"), a.bashInternalCases(), a.bashWrapperCalls(), a.shellActive(), bashRequestReasonRestore, bashRequestReasonRestore, a.identity()+" builtin exec "+quote(a.RuntimePath()), bashTrapWrapper)
+`, bashSimpleForms, strings.Join(append(targets, quote("")), "|"), a.bashInternalCases(), a.bashWrapperCalls(), a.shellActive(), bashRequestReasonRestore, bashRequestReasonRestore, a.identity()+" builtin exec "+quote(a.RuntimePath()), bashTrapWrapper)
 	}
 	return fmt.Sprintf(`if [[ ! -o interactive ]]; then
 if [[ %s ]] && [[ -n "${ZSH_EXECUTION_STRING:-}" ]]; then

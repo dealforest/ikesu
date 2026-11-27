@@ -86,7 +86,7 @@ case $- in *u*) builtin set +u; _ikesu_guard_nounset=1;; esac
 `
 	restoreNounset := `if [[ ${_ikesu_guard_nounset-} == 1 ]]; then builtin unset _ikesu_guard_nounset; builtin set -u; fi
 `
-	return a.generationHeader() + suspendNounset + bashRequestReasonCapture + restoreZdotdir + a.debugHook("bash") + a.bashFinalize(dir, restoreNounset) + `if [[ $- != *i* ]]; then
+	return a.generationHeader() + suspendNounset + bashRequestReasonCapture + restoreZdotdir + a.bashCoreFunctions() + a.debugHook("bash") + a.bashSetup(dir, restoreNounset) + a.bashFinalize() + `if [[ $- != *i* ]]; then
 _ikesu_guard_startup_file="${BASH_SOURCE[0]-}"
 _ikesu_guard_startup_loader="${BASH_SOURCE[1]-}"
 _ikesu_guard_startup_orig="${IKESU_GUARD_BASH_ENV_ORIG-}"
@@ -98,7 +98,43 @@ if [[ -n "${IKESU_GUARD_BASH_ENV_ORIG-}" && -f "${IKESU_GUARD_BASH_ENV_ORIG-}" ]
 if [[ $- != *i* ]]; then
 _ikesu_guard_finalize
 else
-` + childenv.GuardPathPin + a.shellFunctions() + a.agentFunctions(dir) + restoreNounset + "fi\n"
+_ikesu_guard_setup
+fi
+`
+}
+
+// bashCoreFunctions defines the forwarding functions before the user's file,
+// read-only, for both kinds of shell.
+func (a *Assets) bashCoreFunctions() string {
+	if len(a.Config.Commands()) == 0 {
+		return ""
+	}
+	return a.shellCore() + "readonly -f _ikesu_guard_forward _ikesu_guard_command\n"
+}
+
+// bashSetup is the part of the setup that also ran for an interactive shell:
+// the PATH pin, the user-facing wrappers, the agent functions and nounset.
+// It records which wrappers it defines, so their frames and returns are
+// known to be the guard's own.
+func (a *Assets) bashSetup(dir, restoreNounset string) string {
+	var b strings.Builder
+	b.WriteString("_ikesu_guard_setup() {\n" + childenv.GuardPathPin)
+	for _, cmd := range a.Config.Commands() {
+		fmt.Fprintf(&b, `if ! typeset -f %s >/dev/null 2>&1 && ! alias %s >/dev/null 2>&1; then
+_ikesu_guard_wrapper_names+=" %s"
+function %s { _ikesu_guard_forward %s "$@" || return $?; }
+fi
+`, quote(cmd), quote(cmd), cmd, cmd, quote(cmd))
+	}
+	if len(a.Config.Commands()) > 0 {
+		b.WriteString(`if ! typeset -f command >/dev/null 2>&1 && ! alias command >/dev/null 2>&1; then
+_ikesu_guard_wrapper_names+=" command"
+command() { _ikesu_guard_command "$@" || return $?; }
+fi
+`)
+	}
+	b.WriteString(a.agentFunctions(dir) + restoreNounset + "}\nreadonly -f _ikesu_guard_setup\n")
+	return b.String()
 }
 
 // bashFinalize defines the startup DEBUG trap and the setup it finishes.
@@ -110,7 +146,7 @@ else
 // NAME? or NAME:? expansion that can fail, or one that cannot be evaluated
 // here, switches to judging after it runs. A line that could change the
 // DEBUG trap is judged even inside the user's file.
-func (a *Assets) bashFinalize(dir, restoreNounset string) string {
+func (a *Assets) bashFinalize() string {
 	return fmt.Sprintf(`if [[ $- != *i* ]]; then
 _ikesu_guard_startup_scan() {
  local _ikesu_guard_rest="$1" _ikesu_guard_name _ikesu_guard_re='^([A-Za-z_][A-Za-z0-9_]*)(:?)[?]'
@@ -175,7 +211,8 @@ _ikesu_guard_finalize() {
  done
 if [[ ${_ikesu_guard_reason_name+x} ]] && [[ %s ]]; then
 %sfi
-%s%s%s%sif [[ %s ]] && [[ -n "${BASH_EXECUTION_STRING:-}" ]]; then
+ _ikesu_guard_setup
+if [[ %s ]] && [[ -n "${BASH_EXECUTION_STRING:-}" ]]; then
  %s guard line --via exec-string -- "${BASH_EXECUTION_STRING-}" || exit $?
 fi
  set -o functrace
@@ -185,7 +222,7 @@ fi
 }
 readonly -f _ikesu_guard_startup_scan _ikesu_guard_startup_debug _ikesu_guard_finalize
 fi
-`, a.shellActive(), bashRequestReasonRestore, childenv.GuardPathPin, a.bashWrapperNames()+a.shellWrappers(), a.agentFunctions(dir), restoreNounset, a.shellActive(), a.invocation())
+`, a.shellActive(), bashRequestReasonRestore, a.shellActive(), a.invocation())
 }
 
 // A stable loader asks the currently published native binary to refresh its
@@ -239,18 +276,4 @@ export IKESU_GUARD_ZDOTDIR_ORIG IKESU_GUARD_ZDOTDIR_SET
 	}
 	files["bash-env.current"] = []byte(a.bashStartup(dir))
 	return files
-}
-
-// bashWrapperNames records which user-facing names the generated wrappers
-// take, so a user's RETURN trap does not run when one of them returns.
-func (a *Assets) bashWrapperNames() string {
-	var b strings.Builder
-	names := a.Config.Commands()
-	if len(names) > 0 {
-		names = append(append([]string{}, names...), "command")
-	}
-	for _, name := range names {
-		fmt.Fprintf(&b, "if ! typeset -f %s >/dev/null 2>&1 && ! alias %s >/dev/null 2>&1; then _ikesu_guard_wrapper_names+=\" %s\"; fi\n", quote(name), quote(name), name)
-	}
-	return b.String()
 }
