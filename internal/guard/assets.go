@@ -145,6 +145,7 @@ func (a *Assets) shellFunctions() string {
  if [[ %s ]]; then
   if [[ -n "${BASH_VERSION:-}" && ${_ikesu_guard_reason_name+x} ]]; then
    (
+    builtin trap - ERR
     set +o functrace
 %s    %s guard exec --via shell-func -- "$@"
    )
@@ -178,7 +179,7 @@ func (a *Assets) lineHook() string {
 if [[ -o interactive ]]; then
  _ikesu_guard_accept_line() {
   if [[ %s ]]; then
-   %s guard line --via accept-line -- "$BUFFER" || { zle redisplay; return 0; }
+   %s guard line --via accept-line -- "${BUFFER-}" || { zle redisplay; return 0; }
   fi
   zle .accept-line
  }
