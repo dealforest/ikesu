@@ -74,7 +74,7 @@ func guardLineClue(i Input, line string) bool {
 }
 
 func guardFunction(i Input, name string) bool {
-	return name == "TRAPDEBUG" || strings.HasPrefix(name, "_ikesu_guard_") || name == "command" || has(defaults(i.GuardCommands, (Config{}).Commands()), name)
+	return name == "TRAPDEBUG" || strings.HasPrefix(name, "_ikesu_guard_") || name == "command" || name == "trap" || has(defaults(i.GuardCommands, (Config{}).Commands()), name)
 }
 func guardPath(i Input, path string) bool {
 	root := guardDirectory(i)
@@ -110,6 +110,9 @@ func boundaryTier(i Input) (string, int) {
 		return "", 0
 	}
 	cmd, args := filepath.Base(i.Command), i.Args
+	if strings.HasPrefix(cmd, "_ikesu_guard_") {
+		return "判定の内部関数の直接呼び出しには承認が必要です", TierL3
+	}
 	if i.Unresolved && has([]string{"trap", "unset", "unfunction", "functions", "alias", "unalias", "setopt", "unsetopt", "shopt", "set", "chmod", "chown", "chgrp"}, cmd) {
 		const reason = "判定・権限を変更する操作の対象を安全に確定できません"
 		switch cmd {
@@ -142,7 +145,7 @@ func boundaryTier(i Input) (string, int) {
 	case "trap":
 		if !has(args, "-p") {
 			for _, a := range args {
-				if has([]string{"DEBUG", "ERR", "RETURN"}, a) {
+				if has([]string{"DEBUG", "ERR", "RETURN"}, trapSignal(a)) {
 					return "判定のトラップの変更・解除には承認が必要です", TierL3
 				}
 			}

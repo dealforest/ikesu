@@ -48,6 +48,7 @@ type Input struct {
 	ApprovedInvocation   func(string, string) bool `json:"-"`
 	ShellParentDirenv    func() (string, string)   `json:"-"`
 	runtimeLine          bool
+	trapRegistration     bool
 	evalDepth            int
 	shellVariables       map[string]string
 	shellPID             string

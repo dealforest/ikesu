@@ -17,7 +17,7 @@ import (
 func lineCommands(i Input, line string) ([]Input, error) {
 	tree, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(line), "guard line")
 	if err != nil {
-		if i.runtimeLine {
+		if i.runtimeLine && !i.trapRegistration {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("シェルの構文を分解できません: %w", err)
@@ -63,7 +63,22 @@ func lineCommands(i Input, line string) ([]Input, error) {
 		setError(e)
 	}
 	syntax.Walk(tree, func(node syntax.Node) bool {
-		if i.runtimeLine {
+		if fn, ok := node.(*syntax.FuncDecl); ok && isZshTrapFunction(fn.Name.Value) {
+			if fn.Name.Value == "TRAPDEBUG" {
+				setError(fmt.Errorf("判定のトラップの変更には承認が必要です"))
+			} else {
+				nested, e := trapActionCommands(i, trapBodyText(fn.Body, line))
+				for n := range nested {
+					nested[n].callOffset = int(fn.Pos().Offset())
+				}
+				commands = append(commands, nested...)
+				if e != nil {
+					setError(e)
+				}
+			}
+			return false
+		}
+		if i.runtimeLine && !i.trapRegistration {
 			switch node.(type) {
 			case *syntax.CmdSubst, *syntax.ProcSubst, *syntax.FuncDecl:
 				return false
@@ -159,6 +174,20 @@ func lineCommands(i Input, line string) ([]Input, error) {
 			next.AuthorizationEnv[key] = value
 		}
 		unwrapped, e := unwrapCommand(next)
+		if i.trapRegistration && !knownTrapCall(unwrapped) {
+			setError(fmt.Errorf("トラップのコマンドを安全に確定できません"))
+		}
+		if unwrapped.Command == "trap" {
+			if next.Command != unwrapped.Command {
+				setError(fmt.Errorf("判定の trap ラッパーを経由しない実行には承認が必要です"))
+			} else if !unwrapped.Unresolved {
+				nested, trapErr := trapRegistrationCommands(unwrapped)
+				commands = append(commands, nested...)
+				if trapErr != nil {
+					setError(trapErr)
+				}
+			}
+		}
 		if i.runtimeLine && unknownWords[unwrapped.Command] {
 			setError(unresolvedScriptError{"実行するコマンド名を安全に確定できません"})
 		}
