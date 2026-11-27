@@ -83,9 +83,19 @@ func (m *MachineSidebar) drawRight(f *Frame, active Input) {
 		return
 	}
 	// The list opens with a rule. Start it on the row under the header (the
-	// pane's top border row) so its rules line up with the space list's rules.
-	area.Y--
-	area.H++
+	// pane's top border row) so its rules line up with the space list's rules,
+	// unless a narrow header puts the sort button on that row.
+	// A narrow sidebar shows a copy of the default-width one, so the header
+	// that is seen is the default-width header.
+	shown := active.State
+	if shown.RightSidebarArea().W < model.SidebarMinDefault {
+		shown = sidebarReferenceInput(active).State
+	}
+	header := RightSidebarHeaderFor(shown, shown.RightSidebarArea().Y)
+	if active.JobsPanel || header.Sort.Y < area.Y-1 || header.Sort.W == 0 {
+		area.Y--
+		area.H++
+	}
 	rows := m.rightRows(active)
 	m.RightMaxScroll = max(0, len(rows)-area.H)
 	m.RightScroll = max(0, min(m.RightScroll, m.RightMaxScroll))

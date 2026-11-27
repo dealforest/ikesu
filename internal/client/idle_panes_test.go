@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/vt"
 	"github.com/kazuph/ikesu/internal/endpoint"
 	"github.com/kazuph/ikesu/internal/input"
@@ -42,7 +43,7 @@ func TestIdlePanesOldAndNewServers(t *testing.T) {
 	m.idle.entries[0].selected = true
 	m.deleteIdlePanes()
 	h.until("mixed server delete", func() bool { return m.idle == nil })
-	if m.idleToast != "ペインを 1 個閉じた · 失敗 1 · remote: unsupported" {
+	if m.idleToast != "ペインを 1 個閉じた · 失敗 0 · 一覧を取れなかった: remote: unsupported" {
 		t.Fatal(m.idleToast)
 	}
 }
@@ -261,7 +262,7 @@ func TestIdleDraftSelectionFromRealPane(t *testing.T) {
 }
 
 func TestIdleDialogShowsLastPaneKept(t *testing.T) {
-	d := idleDialog{kept: true}
+	d := idleDialog{kept: 1}
 	if !strings.Contains(strings.Join(d.dialog(200).Lines, "\n"), "最後の1個のペインは閉じずに残しています") {
 		t.Fatal("last pane notice missing")
 	}
@@ -299,7 +300,7 @@ func TestIdleDialogExplainsChecksAndMemory(t *testing.T) {
 	}}
 	box := d.dialog(200)
 	text := box.Detail + "\n" + strings.Join(box.Lines, "\n")
-	for _, want := range []string{"worktree・ファイルは消しません", "該当 2 個 · 閉じる [x] 1 個 · 空くメモリ 約 300 MiB", "[x] 閉じる", "[ ] 残す", "p3 · Local", "300 MiB", "p4 · mini", "残す: 入力途中の文字がある"} {
+	for _, want := range []string{"マージとは関係ありません", "worktree・ブランチ・ファイルは消しません", "該当 2 個 · [x] 閉じる 1 個 · [ ] 残す 1 個", "メモリ（RSS 合計の目安）: 約 300 MiB", "> [x] p3 · Local", "300 MiB", "[ ] p4 [残す:入力途中] · mini", "p3: 閉じる（待機中か完了で、入力途中の文字がない）"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in\n%s", want, text)
 		}
@@ -309,7 +310,7 @@ func TestIdleDialogExplainsChecksAndMemory(t *testing.T) {
 	}
 	d.confirming = true
 	confirm := d.dialog(200)
-	if !strings.Contains(confirm.Detail, "1 個のペインを閉じて") || !strings.Contains(strings.Join(confirm.Lines, "\n"), "空くメモリ: 約 300 MiB") {
+	if !strings.Contains(confirm.Detail, "1 個のペインを閉じて") || !strings.Contains(strings.Join(confirm.Lines, "\n"), "メモリ（RSS 合計の目安）: 約 300 MiB") {
 		t.Fatalf("review: %+v", confirm)
 	}
 }
@@ -330,18 +331,20 @@ func TestIdleDialogEmptyListSaysSoAndEnterCloses(t *testing.T) {
 }
 
 func TestIdleDialogShowsEachMachineWhileLoading(t *testing.T) {
-	d := idleDialog{loading: true, machines: []idleMachine{{"local", "Local"}, {"mini", "Mac mini"}}, pending: map[string]int{"mini": 1}}
-	if got := d.dialog(200).Detail; !strings.Contains(got, "Local ✓ · Mac mini …") {
-		t.Fatal(got)
+	machines := []idleMachine{{"local", "Local"}, {"mini", "Mac mini"}, {"old", "Old"}}
+	d := idleDialog{loading: true, machines: machines, pending: map[string]int{"mini": 1}, status: map[string]string{"local": "✓", "mini": "…", "old": "✗"}}
+	if got := d.dialog(200); !strings.Contains(got.Detail, "Local ✓ · Mac mini … · Old ✗") || got.Confirm != "close" || !got.ContinueOnly {
+		t.Fatalf("%+v", got)
 	}
-	d.loading, d.deleting = false, true
-	if got := d.dialog(200).Detail; !strings.Contains(got, "ペインを閉じています… Local ✓ · Mac mini …") {
-		t.Fatal(got)
+	// Closing shows only the machines asked to close panes, and no buttons.
+	d.loading, d.deleting, d.targets = false, true, machines[1:2]
+	if got := d.dialog(200); got.Detail != "ペインを閉じています… Mac mini …" || !got.NoButtons {
+		t.Fatalf("%+v", got)
 	}
 }
 
 func TestIdleDialogFitsTenLines(t *testing.T) {
-	d := idleDialog{kept: true, failures: []idleFailure{{"mini", "unsupported"}}}
+	d := idleDialog{kept: 1, failures: []idleFailure{{"mini", "unsupported"}}}
 	for i := 0; i < 20; i++ {
 		d.entries = append(d.entries, idleEntry{pane: endpoint.IdlePane{ID: i, AgeNanos: int64(48 * time.Hour)}, selected: true})
 	}
@@ -355,5 +358,97 @@ func TestIdleDialogFitsTenLines(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing %q in %q", want, lines)
 		}
+	}
+}
+
+// A pane checked by hand after it started unchecked reads as a warning, not
+// as "kept", and the line under the list says it will close.
+func TestIdleManualSelectionShowsWarningNotKeep(t *testing.T) {
+	day := int64(48 * time.Hour)
+	m := &machineClient{idle: &idleDialog{entries: []idleEntry{
+		{label: "mini", pane: endpoint.IdlePane{ID: 4, AgeNanos: day, State: "idle", InputKnown: true, PendingInput: true}, keep: "入力途中の文字がある"},
+		{label: "mini", pane: endpoint.IdlePane{ID: 5, AgeNanos: day, State: "working", InputKnown: true}, keep: "動作中・確認待ち（working）"},
+	}}}
+	m.idleInput(input.Event{Kind: input.KindKey, Key: uv.Key{Code: ' '}})
+	text := strings.Join(m.idle.dialog(200).Lines, "\n")
+	for _, want := range []string{"> [x] p4 [注意:入力途中]", "[ ] p5 [残す:動作中]", "p4: 閉じる。ただし 入力途中の文字がある。"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "[x] p4 [残す") {
+		t.Fatalf("checked row still says keep:\n%s", text)
+	}
+	m.idleInput(input.Event{Kind: input.KindKey, Key: uv.Key{Code: 'a'}})
+	text = strings.Join(m.idle.dialog(200).Lines, "\n")
+	if !strings.Contains(text, "[x] p5 [注意:動作中]") || m.idle.selected() != 2 {
+		t.Fatalf("select all:\n%s", text)
+	}
+}
+
+// A machine that could not list its panes does not open the close review
+// when nothing is checked; enter closes the dialog instead.
+func TestIdleFailureAloneDoesNotOpenReview(t *testing.T) {
+	m := &machineClient{idle: &idleDialog{failures: []idleFailure{{"old", "unsupported"}}}}
+	box := m.idle.dialog(200)
+	if !box.ContinueOnly || box.Confirm != "close" || !strings.Contains(strings.Join(box.Lines, "\n"), "一覧を取れなかった: old: unsupported") {
+		t.Fatalf("%+v", box)
+	}
+	m.idleInput(input.Event{Kind: input.KindKey, Key: uv.Key{Code: uv.KeyEnter}})
+	if m.idle != nil {
+		t.Fatal("enter must close, not review zero panes")
+	}
+}
+
+// At 80 columns the note about merges stays whole and every row keeps its
+// check box, tag, age and memory; the long names give way.
+func TestIdleDialogAtEightyColumns(t *testing.T) {
+	long := strings.Repeat("very-long-workspace-name-", 6)
+	d := idleDialog{entries: []idleEntry{
+		{label: "Mac mini", pane: endpoint.IdlePane{ID: 7, AgeNanos: int64(50 * time.Hour), Agent: "codex", WorkspaceName: long, TabName: "main", MemoryKiB: 512 * 1024}, keep: "入力途中の文字がある"},
+	}}
+	box := d.dialog(80)
+	text := strings.Join(box.Lines, "\n")
+	for _, want := range []string{"マージとは関係ありません。", "worktree・ブランチ・ファイルは消しません。", "[ ] p7 [残す:入力途中]", "2d 2h止まっている · 512 MiB", "p7: 残す（入力途中の文字がある）"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in\n%s", want, text)
+		}
+	}
+	for _, line := range append(box.Lines, box.Detail) {
+		if w := ansi.StringWidth(line); w > 72 {
+			t.Fatalf("line wider than 72 cells (%d): %q", w, line)
+		}
+	}
+}
+
+func TestIdleMemoryTextNamesUnmeasuredPanes(t *testing.T) {
+	day := int64(48 * time.Hour)
+	d := idleDialog{entries: []idleEntry{
+		{pane: endpoint.IdlePane{ID: 1, AgeNanos: day, MemoryKiB: 100 * 1024}, selected: true},
+		{pane: endpoint.IdlePane{ID: 2, AgeNanos: day}, selected: true},
+	}}
+	if got := d.memoryText(); got != "メモリ（RSS 合計の目安）: 約 100 MiB · 測れなかった 1 個" {
+		t.Fatal(got)
+	}
+	d.entries[0].selected = false
+	if got := d.memoryText(); got != "メモリ（RSS）: 測れなかった" {
+		t.Fatal(got)
+	}
+}
+
+// Many failed machines fold into one line, so the list still fits 10 lines
+// with its key help; the empty message counts panes a server kept.
+func TestIdleManyFailuresStillFit(t *testing.T) {
+	d := idleDialog{entries: []idleEntry{{pane: endpoint.IdlePane{ID: 1, AgeNanos: int64(48 * time.Hour)}, selected: true}}}
+	for i := 0; i < 6; i++ {
+		d.failures = append(d.failures, idleFailure{fmt.Sprintf("m%d", i), "unsupported"})
+	}
+	lines := d.dialog(200).Lines
+	if len(lines) > idleDialogLines || !strings.Contains(strings.Join(lines, "\n"), "space で切替") {
+		t.Fatalf("%d lines: %q", len(lines), lines)
+	}
+	empty := idleDialog{kept: 1}
+	if text := strings.Join(empty.dialog(200).Lines, "\n"); !strings.Contains(text, "調べたエージェントのペイン 1 個") {
+		t.Fatal(text)
 	}
 }

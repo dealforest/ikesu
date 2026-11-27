@@ -361,13 +361,14 @@ func (s *Server) idlePaneRoots(list endpoint.IdlePanes) monitor.Roots {
 // idleMemoryTimeout bounds the one process sample behind the idle-pane list.
 const idleMemoryTimeout = 3 * time.Second
 
-// measureIdleMemory fills each pane's process-tree memory from one sample.
-// A failed sample leaves every pane unmeasured (MemoryKiB 0).
-func measureIdleMemory(roots monitor.Roots, list *endpoint.IdlePanes) {
+// measureIdleMemory fills each pane's process-tree RSS sum from one sample.
+// Shared pages count once per process, so the sum is an estimate. A failed
+// or canceled sample leaves every pane unmeasured (MemoryKiB 0).
+func measureIdleMemory(parent context.Context, roots monitor.Roots, list *endpoint.IdlePanes) {
 	if len(roots) == 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), idleMemoryTimeout)
+	ctx, cancel := context.WithTimeout(parent, idleMemoryTimeout)
 	defer cancel()
 	rows, err := monitor.Sample(ctx, roots)
 	if err != nil {

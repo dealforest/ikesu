@@ -1164,6 +1164,7 @@ func (s *Server) attach(conn net.Conn) {
 	defer s.dropConn(c)
 	pruneCtx, cancelPrune := context.WithCancel(context.Background())
 	defer cancelPrune()
+	var idleCancel context.CancelFunc // the running idle-pane memory sample
 	var pendingInput *clientMsg
 	var bufferedInputErr error
 	for {
@@ -1198,14 +1199,21 @@ func (s *Server) attach(conn net.Conn) {
 		case endpoint.PruneScan, endpoint.PruneExec:
 			s.pruneDisplayRequest(pruneCtx, c, m)
 		case "idle_panes":
+			// A newer request (the dialog reopened) or a disconnect stops the
+			// previous memory sample, so at most one ps runs per display.
+			if idleCancel != nil {
+				idleCancel()
+			}
+			idleCtx, cancel := context.WithCancel(pruneCtx)
+			idleCancel = cancel
+			request := m.IdleRequest
 			s.app.Do(func() {
 				list := c.viewer.IdlePanes(s.app)
 				list.ServerGeneration = s.generation
 				roots := s.idlePaneRoots(list)
-				request := m.IdleRequest
 				// One ps run outside the app loop; the list goes out either way.
 				go func() {
-					measureIdleMemory(roots, &list)
+					measureIdleMemory(idleCtx, roots, &list)
 					c.post(clientMsg{Type: "idle_panes_result", IdleRequest: request, IdlePanes: &list})
 				}()
 			})
