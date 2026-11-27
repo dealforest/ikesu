@@ -51,6 +51,7 @@ type Input struct {
 	trapRegistration     bool
 	trapBody             bool
 	shellFunctions       map[string]bool
+	trapNames            map[string]bool
 	evalDepth            int
 	shellVariables       map[string]string
 	shellPID             string

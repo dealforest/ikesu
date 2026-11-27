@@ -220,7 +220,7 @@ _ikesu_guard_startup_debug() {
    _ikesu_guard_dispatch "$1"
   else
    # A line of the user's file that names the guard's state is judged too.
-   case "$1" in *trap*[Dd][Ee][Bb][Uu][Gg]*|*set*functrace*|*set*+*T*|*shopt*extdebug*) _ikesu_guard_dispatch "$1";;
+   case "$1" in *trap*[Dd][Ee][Bb][Uu][Gg]*|*set*functrace*|*set*+*T*|*shopt*extdebug*|*builtin*trap*|*command*trap*|*unset*trap*) _ikesu_guard_dispatch "$1";;
    *_ikesu_guard_*) [[ ${BASH_SOURCE[1]-} == "$_ikesu_guard_startup_file" ]] || _ikesu_guard_dispatch "$1";; esac
   fi
   return 0
@@ -232,32 +232,48 @@ _ikesu_guard_startup_done() {
  _ikesu_guard_startup_stage=done
 }
 _ikesu_guard_finalize() {
- local _ikesu_guard_trap_name _ikesu_guard_trap_words _ikesu_guard_trap_RETURN _ikesu_guard_trap_ERR _ikesu_guard_trap_EXIT
+ local _ikesu_guard_trap_list= _ikesu_guard_trap_text= _ikesu_guard_trap_sig= _ikesu_guard_trap_n= _ikesu_guard_trap_kind= _ikesu_guard_trap_k=0 _ikesu_guard_trap_ref= IFS=$' \t\n'
+ local -a _ikesu_guard_trap_words=()
  [[ ${_ikesu_guard_finalized-} == 1 ]] && return 0
  # A set -u of the user's file is restored after the setup.
  case $- in *u*) builtin set +u; _ikesu_guard_nounset=1;; esac
  # Read the traps with functrace on: a subshell shows RETURN only then. It
- # stays on: the startup ends by setting it.
+ # stays on: the startup sets it. A function never sees an ERR trap set
+ # outside it; the lines that could set one past the wrapper (builtin trap,
+ # command trap, unset of trap) are judged while the user's file runs.
  builtin set -T
- _ikesu_guard_trap_RETURN=$(builtin trap -p RETURN)
- _ikesu_guard_trap_ERR=$(builtin trap -p ERR)
- _ikesu_guard_trap_EXIT=$(builtin trap -p EXIT)
- # ERR and RETURN set with the builtin directly are wrapped like the others.
- for _ikesu_guard_trap_name in RETURN ERR; do
-  _ikesu_guard_trap_words="_ikesu_guard_trap_$_ikesu_guard_trap_name"
-  [[ -n ${!_ikesu_guard_trap_words} ]] || continue
-  builtin eval "_ikesu_guard_trap_words=(${!_ikesu_guard_trap_words#trap })"
-  case "${_ikesu_guard_trap_words[1]-}" in ''|'if _ikesu_guard_trap_check '*) continue;; esac
-  trap -- "${_ikesu_guard_trap_words[1]}" "$_ikesu_guard_trap_name"
+ _ikesu_guard_trap_list=$(builtin trap -p)
+ _ikesu_guard_trap_split "$_ikesu_guard_trap_list"
+ _ikesu_guard_trap_list=
+ # The traps the user's files left are judged as registrations now, before
+ # the startup can end the shell: a text the wrapper recorded during the
+ # startup, and a text set with the builtin directly, which is wrapped now.
+ # ERR and RETURN texts are judged each time they run instead.
+ while [[ $((_ikesu_guard_trap_k + 3)) -lt ${#_ikesu_guard_trap_words[@]} ]]; do
+  _ikesu_guard_trap_text=${_ikesu_guard_trap_words[_ikesu_guard_trap_k+2]}
+  _ikesu_guard_trap_sig=${_ikesu_guard_trap_words[_ikesu_guard_trap_k+3]}
+  _ikesu_guard_trap_k=$((_ikesu_guard_trap_k + 4))
+  [[ $_ikesu_guard_trap_sig != DEBUG ]] || continue
+  if [[ $_ikesu_guard_trap_text == 'if _ikesu_guard_trap_check '* ]]; then
+   builtin read -r _ _ _ikesu_guard_trap_n _ikesu_guard_trap_kind _ <<< "$_ikesu_guard_trap_text"
+   _ikesu_guard_trap_ref="_ikesu_guard_trap_early_$_ikesu_guard_trap_n"
+   [[ $_ikesu_guard_trap_kind == OTHER && -n ${!_ikesu_guard_trap_ref-} ]] || continue
+   _ikesu_guard_trap_ref="_ikesu_guard_trap_body_$_ikesu_guard_trap_n"
+   _ikesu_guard_trap_text=${!_ikesu_guard_trap_ref-}
+  else
+   _ikesu_guard_wrap_trap -- "$_ikesu_guard_trap_text" "$_ikesu_guard_trap_sig"
+   case "$_ikesu_guard_trap_sig" in ERR|RETURN) continue;; esac
+  fi
+  builtin printf -v _ikesu_guard_trap_ref "trap -- '%%s' %%s" "${_ikesu_guard_trap_text//\'/\'\\\'\'}" "$_ikesu_guard_trap_sig"
+  _ikesu_guard_trap_list+=$_ikesu_guard_trap_ref$'\n'
  done
+ [[ -z $_ikesu_guard_trap_list ]] || _ikesu_guard_debug "$_ikesu_guard_trap_list" force
 if [[ ${_ikesu_guard_reason_name+x} ]] && [[ %s ]]; then
 %sfi
  _ikesu_guard_setup
 if [[ %s ]] && [[ -n "${BASH_EXECUTION_STRING:-}" ]]; then
  %s guard line --via exec-string -- "${BASH_EXECUTION_STRING-}" || exit $?
 fi
- # An EXIT text the user's file left gets the judgment of a registration.
- [[ -z $_ikesu_guard_trap_EXIT ]] || _ikesu_guard_debug "$_ikesu_guard_trap_EXIT" force
  set -o functrace
  _ikesu_guard_finalized=1
  readonly _ikesu_guard_finalized _ikesu_guard_wrapper_names
@@ -304,7 +320,11 @@ export IKESU_GUARD_ZDOTDIR_ORIG IKESU_GUARD_ZDOTDIR_SET
 		{".zlogin", "false"},
 	}
 	for _, phase := range phases {
-		body := a.generationHeader() + suspendNounset + restoreZdotdir + fmt.Sprintf("if [[ -f \"${ZDOTDIR:-${HOME-}}/%s\" ]]; then source \"${ZDOTDIR:-${HOME-}}/%s\"; fi\n", phase.name, phase.name) + capture + childenv.GuardPathPin
+		body := a.generationHeader() + suspendNounset + restoreZdotdir
+		if phase.name == ".zshenv" {
+			body += a.zshStartupHook()
+		}
+		body += fmt.Sprintf("if [[ -f \"${ZDOTDIR:-${HOME-}}/%s\" ]]; then source \"${ZDOTDIR:-${HOME-}}/%s\"; fi\n", phase.name, phase.name) + capture + childenv.GuardPathPin
 		if phase.name == ".zshenv" {
 			body += wrappers + zshWrapperTexts + a.lineHook()
 		}
