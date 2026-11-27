@@ -269,6 +269,9 @@ func TestBashRuntimeExitTrapKeepsBehavior(t *testing.T) {
 			"double-zero":  "trap 'printf ran > OUT/result' 00\ntrap -p EXIT > OUT/shown\n",
 			"substitution": "trap 'printf ran > OUT/result' EXIT\nX=$(trap -p EXIT)\nprintf '%s' \"$X\" > OUT/shown\n",
 			"print-action": "trap 'printf ran > OUT/result' EXIT\ntrap -P EXIT > OUT/shown 2>&1\nprintf '%s' \"$?\" > OUT/listed\n",
+			"blank-lines":  "trap 'printf a > OUT/result\n\nprintf b >> OUT/result' EXIT\ntrap -p > OUT/shown\ntrap > OUT/listed\n",
+			"unrelated":    "trap 'printf ran > OUT/result' EXIT\nhelper() { :; }\nhelper\nexit 6\n",
+			"signal":       "trap 'printf usr1 > OUT/result' USR1\nkill -USR1 $$\ntrap -p USR1 > OUT/shown\n",
 		} {
 			t.Run(name, func(t *testing.T) {
 				t.Parallel()
@@ -298,6 +301,11 @@ func assertSameRun(t *testing.T, plainDir, guardedDir string, err, plainErr erro
 	t.Helper()
 	if exitCode(err) != exitCode(plainErr) || strings.Contains(output, "申請文") {
 		t.Fatalf("exit status: guarded %v, plain %v\n%s\n%s", err, plainErr, output, plainOut)
+	}
+	// The whole output matches too, but for where a builtin's error points.
+	got := errorPlace.ReplaceAllString(strings.ReplaceAll(output, guardedDir, plainDir), "trap:")
+	if want := errorPlace.ReplaceAllString(plainOut, "trap:"); got != want {
+		t.Fatalf("output: guarded %q, plain %q", got, want)
 	}
 	for _, file := range []string{"result", "shown", "listed"} {
 		want, wantErr := os.ReadFile(filepath.Join(plainDir, file))
@@ -367,6 +375,7 @@ func TestZshRuntimeExitTrapJudged(t *testing.T) {
 		"call":     "T=" + trapVictim + "\ncleanup() { /bin/rm \"$T\"; }\ntrap cleanup EXIT\n",
 		"builtin":  "T=" + trapVictim + "\nbuiltin trap '/bin/rm \"$T\"' EXIT\n",
 		"table":    "functions[TRAPEXIT]='/bin/rm VICTIM'\n",
+		"typeset":  "typeset 'functions[TRAPEXIT]=/bin/rm VICTIM'\n",
 		"shadowed": "echo() { /bin/rm VICTIM; }\ntrap 'echo ok' EXIT\n",
 		"sh-c":     "/bin/sh -c \"trap '/bin/rm VICTIM' EXIT\"\n",
 	} {
@@ -488,6 +497,140 @@ func TestBashRuntimeStartupErrReturnTrapsJudged(t *testing.T) {
 	})
 }
 
+// assertTrapStopped is for a script that ran to its end: the trap it left was
+// rejected when it ran, and the victim is still there.
+func assertTrapStopped(t *testing.T, root string, err error, output string) {
+	t.Helper()
+	if err == nil || !strings.Contains(output, "申請文") {
+		t.Fatalf("expected guard rejection: %v\n%s", err, output)
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "victim")); err != nil || string(data) != "unchanged" {
+		t.Fatalf("victim changed: %q, %v\n%s", data, err, output)
+	}
+}
+
+// Review 2, decision. Bash runs no DEBUG trap for a function definition, so a
+// trap whose names are defined differently when it runs is judged again then:
+// a builtin shadowed by a function, or the same for another signal.
+func TestBashRuntimeTrapNameRedefined(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "ikesu")
+	guardBinary(t, binary)
+	eachBash(t, func(t *testing.T, shell string) {
+		for name, script := range map[string]string{
+			"echo":     "trap 'echo ok' EXIT\necho() { /bin/rm VICTIM; }\n",
+			"printf":   "trap 'printf ok' EXIT\nprintf() { /bin/rm VICTIM; }\n",
+			"keyword":  "trap 'echo ok' EXIT\nfunction echo { /bin/rm VICTIM; }\n",
+			"signal":   "trap 'printf hi' USR1\nprintf() { /bin/rm VICTIM; }\nkill -USR1 $$\n",
+			"in-func":  "trap 'echo ok' EXIT\nsetup() { echo() { /bin/rm VICTIM; }; }\nsetup\n",
+			"via-eval": "trap 'echo ok' EXIT\neval 'echo() { /bin/rm VICTIM; }'\n",
+		} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				root := t.TempDir()
+				env := prepareGuardOptionsFixture(t, root, binary, shell)
+				err, output := runGuardOptionsScript(t, root, shell, env, nil, strings.ReplaceAll(script, "VICTIM", root+"/home/../victim"))
+				assertTrapStopped(t, root, err, output)
+			})
+		}
+	})
+}
+
+// Review 2, item 4. An EXIT text the user's BASH_ENV left is judged before
+// the startup can end the shell: by an exit in that file, by a cut with no
+// script after it, or by a rejected -c string.
+func TestBashRuntimeStartupTrapsBeforeExit(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "ikesu")
+	guardBinary(t, binary)
+	eachBash(t, func(t *testing.T, shell string) {
+		for name, tc := range map[string]struct{ orig, mode, script string }{
+			"exit":        {"trap '/bin/rm VICTIM' EXIT\nexit 0\n", "file", "printf after > \"$IKESU_RUNTIME_ROOT/after\"\n"},
+			"cut-empty":   {"trap '/bin/rm VICTIM' EXIT\n: \"${UNSET_IN_ORIG:?missing}\"\n", "file", ""},
+			"exec-string": {"trap '/bin/rm VICTIM' EXIT\n", "c", "/bin/rm VICTIM\n"},
+		} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				root := t.TempDir()
+				victim := root + "/home/../victim"
+				env := prepareGuardOptionsFixture(t, root, binary, shell, "BASH_ENV="+writeOriginal(t, root, strings.ReplaceAll(tc.orig, "VICTIM", victim)))
+				err, output := runGuardEntry(t, root, shell, env, nil, tc.mode, strings.ReplaceAll(tc.script, "VICTIM", victim))
+				assertTrapStopped(t, root, err, output)
+			})
+		}
+	})
+}
+
+// Review 2, items 3 and 6. An ERR text is judged with the user's functions
+// even when one has a wrapper's name, its substitutions are not left to later
+// events, and the startup wraps it again even when the user's BASH_ENV
+// removed or replaced the trap wrapper.
+func TestBashRuntimeErrTrapUserFunctions(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "ikesu")
+	guardBinary(t, binary)
+	eachBash(t, func(t *testing.T, shell string) {
+		for name, orig := range map[string]string{
+			"git":           "git() { /bin/rm VICTIM; }\ntrap git ERR\n",
+			"codex":         "codex() { /bin/rm VICTIM; }\ntrap codex ERR\n",
+			"substitution":  "f() { /bin/rm VICTIM; }\ntrap 'X=$(f)' ERR\n",
+			"unset-wrapper": "unset -f trap\ntrap '/bin/rm VICTIM' ERR\n",
+			"own-wrapper":   "trap() { builtin trap \"$@\"; }\ntrap '/bin/rm VICTIM' ERR\n",
+		} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				root := t.TempDir()
+				env := prepareGuardOptionsFixture(t, root, binary, shell, "BASH_ENV="+writeOriginal(t, root, strings.ReplaceAll(orig, "VICTIM", root+"/home/../victim")))
+				err, output := runGuardOptionsScript(t, root, shell, env, nil, "false\nprintf after > \"$IKESU_RUNTIME_ROOT/after\"\n")
+				assertGuardOptionsStopped(t, root, err, output)
+			})
+		}
+	})
+}
+
+// Review 2, decision for zsh: TRAPDEBUG sees a definition, so the line that
+// defines, aliases or removes a name a registered trap calls is asked.
+func TestZshRuntimeTrapNameRedefined(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "ikesu")
+	guardBinary(t, binary)
+	for name, script := range map[string]string{
+		"function": "trap 'echo ok' EXIT\necho() { /bin/rm VICTIM }\n",
+		"keyword":  "trap 'echo ok' EXIT\nfunction echo { /bin/rm VICTIM }\n",
+		"alias":    "trap 'echo ok' EXIT\nalias echo='/bin/rm VICTIM'\n",
+		"disable":  "trap 'echo ok' EXIT\ndisable echo\n",
+		"trapexit": "TRAPEXIT() { echo ok }\necho() { /bin/rm VICTIM }\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			env := zshGuardEnv(t, root, binary, "")
+			err, output := runGuardOptionsScript(t, root, "/bin/zsh", env, nil, strings.ReplaceAll(script, "VICTIM", root+"/home/../victim")+"printf after > \"$IKESU_RUNTIME_ROOT/after\"\n")
+			assertGuardOptionsStopped(t, root, err, output)
+		})
+	}
+}
+
+// Review 2, items 4 and 5. Traps a zsh startup file registers are judged when
+// they are registered, so an EXIT text does not run unjudged when the startup
+// ends the shell, and the check does not depend on IKESU_GUARD_SHELL_DIR.
+func TestZshRuntimeStartupTrapsBeforeExit(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "ikesu")
+	guardBinary(t, binary)
+	for name, tc := range map[string]struct{ zshenv, mode, script string }{
+		"cut":         {"trap '/bin/rm VICTIM' EXIT\n: \"${UNSET_IN_ORIG:?missing}\"\n", "file", "true\n"},
+		"exit":        {"trap '/bin/rm VICTIM' EXIT\nexit 0\n", "file", "true\n"},
+		"zerr":        {"trap '/bin/rm VICTIM' ZERR\nfalse\n", "file", "true\n"},
+		"shell-dir":   {"unset IKESU_GUARD_SHELL_DIR\ntrap '/bin/rm VICTIM' EXIT\n", "file", "true\n"},
+		"exec-string": {"TRAPEXIT() { /bin/rm VICTIM }\n", "c", "/bin/rm VICTIM\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			victim := root + "/home/../victim"
+			env := zshGuardEnv(t, root, binary, strings.ReplaceAll(tc.zshenv, "VICTIM", victim))
+			err, output := runGuardEntry(t, root, "/bin/zsh", env, nil, tc.mode, strings.ReplaceAll(tc.script, "VICTIM", victim))
+			assertTrapStopped(t, root, err, output)
+		})
+	}
+}
+
 // A user BASH_ENV that sets the guard's own startup flag is stopped there,
 // so its EXIT trap cannot skip the judgment the end of the startup gives it.
 func TestBashRuntimeStartupFlagForged(t *testing.T) {
@@ -497,6 +640,10 @@ func TestBashRuntimeStartupFlagForged(t *testing.T) {
 		for name, orig := range map[string]string{
 			"finalized": "_ikesu_guard_finalized=1\ntrap '/bin/rm VICTIM' EXIT\n",
 			"stage":     "_ikesu_guard_startup_stage=done\ntrap '/bin/rm VICTIM' EXIT\n",
+			"declare":   "declare _ikesu_guard_finalized=1\ntrap '/bin/rm VICTIM' EXIT\n",
+			"export":    "export _ikesu_guard_finalized=1\ntrap '/bin/rm VICTIM' EXIT\n",
+			"printf-v":  "printf -v_ikesu_guard_finalized 1\ntrap '/bin/rm VICTIM' EXIT\n",
+			"let":       "let _ikesu_guard_trap_count=5\ntrap '/bin/rm VICTIM' EXIT\n",
 		} {
 			t.Run(name, func(t *testing.T) {
 				t.Parallel()

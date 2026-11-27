@@ -114,6 +114,24 @@ func TestDirenvEnvrcCommandsStillJudged(t *testing.T) {
 	}
 }
 
+// .envrcがdirenvのEXITの関数__dump_at_exitを作り直すと、終了時に確認になり、実行されない。
+func TestDirenvDumpAtExitRedefinitionAsks(t *testing.T) {
+	t.Parallel()
+	direnv := findHomebrewDirenv(t)
+	f := newDirenvFixture(t, "__dump_at_exit() { rm TARGET; }\n")
+	f.allow(direnv)
+	out, e := f.run(direnv, "export", "json")
+	if e == nil {
+		t.Fatal("direnvが成功しました", out)
+	}
+	if _, e := os.Stat(f.target); e != nil {
+		t.Fatal("対象が消えました", e)
+	}
+	if !strings.Contains(f.records(), `"verdict":"ask"`) {
+		t.Fatal(f.records())
+	}
+}
+
 // 親がdirenvではないbashが同じ行を打っても確認が残る。
 func TestDirenvLinesAskWhenParentIsNotDirenv(t *testing.T) {
 	t.Parallel()
