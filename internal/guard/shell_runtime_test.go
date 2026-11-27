@@ -24,9 +24,16 @@ func TestShellRuntimeHelper(t *testing.T) {
 		return
 	}
 	args := os.Args
+	// Like the real CLI, a guard line carries its --via value.
+	via := ""
+	for n, arg := range args {
+		if arg == "--via" && n+1 < len(args) {
+			via = args[n+1]
+		}
+	}
 	for n, arg := range args {
 		if arg == "--via" && n+1 < len(args) && args[n+1] == "bash-debug" {
-			i := WithShellVariables(Input{Cwd: os.Getenv("IKESU_RUNTIME_ROOT"), Env: EnvMap(os.Environ())}, os.Stdin)
+			i := WithShellVariables(Input{Cwd: os.Getenv("IKESU_RUNTIME_ROOT"), Env: EnvMap(os.Environ()), LineVia: via}, os.Stdin)
 			if !AuthorizeLine(Config{}, i.Cwd, i, args[len(args)-1], os.Stderr, nil) {
 				os.Exit(1)
 			}
@@ -34,7 +41,7 @@ func TestShellRuntimeHelper(t *testing.T) {
 		}
 	}
 	// Whole-command checks use the same parser, without a variable snapshot.
-	i := Input{Cwd: os.Getenv("IKESU_RUNTIME_ROOT"), Env: EnvMap(os.Environ())}
+	i := Input{Cwd: os.Getenv("IKESU_RUNTIME_ROOT"), Env: EnvMap(os.Environ()), LineVia: via}
 	if !AuthorizeLine(Config{}, i.Cwd, i, args[len(args)-1], os.Stderr, nil) {
 		os.Exit(1)
 	}
