@@ -23,7 +23,7 @@ _ikesu_guard_numeric_form() {
  for _ikesu_guard_name in $_ikesu_guard_expr; do
   case "$_ikesu_guard_name" in [0-9]*) continue;; esac
   _ikesu_guard_plain_variable "$_ikesu_guard_name" || return 1
-  _ikesu_guard_value="${!_ikesu_guard_name}"
+  _ikesu_guard_value="${!_ikesu_guard_name-}"
   case "$_ikesu_guard_value" in *[!0-9+-]*) return 1;; esac
  done
  return 0
