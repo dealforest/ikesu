@@ -429,6 +429,9 @@ func TestZshRuntimeExitTrapJudged(t *testing.T) {
 // that calls a user function is asked: the function's lines would run
 // unchecked. Calling a function that removes the victim and removing it
 // directly get the same decision.
+//
+// This takes longer than 5 seconds: a rejection ends the shell, so each of the
+// 27 cases per Bash needs its own shell. They run in parallel.
 func TestBashRuntimeStartupErrReturnTrapsJudged(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "ikesu")
 	guardBinary(t, binary)
