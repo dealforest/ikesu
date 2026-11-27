@@ -15,6 +15,7 @@ import (
 // Shell analysis never executes substitutions or invokes a shell. Script
 // operands use the bounded file reader; Walk visits function bodies as well.
 func lineCommands(i Input, line string) ([]Input, error) {
+	i = withShellFunctions(i)
 	tree, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(line), "guard line")
 	if err != nil {
 		if i.runtimeLine && !i.trapRegistration {
@@ -63,7 +64,8 @@ func lineCommands(i Input, line string) ([]Input, error) {
 		setError(e)
 	}
 	syntax.Walk(tree, func(node syntax.Node) bool {
-		if fn, ok := node.(*syntax.FuncDecl); ok && isZshTrapFunction(fn.Name.Value) {
+		// In bash a TRAP<SIG> name is an ordinary function.
+		if fn, ok := node.(*syntax.FuncDecl); ok && i.LineVia != "bash-debug" && isZshTrapFunction(fn.Name.Value) {
 			if fn.Name.Value == "TRAPDEBUG" {
 				setError(fmt.Errorf("判定のトラップの変更には承認が必要です"))
 			} else {
@@ -85,6 +87,19 @@ func lineCommands(i Input, line string) ([]Input, error) {
 			}
 		}
 		call, ok := node.(*syntax.CallExpr)
+		// A line the shell runs may not set the guard's own state, such as
+		// the flag that ends its startup. Reading it changes nothing.
+		if ok && (i.LineVia == "bash-debug" || i.LineVia == "zsh-debug") && setsGuardState(call, line) {
+			setError(fmt.Errorf("判定の内部の変数を書き換える形は承認が必要です"))
+		}
+		if ok && i.LineVia != "bash-debug" {
+			for _, assignment := range call.Assigns {
+				// zsh defines a function, TRAP<SIG> included, through this table.
+				if assignment.Name != nil && assignment.Name.Value == "functions" && (assignment.Index != nil || assignment.Array != nil) {
+					setError(fmt.Errorf("関数の表への代入で関数やトラップを入れる形は確かめられません"))
+				}
+			}
+		}
 		if !ok || len(call.Args) == 0 {
 			return true
 		}
@@ -176,6 +191,9 @@ func lineCommands(i Input, line string) ([]Input, error) {
 		unwrapped, e := unwrapCommand(next)
 		if i.trapRegistration && !knownTrapCall(unwrapped) {
 			setError(fmt.Errorf("トラップのコマンドを安全に確定できません"))
+		}
+		if i.trapBody && i.shellFunctions[unwrapped.Command] {
+			setError(fmt.Errorf("トラップから利用者の関数を呼ぶ形は承認が必要です"))
 		}
 		if unwrapped.Command == "trap" {
 			if next.Command != unwrapped.Command {
@@ -616,4 +634,46 @@ func unresolvedVerdict(c Config, command Input, judge func(Config, Input) Verdic
 		}
 	}
 	return found, have
+}
+
+// setsGuardState reports a call that assigns, declares, reads into or unsets a
+// variable of the guard (_ikesu_guard_*).
+func setsGuardState(call *syntax.CallExpr, line string) bool {
+	for _, assignment := range call.Assigns {
+		if assignment.Name != nil && strings.HasPrefix(assignment.Name.Value, "_ikesu_guard_") {
+			return true
+		}
+	}
+	if len(call.Args) == 0 {
+		return false
+	}
+	words := make([]string, len(call.Args))
+	for n, word := range call.Args {
+		words[n] = line[word.Pos().Offset():word.End().Offset()]
+	}
+	for len(words) > 0 && has([]string{"builtin", "command"}, words[0]) {
+		words = words[1:]
+	}
+	if len(words) == 0 {
+		return false
+	}
+	names := words[1:]
+	switch words[0] {
+	case "declare", "typeset", "local", "export", "readonly", "unset", "read", "mapfile", "readarray", "let", "getopts", "integer", "float":
+	case "printf":
+		names = nil
+		for n := 1; n+1 < len(words); n++ {
+			if words[n] == "-v" {
+				names = append(names, words[n+1])
+			}
+		}
+	default:
+		return false
+	}
+	for _, name := range names {
+		if strings.Contains(name, "_ikesu_guard_") {
+			return true
+		}
+	}
+	return false
 }

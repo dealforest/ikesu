@@ -5,59 +5,37 @@ import (
 	"strings"
 )
 
-// Lines that bash's DEBUG trap reports from inside the generated functions.
-// Only these exact lines are skipped, and only in their own frame. The first
-// line of each list sets the frame's flag; every later line needs that flag.
-// trap is the generated wrapper: it runs no user text, so with its flag set
-// every line of that frame is skipped.
-var bashInternalLines = map[string][]string{
-	"_ikesu_guard_forward":       {"local _ikesu_guard_in_wrapper=1"},
-	"_ikesu_guard_command":       {"local _ikesu_guard_in_wrapper=1"},
-	"_ikesu_guard_run_exit_trap": {"local _ikesu_guard_in_wrapper=1 _ikesu_guard_exit_saved=$? _ikesu_guard_exit_mark= _ikesu_guard_exit_rc=0"},
-	// exit is defined only inside the subshell that runs a stored EXIT text,
-	// so a bare exit there keeps the status from before the trap.
-	"exit": {"local _ikesu_guard_in_wrapper=1"},
-	"trap": {bashTrapWrapperFirstLine},
-}
-
-const bashTrapWrapperFirstLine = "local _ikesu_guard_in_wrapper=1 _ikesu_guard_trap_out= _ikesu_guard_trap_name= _ikesu_guard_trap_sig= _ikesu_guard_trap_action= _ikesu_guard_trap_text= _ikesu_guard_trap_q= _ikesu_guard_trap_rc=0"
-
+// bashInternalCases skips the DEBUG events of the generated functions, only in
+// their own frame. A frame counts as generated when its function was defined
+// in this startup file. Its events are skipped when they are the call line
+// that entered it, the line that sets its flag, or, with that flag set, a line
+// of the function's own text as declare -f prints it.
 func (a *Assets) bashInternalCases() string {
-	var b strings.Builder
-	for _, frame := range []string{"_ikesu_guard_forward", "_ikesu_guard_command", "_ikesu_guard_run_exit_trap", "exit", "trap"} {
-		for n, line := range append(append([]string{}, bashInternalLines[frame]...), a.bashFrameLines(frame)...) {
-			if n == 0 {
-				fmt.Fprintf(&b, "  %s) return 0;;\n", quote(frame+":"+line))
-			} else {
-				fmt.Fprintf(&b, "  %s) [[ ${_ikesu_guard_in_wrapper-} == 1 ]] && return 0;;\n", quote(frame+":"+line))
-			}
-		}
-	}
-	// Bash reports a function's call line once more as the first event inside
-	// it. The caller's frame already decided that line.
-	for _, frame := range []string{"_ikesu_guard_forward", "_ikesu_guard_command", "_ikesu_guard_run_exit_trap", "_ikesu_guard_trap_check", "_ikesu_guard_trap_return", "exit", "trap"} {
-		fmt.Fprintf(&b, "  %s|%s*) return 0;;\n", quote(frame+":"+frame), quote(frame+":"+frame+" "))
-	}
-	// These frames run no user text of their own: the check and the status
-	// helper are pure, and the trap wrapper only stores and installs text.
-	b.WriteString("  _ikesu_guard_trap_check:*|_ikesu_guard_trap_return:*|_ikesu_guard_finalize:*) return 0;;\n")
-	b.WriteString("  trap:*) [[ ${_ikesu_guard_in_wrapper-} == 1 ]] && return 0;;\n")
-	return b.String()
+	return `  case "${FUNCNAME[_ikesu_guard_at]:-}" in
+  _ikesu_guard_forward|_ikesu_guard_command|trap)
+   if [[ ${BASH_SOURCE[_ikesu_guard_at]-} == "${_ikesu_guard_startup_file-}" ]]; then
+    case "$1" in "${FUNCNAME[_ikesu_guard_at]}"|"${FUNCNAME[_ikesu_guard_at]} "*|'local _ikesu_guard_in_wrapper=1'|'local _ikesu_guard_in_wrapper=1 '*) return 0;; esac
+    [[ ${_ikesu_guard_in_wrapper-} == 1 && ${_ikesu_guard_texts-} == *"$1"* ]] && return 0
+   fi;;
+  _ikesu_guard_trap_check|_ikesu_guard_trap_return)
+   case "$1" in "${FUNCNAME[_ikesu_guard_at]}"|"${FUNCNAME[_ikesu_guard_at]} "*|'local _ikesu_guard_debug_busy=1') return 0;; esac;;
+  esac
+`
 }
 
-// bashWrapperCalls lists the calls written by the generated wrappers. Each is
-// accepted only in the frame of the wrapper that contains it. The trap helpers
-// only check a stored trap text, restore $?, or run the stored EXIT text under
-// the DEBUG trap, so calling them directly does not skip a check.
+// bashWrapperCalls accepts the calls the generated wrappers make, only in the
+// frame of a wrapper defined in this startup file, and the status helper the
+// wrapped ERR/RETURN text calls (it only returns the saved number).
 func (a *Assets) bashWrapperCalls() string {
 	var b strings.Builder
+	own := `[[ ${BASH_SOURCE[_ikesu_guard_at]-} == "${_ikesu_guard_startup_file-}" ]] && `
 	for _, cmd := range a.Config.Commands() {
-		fmt.Fprintf(&b, "  %s) [[ ${FUNCNAME[_ikesu_guard_at]-} == %s ]] && return 0;;\n", quote("_ikesu_guard_forward "+quote(cmd)+` "$@"`), quote(cmd))
+		fmt.Fprintf(&b, "  %s) [[ ${FUNCNAME[_ikesu_guard_at]-} == %s ]] && %sreturn 0;;\n", quote("_ikesu_guard_forward "+quote(cmd)+` "$@"`), quote(cmd), own)
 	}
 	if len(a.Config.Commands()) > 0 {
-		fmt.Fprintf(&b, "  %s) [[ ${FUNCNAME[_ikesu_guard_at]-} == command ]] && return 0;;\n", quote(`_ikesu_guard_command "$@"`))
+		fmt.Fprintf(&b, "  %s) [[ ${FUNCNAME[_ikesu_guard_at]-} == command ]] && %sreturn 0;;\n", quote(`_ikesu_guard_command "$@"`), own)
 	}
-	for _, line := range []string{":", "_ikesu_guard_run_exit_trap", `_ikesu_guard_trap_check ERR "$?"`, `_ikesu_guard_trap_check RETURN "$?"`, `_ikesu_guard_trap_return "$_ikesu_guard_trap_saved_ERR"`, `_ikesu_guard_trap_return "$_ikesu_guard_trap_saved_RETURN"`} {
+	for _, line := range []string{`_ikesu_guard_trap_return "$_ikesu_guard_trap_saved_ERR"`, `_ikesu_guard_trap_return "$_ikesu_guard_trap_saved_RETURN"`} {
 		fmt.Fprintf(&b, "  %s) return 0;;\n", quote(line))
 	}
 	return b.String()
@@ -85,7 +63,7 @@ func (a *Assets) debugHook(shell string) string {
   case "$_ikesu_guard_line" in *'$'*|*'`+"`"+`'*) return 0;; esac;; esac
  case "$_ikesu_guard_word" in
  %s) return 0;;
- xargs|find|sh|bash|zsh|env|command|builtin|exec|eval|source|.|sudo|doas|timeout|stdbuf|arch|chroot|setsid|ionice|_ikesu_guard_*) return 0;;
+ xargs|find|sh|bash|zsh|dash|ksh|env|command|builtin|exec|eval|source|.|sudo|doas|timeout|stdbuf|arch|chroot|setsid|ionice|_ikesu_guard_*) return 0;;
  trap|unset|unsetenv|setenv|export|typeset|declare|local|readonly|unfunction|functions|alias|unalias|set|setopt|unsetopt|shopt|chmod|chown|chgrp|sed|truncate|mkdir|install) return 0;;
  esac
  return 1
@@ -94,12 +72,7 @@ _ikesu_guard_debug() {
  local _ikesu_guard_debug_busy=1 _ikesu_guard_at=2
  [[ ${FUNCNAME[2]-} == _ikesu_guard_startup_debug ]] && _ikesu_guard_at=3
  if [[ ${2-} != force ]]; then
-  case "${FUNCNAME[_ikesu_guard_at]:-}:$1" in
-%s  esac
-  # A generated wrapper (git, command, ...) only forwards. Its frame runs no
-  # user text except an ERR/RETURN trap, which is checked before it runs.
-  case " ${_ikesu_guard_wrapper_names-} " in *" ${FUNCNAME[_ikesu_guard_at]:-} "*) [[ -n ${FUNCNAME[_ikesu_guard_at]:-} ]] && return 0;; esac
-  case "$1" in
+%s  case "$1" in
 %s  esac
  fi
  if [[ %s ]]; then
@@ -116,6 +89,10 @@ _ikesu_guard_debug() {
   ) 2>/dev/null | (
    builtin trap - ERR
    set +o functrace
+   # A trap text, or a line that may register one, is judged knowing which
+   # names are shell functions. Both values only add checks.
+   case "${2-}:$1" in force:*|*trap*) builtin export IKESU_GUARD_SHELL_FUNCTIONS="$(builtin compgen -A function)";; esac
+   [[ ${2-} != force ]] || builtin export IKESU_GUARD_TRAP_BODY=1
 %s   %s guard line --via bash-debug --shell-pid "$$" -- "$1"
   ) || { builtin kill -s KILL "$$"; exit 1; }
  fi
@@ -134,26 +111,22 @@ _ikesu_guard_trap_check() {
  local _ikesu_guard_debug_busy=1
  local _ikesu_guard_trap_ref="_ikesu_guard_trap_body_$1"
  builtin printf -v "_ikesu_guard_trap_saved_$1" '%%s' "${2:-0}"
- # RETURN also runs when a guard function returns, and when source leaves the
- # user's BASH_ENV or this file. Those are not the user's returns: skip them.
+ # RETURN also runs when a guard function returns and when source leaves
+ # a startup file. Those are not the user's returns.
  if [[ $1 == RETURN ]]; then
   case "${FUNCNAME[1]-}" in _ikesu_guard_*) return 1;; esac
-  [[ -n ${BASH_SOURCE[1]-} && ( ${BASH_SOURCE[1]} == "${_ikesu_guard_startup_file-}" || ${BASH_SOURCE[1]} == "${_ikesu_guard_startup_loader-}" ) ]] && return 1
+  if [[ -n ${BASH_SOURCE[1]-} && ${BASH_SOURCE[1]} == "${_ikesu_guard_startup_file-}" ]]; then
+   case " source trap command codex claude ${_ikesu_guard_wrapper_names-} " in *" ${FUNCNAME[1]-} "*) return 1;; esac
+  fi
+  [[ ${FUNCNAME[1]-} == source && -n ${_ikesu_guard_startup_loader-} && ${BASH_SOURCE[1]-} == "$_ikesu_guard_startup_loader" ]] && return 1
  fi
- # Until the setup finishes, the user's BASH_ENV is not judged; its own
- # traps run as part of it.
- [[ ${_ikesu_guard_finalized-} == 1 ]] || return 0
  _ikesu_guard_debug "${!_ikesu_guard_trap_ref-}" force
  return 0
 }
 _ikesu_guard_trap_return() { return "${1:-0}"; }
-_ikesu_guard_run_exit_trap() {
- local _ikesu_guard_in_wrapper=1 _ikesu_guard_exit_saved=$? _ikesu_guard_exit_mark= _ikesu_guard_exit_rc=0
- if { _ikesu_guard_exit_mark=$( { ( :; exit() { builtin exit "${1-$_ikesu_guard_exit_saved}"; }; _ikesu_guard_trap_return "$_ikesu_guard_exit_saved" && :; builtin eval "$_ikesu_guard_trap_body_EXIT"; builtin printf done >&223; ) 223>&1 >&222 222>&-; } ); } 222>&1; then :; else _ikesu_guard_exit_rc=$?; fi
- [[ $_ikesu_guard_exit_mark == done ]] && return "$_ikesu_guard_exit_saved"
- builtin exit "$_ikesu_guard_exit_rc"
-}
-%sreadonly -f _ikesu_guard_debug _ikesu_guard_dispatch _ikesu_guard_needs_check _ikesu_guard_trap_check _ikesu_guard_trap_return _ikesu_guard_run_exit_trap trap
+%s_ikesu_guard_texts=$(builtin declare -f _ikesu_guard_forward _ikesu_guard_command trap 2>/dev/null)
+readonly _ikesu_guard_texts
+readonly -f _ikesu_guard_debug _ikesu_guard_dispatch _ikesu_guard_needs_check _ikesu_guard_trap_check _ikesu_guard_trap_return
 fi
 `, bashSimpleForms, strings.Join(append(targets, quote("")), "|"), a.bashInternalCases(), a.bashWrapperCalls(), a.shellActive(), bashRequestReasonRestore, bashRequestReasonRestore, a.identity()+" builtin exec "+quote(a.RuntimePath()), bashTrapWrapper)
 	}
@@ -163,15 +136,16 @@ if [[ %s ]] && [[ -n "${ZSH_EXECUTION_STRING:-}" ]]; then
 fi
 %ssetopt DEBUG_BEFORE_CMD
 TRAPDEBUG() {
- case "${funcstack[2]:-}:${ZSH_DEBUG_CMD-}" in
-%s esac
- case "${ZSH_DEBUG_CMD-}" in
+%s case "${ZSH_DEBUG_CMD-}" in
 %s esac
  if [[ %s ]]; then
-  %s guard line --via zsh-debug -- "${ZSH_DEBUG_CMD-}" || exit $?
+  case "${ZSH_DEBUG_CMD-}" in
+  *trap*|*TRAP*|*functions*) IKESU_GUARD_SHELL_FUNCTIONS="${(k)functions}" %s guard line --via zsh-debug -- "${ZSH_DEBUG_CMD-}" || exit $?;;
+  *) %s guard line --via zsh-debug -- "${ZSH_DEBUG_CMD-}" || exit $?;;
+  esac
  fi
  return 0
 }
 fi
-`, a.shellActive(), a.invocation(), a.zshTrapRewrap(), a.zshInternalCases(), a.zshWrapperCalls(), a.shellActive(), a.invocation())
+`, a.shellActive(), a.invocation(), a.zshStartupTraps(), a.zshInternalCases(), a.zshWrapperCalls(), a.shellActive(), a.invocation(), a.invocation())
 }

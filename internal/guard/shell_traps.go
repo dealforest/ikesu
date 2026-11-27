@@ -22,24 +22,52 @@ func trapBodyText(body *syntax.Stmt, line string) string {
 	return line[body.Pos().Offset():body.End().Offset()]
 }
 
+// trapRegistrationCommands judges what a trap registration will run. Every
+// shell and signal is judged here, EXIT included: the shell runs the text
+// itself later, where no DEBUG check may see its lines.
 func trapRegistrationCommands(i Input) ([]Input, error) {
 	args := i.Args
-	if len(args) < 2 || args[0] == "-p" || args[0] == "-l" {
+	if len(args) > 0 && has([]string{"-p", "-P", "-l"}, args[0]) {
 		return nil, nil
 	}
-	if args[0] == "--" {
+	if len(args) > 0 && args[0] == "--" {
 		args = args[1:]
 	}
-	if len(args) < 2 || args[0] == "-" || args[0] == "" || args[0] == ":" {
+	// A single operand, "-", or a leading unsigned number resets the signals.
+	if len(args) < 2 || args[0] == "-" || args[0] == "" || args[0] == ":" || unsignedNumber(args[0]) {
 		return nil, nil
 	}
-	zsh := i.LineVia == "zsh-debug" || i.LineVia == "accept-line"
-	for _, signal := range args[1:] {
-		if zsh || !has([]string{"EXIT", "0"}, trapSignal(signal)) {
-			return trapActionCommands(i, args[0])
+	return trapActionCommands(i, args[0])
+}
+
+func unsignedNumber(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
 		}
 	}
-	return nil, nil
+	return true
+}
+
+// withShellFunctions reads the function names the generated hook passes for a
+// line that may register or run a trap. The list only adds checks.
+func withShellFunctions(i Input) Input {
+	if i.shellFunctions != nil || i.Env == nil {
+		return i
+	}
+	i.shellFunctions = map[string]bool{}
+	// The guard's own functions forward to a judge or are this hook.
+	own := append([]string{"command", "trap", "codex", "claude", "TRAPDEBUG"}, defaults(i.GuardCommands, (Config{}).Commands())...)
+	for _, name := range strings.Fields(i.Env["IKESU_GUARD_SHELL_FUNCTIONS"]) {
+		if !strings.HasPrefix(name, "_ikesu_guard_") && !has(own, name) {
+			i.shellFunctions[name] = true
+		}
+	}
+	i.trapBody = i.Env["IKESU_GUARD_TRAP_BODY"] == "1"
+	return i
 }
 
 func trapActionCommands(i Input, action string) ([]Input, error) {
@@ -65,126 +93,151 @@ func trapActionCommands(i Input, action string) ([]Input, error) {
 }
 
 func knownTrapCall(i Input) bool {
+	if i.shellFunctions[i.Command] {
+		return false
+	}
 	return filepath.IsAbs(i.Command) || has([]string{
 		":", "[", "cd", "echo", "exit", "false", "printf", "pwd", "return", "test", "trap", "true",
 	}, i.Command)
 }
 
-// bashFrameLines are the later lines of the generated functions as bash's
-// DEBUG trap reports them (see bashInternalLines). Bash rebuilds the text it
-// reports, so a few lines appear in the forms bash 3.2 and 5 print.
-func (a *Assets) bashFrameLines(frame string) []string {
-	restore := strings.TrimSuffix(strings.TrimSuffix(bashRequestReasonRestore, "\n"), " || exit 1")
-	exec := a.invocation() + ` guard exec --via shell-func -- "$@"`
-	switch frame {
-	case "_ikesu_guard_forward":
-		return []string{
-			"[[ " + a.shellActive() + " ]]",
-			`[[ -n "${BASH_VERSION:-}" && -n ${_ikesu_guard_reason_name+x} ]]`,
-			`[[ -n "${BASH_VERSION:-}" && ${_ikesu_guard_reason_name+x} ]]`,
-			"set +o functrace", restore, "exit 1", exec,
-			"( set +o functrace; " + restore + " || exit 1; " + exec + " )",
-			"return $?", `builtin command "$@"`,
-		}
-	case "_ikesu_guard_command":
-		return []string{`[[ "${1:-}" != -* ]]`, `case "${1:-}" in `, `_ikesu_guard_forward "$@"`, "return $?", "return 0", `builtin command "$@"`}
-	case "_ikesu_guard_run_exit_trap":
-		return bashExitTrapLines
-	case "exit":
-		return []string{`builtin exit "${1-$_ikesu_guard_exit_saved}"`}
-	}
-	return nil
-}
-
-var bashExitTrapLines = []string{
-	`_ikesu_guard_exit_mark=$( { ( :; exit() { builtin exit "${1-$_ikesu_guard_exit_saved}"; }; _ikesu_guard_trap_return "$_ikesu_guard_exit_saved" && :; builtin eval "$_ikesu_guard_trap_body_EXIT"; builtin printf done >&223; ) 223>&1 >&222 222>&-; } )`,
-	":", `_ikesu_guard_trap_return "$_ikesu_guard_exit_saved"`, `builtin eval "$_ikesu_guard_trap_body_EXIT"`,
-	"builtin printf done 1>&223", "builtin printf done >&223", "_ikesu_guard_exit_rc=$?",
-	"[[ $_ikesu_guard_exit_mark == done ]]", `return "$_ikesu_guard_exit_saved"`, `builtin exit "$_ikesu_guard_exit_rc"`,
-}
-
-// bashTrapWrapper replaces the trap builtin before the user's BASH_ENV. EXIT
-// and 0 run through _ikesu_guard_run_exit_trap; ERR and RETURN keep their
-// text inline after a check. trap -p, trap -P and plain trap show the text
-// the user registered. Other signals and options go to the builtin as is.
+// bashTrapWrapper is defined before the user's BASH_ENV. It wraps only ERR
+// and RETURN, whose text runs after a check each time (see
+// _ikesu_guard_trap_check), and shows that stored text for trap -p, trap and
+// trap -P. Every other form goes to the builtin unchanged; an EXIT text is
+// judged when the line registering it is judged.
 const bashTrapWrapper = `trap() {
- local _ikesu_guard_in_wrapper=1 _ikesu_guard_trap_out= _ikesu_guard_trap_name= _ikesu_guard_trap_sig= _ikesu_guard_trap_action= _ikesu_guard_trap_text= _ikesu_guard_trap_q= _ikesu_guard_trap_rc=0
- if [[ ${1-} == -- ]]; then
-  builtin shift
-  (( $# )) || { trap; return $?; }
- elif [[ $# == 0 || $1 == -p ]]; then
-  _ikesu_guard_trap_out=$(builtin trap "$@") || _ikesu_guard_trap_rc=$?
-  for _ikesu_guard_trap_name in EXIT ERR RETURN; do
-   _ikesu_guard_trap_text="_ikesu_guard_trap_shown_$_ikesu_guard_trap_name"
-   _ikesu_guard_trap_q="_ikesu_guard_trap_view_$_ikesu_guard_trap_name"
-   [[ -n ${!_ikesu_guard_trap_text-} ]] || continue
-   _ikesu_guard_trap_out=${_ikesu_guard_trap_out//"${!_ikesu_guard_trap_text}"/"${!_ikesu_guard_trap_q}"}
+ local _ikesu_guard_in_wrapper=1 _ikesu_guard_trap_out= _ikesu_guard_trap_sig= _ikesu_guard_trap_name= _ikesu_guard_trap_text= _ikesu_guard_trap_view= _ikesu_guard_trap_rc=0 _ikesu_guard_trap_hide=
+ # Without errtrace a function sees no ERR trap; the listing shows none there.
+ [[ $- == *E* || ${FUNCNAME[1]-main} == main || ${FUNCNAME[1]} == source ]] || _ikesu_guard_trap_hide=ERR
+ if [[ $# == 0 || $1 == -p ]]; then
+  [[ $# == 0 ]] || builtin shift
+  if [[ $# == 0 ]]; then
+   _ikesu_guard_trap_out=$(builtin trap -p) || _ikesu_guard_trap_rc=$?
+   for _ikesu_guard_trap_name in ERR RETURN; do
+    _ikesu_guard_trap_text="_ikesu_guard_trap_shown_$_ikesu_guard_trap_name"
+    [[ -n ${!_ikesu_guard_trap_text-} ]] || continue
+    _ikesu_guard_trap_out=${_ikesu_guard_trap_out//"${!_ikesu_guard_trap_text}"/}
+   done
+   _ikesu_guard_trap_out=${_ikesu_guard_trap_out//$'\n\n'/$'\n'}
+   _ikesu_guard_trap_out=${_ikesu_guard_trap_out#$'\n'}
+   _ikesu_guard_trap_out=${_ikesu_guard_trap_out%$'\n'}
+   [[ -z $_ikesu_guard_trap_out ]] || builtin printf '%s\n' "$_ikesu_guard_trap_out"
+   for _ikesu_guard_trap_name in ERR RETURN; do
+    [[ $_ikesu_guard_trap_name != "$_ikesu_guard_trap_hide" ]] || continue
+    _ikesu_guard_trap_view="_ikesu_guard_trap_view_$_ikesu_guard_trap_name"
+    [[ -z ${!_ikesu_guard_trap_view-} ]] || builtin printf '%s\n' "${!_ikesu_guard_trap_view}"
+   done
+   return "$_ikesu_guard_trap_rc"
+  fi
+  for _ikesu_guard_trap_sig in "$@"; do
+   case "$_ikesu_guard_trap_sig" in [Ee][Rr][Rr]) _ikesu_guard_trap_name=ERR;; [Rr][Ee][Tt][Uu][Rr][Nn]) _ikesu_guard_trap_name=RETURN;; *) _ikesu_guard_trap_name=;; esac
+   [[ $_ikesu_guard_trap_name != "$_ikesu_guard_trap_hide" ]] || _ikesu_guard_trap_name=
+   _ikesu_guard_trap_view="_ikesu_guard_trap_view_$_ikesu_guard_trap_name"
+   if [[ -n $_ikesu_guard_trap_name && -n ${!_ikesu_guard_trap_view-} ]]; then
+    builtin printf '%s\n' "${!_ikesu_guard_trap_view}"
+   else
+    builtin trap -p "$_ikesu_guard_trap_sig" || _ikesu_guard_trap_rc=$?
+   fi
   done
-  [[ -z $_ikesu_guard_trap_out ]] || builtin printf '%s\n' "$_ikesu_guard_trap_out"
   return "$_ikesu_guard_trap_rc"
- elif [[ $1 == -P ]]; then
+ fi
+ if [[ $1 == -P ]] && (( BASH_VERSINFO[0] > 5 || BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1 )); then
   builtin shift
   for _ikesu_guard_trap_sig in "$@"; do
-   case "$_ikesu_guard_trap_sig" in 0|[Ee][Xx][Ii][Tt]) _ikesu_guard_trap_name=EXIT;; [Ee][Rr][Rr]) _ikesu_guard_trap_name=ERR;; [Rr][Ee][Tt][Uu][Rr][Nn]) _ikesu_guard_trap_name=RETURN;; *) _ikesu_guard_trap_name=;; esac
+   case "$_ikesu_guard_trap_sig" in [Ee][Rr][Rr]) _ikesu_guard_trap_name=ERR;; [Rr][Ee][Tt][Uu][Rr][Nn]) _ikesu_guard_trap_name=RETURN;; *) _ikesu_guard_trap_name=;; esac
+   [[ $_ikesu_guard_trap_name != "$_ikesu_guard_trap_hide" ]] || _ikesu_guard_trap_name=
    _ikesu_guard_trap_text="_ikesu_guard_trap_body_$_ikesu_guard_trap_name"
-   if [[ -n $_ikesu_guard_trap_name && ${!_ikesu_guard_trap_text+x} ]]; then
+   if [[ -n $_ikesu_guard_trap_name && -n ${!_ikesu_guard_trap_text+x} ]]; then
     builtin printf '%s\n' "${!_ikesu_guard_trap_text}"
    else
     builtin trap -P "$_ikesu_guard_trap_sig" || _ikesu_guard_trap_rc=$?
    fi
   done
+  (( $# )) || builtin trap -P || _ikesu_guard_trap_rc=$?
   return "$_ikesu_guard_trap_rc"
- elif [[ $1 == -?* ]]; then
-  builtin trap "$@"
-  return $?
  fi
- if [[ $# == 1 || $1 == - ]]; then
+ # Any other option, such as -P before Bash 5.1, is the builtin's to answer.
+ case $1 in -[!-]*) builtin trap "$@"; return $?;; esac
+ _ikesu_guard_trap_out=$1
+ [[ $1 != -- ]] || _ikesu_guard_trap_out=${2-}
+ case "$*" in *[Ee][Rr][Rr]*|*[Rr][Ee][Tt][Uu][Rr][Nn]*) ;; *) builtin trap "$@" || return $?; return 0;; esac
+ [[ $1 != -- ]] || builtin shift
+ # One operand, "-", or a leading unsigned number resets the signals.
+ case "${1-}" in ''|*[!0-9]*) _ikesu_guard_trap_rc=1;; *) _ikesu_guard_trap_rc=0;; esac
+ if [[ $# -le 1 || $1 == - || $_ikesu_guard_trap_rc == 0 ]]; then
   builtin trap -- "$@" || return $?
   for _ikesu_guard_trap_sig in "$@"; do
-   case "$_ikesu_guard_trap_sig" in 0|[Ee][Xx][Ii][Tt]) _ikesu_guard_trap_name=EXIT;; [Ee][Rr][Rr]) _ikesu_guard_trap_name=ERR;; [Rr][Ee][Tt][Uu][Rr][Nn]) _ikesu_guard_trap_name=RETURN;; *) continue;; esac
+   case "$_ikesu_guard_trap_sig" in [Ee][Rr][Rr]) _ikesu_guard_trap_name=ERR;; [Rr][Ee][Tt][Uu][Rr][Nn]) _ikesu_guard_trap_name=RETURN;; *) continue;; esac
    builtin unset "_ikesu_guard_trap_body_$_ikesu_guard_trap_name" "_ikesu_guard_trap_view_$_ikesu_guard_trap_name" "_ikesu_guard_trap_shown_$_ikesu_guard_trap_name"
   done
   return 0
  fi
- _ikesu_guard_trap_action="$1"
+ _ikesu_guard_trap_rc=0
  builtin shift
  for _ikesu_guard_trap_sig in "$@"; do
-  case "$_ikesu_guard_trap_sig" in 0|[Ee][Xx][Ii][Tt]) _ikesu_guard_trap_name=EXIT;; [Ee][Rr][Rr]) _ikesu_guard_trap_name=ERR;; [Rr][Ee][Tt][Uu][Rr][Nn]) _ikesu_guard_trap_name=RETURN;; *) _ikesu_guard_trap_name=;; esac
-  if [[ -z $_ikesu_guard_trap_name || -z $_ikesu_guard_trap_action ]]; then
-   if builtin trap -- "$_ikesu_guard_trap_action" "$_ikesu_guard_trap_sig"; then
+  case "$_ikesu_guard_trap_sig" in [Ee][Rr][Rr]) _ikesu_guard_trap_name=ERR;; [Rr][Ee][Tt][Uu][Rr][Nn]) _ikesu_guard_trap_name=RETURN;; *) _ikesu_guard_trap_name=;; esac
+  if [[ -z $_ikesu_guard_trap_name || -z $_ikesu_guard_trap_out ]]; then
+   if builtin trap -- "$_ikesu_guard_trap_out" "$_ikesu_guard_trap_sig"; then
     [[ -z $_ikesu_guard_trap_name ]] || builtin unset "_ikesu_guard_trap_body_$_ikesu_guard_trap_name" "_ikesu_guard_trap_view_$_ikesu_guard_trap_name" "_ikesu_guard_trap_shown_$_ikesu_guard_trap_name"
    else
     _ikesu_guard_trap_rc=$?
    fi
    continue
   fi
-  if [[ $_ikesu_guard_trap_name == EXIT ]]; then
-   _ikesu_guard_trap_text=_ikesu_guard_run_exit_trap
-  else
-   _ikesu_guard_trap_text="if _ikesu_guard_trap_check $_ikesu_guard_trap_name \"\$?\"; then _ikesu_guard_trap_return \"\$_ikesu_guard_trap_saved_$_ikesu_guard_trap_name\" && :"$'\n'"$_ikesu_guard_trap_action"$'\n'fi
-  fi
-  builtin printf -v "_ikesu_guard_trap_body_$_ikesu_guard_trap_name" '%s' "$_ikesu_guard_trap_action"
-  _ikesu_guard_trap_q=${_ikesu_guard_trap_action//\'/\'\\\'\'}
-  builtin printf -v "_ikesu_guard_trap_view_$_ikesu_guard_trap_name" "trap -- '%s' %s" "$_ikesu_guard_trap_q" "$_ikesu_guard_trap_name"
-  _ikesu_guard_trap_q=${_ikesu_guard_trap_text//\'/\'\\\'\'}
-  builtin printf -v "_ikesu_guard_trap_shown_$_ikesu_guard_trap_name" "trap -- '%s' %s" "$_ikesu_guard_trap_q" "$_ikesu_guard_trap_name"
+  _ikesu_guard_trap_text="if _ikesu_guard_trap_check $_ikesu_guard_trap_name \"\$?\"; then _ikesu_guard_trap_return \"\$_ikesu_guard_trap_saved_$_ikesu_guard_trap_name\" && true"$'\n'"$_ikesu_guard_trap_out"$'\n'fi
+  builtin printf -v "_ikesu_guard_trap_body_$_ikesu_guard_trap_name" '%s' "$_ikesu_guard_trap_out"
+  _ikesu_guard_trap_view=${_ikesu_guard_trap_out//\'/\'\\\'\'}
+  builtin printf -v "_ikesu_guard_trap_view_$_ikesu_guard_trap_name" "trap -- '%s' %s" "$_ikesu_guard_trap_view" "$_ikesu_guard_trap_name"
+  _ikesu_guard_trap_view=${_ikesu_guard_trap_text//\'/\'\\\'\'}
+  builtin printf -v "_ikesu_guard_trap_shown_$_ikesu_guard_trap_name" "trap -- '%s' %s" "$_ikesu_guard_trap_view" "$_ikesu_guard_trap_name"
   builtin trap -- "$_ikesu_guard_trap_text" "$_ikesu_guard_trap_name" || _ikesu_guard_trap_rc=$?
  done
  return "$_ikesu_guard_trap_rc"
 }
 `
 
-// zshInternalCases narrows the old frame skip of TRAPDEBUG. zsh reports a
-// whole compound command per event and runs no TRAPDEBUG inside a trap, so
-// in these frames only the function's own lines can run: they are skipped
-// when the frame's flag is set, and the line that sets the flag itself.
+// zshStartupTraps judges, once, every trap the user's startup files left:
+// trap … EXIT/ZERR/ERR and other signals, and TRAP<SIG> functions. The same
+// judgment as a registration in the shell applies. zsh runs no TRAPDEBUG
+// inside a trap, so this is the only check these texts get. The listing goes
+// through a private file: a subshell would not list the EXIT trap.
+func (a *Assets) zshStartupTraps() string {
+	return fmt.Sprintf(`if [[ %s ]] && [[ -n ${IKESU_GUARD_SHELL_DIR-} ]]; then
+ _ikesu_guard_trap_file="${IKESU_GUARD_SHELL_DIR}/.traps.$$"
+ if builtin trap >| "$_ikesu_guard_trap_file"; then
+  _ikesu_guard_trap_list="$(<"$_ikesu_guard_trap_file")"
+ else
+  _ikesu_guard_trap_list="trap -- unreadable EXIT"
+ fi
+ zmodload -F zsh/files b:zf_rm 2>/dev/null && zf_rm -f -- "$_ikesu_guard_trap_file" 2>/dev/null
+ if [[ -n $_ikesu_guard_trap_list ]]; then
+  # A rejected EXIT text must not run when the shell exits here.
+  IKESU_GUARD_SHELL_FUNCTIONS="${(k)functions}" %s guard line --via zsh-debug -- "$_ikesu_guard_trap_list" || {
+   _ikesu_guard_trap_rc=$?
+   builtin trap - EXIT
+   builtin unfunction TRAPEXIT 2>/dev/null
+   builtin exit "$_ikesu_guard_trap_rc"
+  }
+ fi
+ unset _ikesu_guard_trap_file _ikesu_guard_trap_list
+fi
+`, a.shellActive(), a.invocation())
+}
+
+// zshInternalCases narrows the frame skip of TRAPDEBUG to the forwarding
+// functions' own lines. zsh reports a whole compound command per event and
+// indents it with tabs, so an event counts as the function's own line when,
+// without tabs, it is part of the function's text without tabs.
 func (a *Assets) zshInternalCases() string {
-	var b strings.Builder
-	for _, frame := range []string{"_ikesu_guard_forward", "_ikesu_guard_command"} {
-		fmt.Fprintf(&b, " %s|%s) return 0;;\n", quote(frame+":local _ikesu_guard_in_wrapper=1"), quote(frame+":local _ikesu_guard_in_wrapper=1 "))
-		fmt.Fprintf(&b, " %s*) [[ ${_ikesu_guard_in_wrapper-} == 1 ]] && return 0;;\n", quote(frame+":"))
+	if len(a.Config.Commands()) == 0 {
+		return ""
 	}
-	return b.String()
+	return ` case "${funcstack[2]:-}" in _ikesu_guard_forward|_ikesu_guard_command)
+  case "${ZSH_DEBUG_CMD-}" in 'local _ikesu_guard_in_wrapper=1'|'local _ikesu_guard_in_wrapper=1 ') return 0;; esac
+  [[ ${_ikesu_guard_in_wrapper-} == 1 && ${_ikesu_guard_ztexts-} == *"${ZSH_DEBUG_CMD//$'\t'/}"* ]] && return 0;;
+ esac
+`
 }
 
 // zshWrapperCalls accepts the calls the generated wrappers make, only in the
@@ -198,35 +251,4 @@ func (a *Assets) zshWrapperCalls() string {
 		fmt.Fprintf(&b, " %s) [[ ${funcstack[2]-} == command ]] && return 0;;\n", quote(`_ikesu_guard_command "$@" || return $?`))
 	}
 	return b.String()
-}
-
-// zshTrapRewrap wraps a ZERR trap left by the user's startup files. zsh runs
-// no TRAPDEBUG inside a trap, so each run first sends the stored text to the
-// judge. The text itself still runs inline, in the trap's own frame.
-func (a *Assets) zshTrapRewrap() string {
-	return fmt.Sprintf(`_ikesu_guard_trap_check() {
- local _ikesu_guard_trap_ref="_ikesu_guard_trap_body_$1"
- typeset -g "_ikesu_guard_trap_saved_$1=${2:-0}"
- if [[ %s ]]; then
-  %s guard line --via zsh-debug -- "${(P)_ikesu_guard_trap_ref-}" || exit $?
- fi
- return 0
-}
-_ikesu_guard_trap_return() { return "${1:-0}"; }
-if (( ${+functions[TRAPZERR]} )); then
- _ikesu_guard_trap_body_ZERR="${functions[TRAPZERR]}"
- builtin eval "TRAPZERR() {
-if _ikesu_guard_trap_check ZERR \$?; then _ikesu_guard_trap_return \"\$_ikesu_guard_trap_saved_ZERR\" && :
-${_ikesu_guard_trap_body_ZERR}
-fi
-}"
-else
- _ikesu_guard_trap_body_ZERR="$(trap() { [[ ${@[-1]} == ZERR ]] && builtin print -rn -- "$2"; }; builtin eval "$(builtin trap)")"
- if [[ -n $_ikesu_guard_trap_body_ZERR ]]; then
-  builtin trap "if _ikesu_guard_trap_check ZERR \$?; then _ikesu_guard_trap_return \"\$_ikesu_guard_trap_saved_ZERR\" && :
-${_ikesu_guard_trap_body_ZERR}
-fi" ZERR
- fi
-fi
-`, a.shellActive(), a.invocation())
 }

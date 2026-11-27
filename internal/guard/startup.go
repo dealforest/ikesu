@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/kazuph/ikesu/internal/childenv"
@@ -76,32 +77,79 @@ fi
 // Use the same generator when proving a child bash will read our DEBUG hook.
 // The judging functions and a startup DEBUG trap exist before the user's
 // BASH_ENV runs. The startup trap does not judge that file. When the shell
-// leaves it, normally or because an expansion error cut it short, the trap
-// finishes the setup once and judges from that command on.
+// leaves it, normally or because an error cut it short, the trap finishes the
+// setup once and judges from that command on.
 func (a *Assets) bashStartup(dir string) string {
-	// Read the user's BASH_ENV with nounset suspended so an unset variable
-	// cannot interrupt startup. Restore it before DEBUG would check the set.
+	// Read the user's BASH_ENV with an inherited nounset suspended so an unset
+	// variable cannot interrupt startup. A set -u of that file itself stays.
 	suspendNounset := `builtin unset _ikesu_guard_nounset
 case $- in *u*) builtin set +u; _ikesu_guard_nounset=1;; esac
 `
 	restoreNounset := `if [[ ${_ikesu_guard_nounset-} == 1 ]]; then builtin unset _ikesu_guard_nounset; builtin set -u; fi
 `
-	return a.generationHeader() + suspendNounset + bashRequestReasonCapture + restoreZdotdir + a.bashCoreFunctions() + a.debugHook("bash") + a.bashSetup(dir, restoreNounset) + a.bashFinalize() + `if [[ $- != *i* ]]; then
+	text := a.generationHeader() + suspendNounset + bashRequestReasonCapture + restoreZdotdir + a.bashCoreFunctions() + a.debugHook("bash") + a.bashSetup(dir, restoreNounset) + a.bashFinalize() + `if [[ $- != *i* ]]; then
+builtin unset _ikesu_guard_finalized _ikesu_guard_startup_stage _ikesu_guard_startup_strict
+_ikesu_guard_wrapper_names=
 _ikesu_guard_startup_file="${BASH_SOURCE[0]-}"
 _ikesu_guard_startup_loader="${BASH_SOURCE[1]-}"
 _ikesu_guard_startup_orig="${IKESU_GUARD_BASH_ENV_ORIG-}"
-readonly _ikesu_guard_startup_file _ikesu_guard_startup_loader _ikesu_guard_startup_orig
+` + bashStdinProbe + `_ikesu_guard_source_line=$((LINENO + @SOURCE_OFF@)) _ikesu_guard_done_line=$((LINENO + @DONE_OFF@))
+readonly _ikesu_guard_startup_file _ikesu_guard_startup_loader _ikesu_guard_startup_orig _ikesu_guard_startup_strict _ikesu_guard_source_line _ikesu_guard_done_line
 set -o functrace
-builtin trap 'case $- in *T*) builtin set +T; _ikesu_guard_startup_debug "${BASH_COMMAND-}"; builtin set -T;; *) _ikesu_guard_startup_debug "${BASH_COMMAND-}";; esac' DEBUG
+builtin trap '_ikesu_guard_startup_debug "${BASH_COMMAND-}"' DEBUG
 fi
-if [[ -n "${IKESU_GUARD_BASH_ENV_ORIG-}" && -f "${IKESU_GUARD_BASH_ENV_ORIG-}" ]]; then source "${IKESU_GUARD_BASH_ENV_ORIG-}"; fi
+if [[ -n "${IKESU_GUARD_BASH_ENV_ORIG-}" && -f "${IKESU_GUARD_BASH_ENV_ORIG-}" ]]; then
+_ikesu_guard_startup_stage=orig
+source "${IKESU_GUARD_BASH_ENV_ORIG-}"
+fi
+[[ $- == *i* ]] || _ikesu_guard_startup_done
 if [[ $- != *i* ]]; then
 _ikesu_guard_finalize
+true
 else
 _ikesu_guard_setup
 fi
 `
+	// The file may be read with lines before this text, so the two lines are
+	// counted from the line that records them.
+	base := lineOf(text, "_ikesu_guard_source_line=$((LINENO + @SOURCE_OFF@)) _ikesu_guard_done_line=$((LINENO + @DONE_OFF@))")
+	return strings.NewReplacer("@SOURCE_OFF@", strconv.Itoa(lineOf(text, "source \"${IKESU_GUARD_BASH_ENV_ORIG-}\"")-base), "@DONE_OFF@", strconv.Itoa(lineOf(text, "[[ $- == *i* ]] || _ikesu_guard_startup_done")-base)).Replace(text)
 }
+
+// lineOf is the 1-based number of the line that is exactly line.
+func lineOf(text, line string) int {
+	for n, l := range strings.Split(text, "\n") {
+		if l == line {
+			return n + 1
+		}
+	}
+	return 0
+}
+
+// bashStdinProbe tells, in bash 3.2 without -c, a script file from a script
+// read from standard input. Bash 3.2 shows no difference inside the shell, so
+// it reads the process arguments once. If ps fails or is unclear, the user's
+// BASH_ENV is judged line by line (strict).
+const bashStdinProbe = `if (( BASH_VERSINFO[0] < 4 )) && [[ -z ${BASH_EXECUTION_STRING:-} ]]; then
+_ikesu_guard_startup_strict=1
+if _ikesu_guard_args=$(/bin/ps -ww -o args= -p "$$" 2>/dev/null) && [[ -n $_ikesu_guard_args ]]; then
+builtin read -r -a _ikesu_guard_argv <<< "$_ikesu_guard_args"
+_ikesu_guard_i=1
+while (( _ikesu_guard_i < ${#_ikesu_guard_argv[@]} )); do
+case "${_ikesu_guard_argv[_ikesu_guard_i]}" in
+-o|+o|-O|+O|--rcfile|--init-file) (( _ikesu_guard_i += 2 )); continue;;
+--) (( _ikesu_guard_i + 1 < ${#_ikesu_guard_argv[@]} )) && _ikesu_guard_startup_strict=; break;;
+--*) ;;
+-*s*|+*s*) break;;
+-*|+*) ;;
+*) _ikesu_guard_startup_strict=; break;;
+esac
+(( _ikesu_guard_i += 1 ))
+done
+fi
+builtin unset _ikesu_guard_args _ikesu_guard_argv _ikesu_guard_i
+fi
+`
 
 // bashCoreFunctions defines the forwarding functions before the user's file,
 // read-only, for both kinds of shell.
@@ -141,31 +189,13 @@ fi
 //
 // Leaving the user's file is seen from the stack of the next command. Bash 5
 // drops that file from BASH_SOURCE. Bash 3.2 keeps the cut frames, so a
-// script file shows main above them and a -c string shows line 0. For a
-// script read from standard input, 3.2 shows no difference; a line with a
-// NAME? or NAME:? expansion that can fail, or one that cannot be evaluated
-// here, switches to judging after it runs. A line that could change the
-// DEBUG trap is judged even inside the user's file.
+// script file shows main above them and a -c string shows line 0. A script
+// read from standard input shows no difference in 3.2; there the user's file
+// is judged line by line (strict, see bashStdinProbe). This file's own lines
+// are known by their line numbers while the user's file may still be running,
+// since after a cut a -c string can report this file as its source.
 func (a *Assets) bashFinalize() string {
 	return fmt.Sprintf(`if [[ $- != *i* ]]; then
-_ikesu_guard_startup_scan() {
- local _ikesu_guard_rest="$1" _ikesu_guard_name _ikesu_guard_re='^([A-Za-z_][A-Za-z0-9_]*)(:?)[?]'
- while [[ $_ikesu_guard_rest == *'${'* ]]; do
-  _ikesu_guard_rest="${_ikesu_guard_rest#*'${'}"
-  if [[ $_ikesu_guard_rest =~ $_ikesu_guard_re ]]; then
-   _ikesu_guard_name="${BASH_REMATCH[1]}"
-   if [[ -n ${BASH_REMATCH[2]} ]]; then
-    [[ -n ${!_ikesu_guard_name-} ]] && continue
-   else
-    [[ ${!_ikesu_guard_name+x} ]] && continue
-   fi
-   _ikesu_guard_startup_risk=1
-   return 0
-  fi
-  case "${_ikesu_guard_rest%%%%'}'*}" in *'?'*) _ikesu_guard_startup_risk=1; return 0;; esac
- done
- return 0
-}
 _ikesu_guard_startup_debug() {
  local _ikesu_guard_frame _ikesu_guard_inside=0
  # Bash 3.2 keeps this trap when a DEBUG handler replaces it.
@@ -173,40 +203,51 @@ _ikesu_guard_startup_debug() {
   [[ ${FUNCNAME[1]-} == _ikesu_guard_finalize ]] || _ikesu_guard_dispatch "$1"
   return 0
  fi
- # The setup's own lines, including the calls made by _ikesu_guard_finalize.
- [[ ${BASH_SOURCE[1]-} == "$_ikesu_guard_startup_file" ]] && return 0
+ if [[ ${BASH_SOURCE[1]-} == "$_ikesu_guard_startup_file" ]]; then
+  [[ ${_ikesu_guard_startup_stage-} != orig ]] && return 0
+  # The guard's own functions, such as the check of the RETURN trap that
+  # runs when source leaves the user's file, do not end the startup.
+  [[ ${FUNCNAME[1]-} == _ikesu_guard_* ]] && return 0
+  case "${BASH_LINENO[0]-}" in "$_ikesu_guard_source_line"|"$_ikesu_guard_done_line") return 0;; esac
+ fi
  for _ikesu_guard_frame in "${BASH_SOURCE[@]:1}"; do
   [[ $_ikesu_guard_frame == "$_ikesu_guard_startup_orig" ]] && _ikesu_guard_inside=1
  done
  [[ ${FUNCNAME[1]-} == main && ${BASH_SOURCE[1]-} != "$_ikesu_guard_startup_orig" ]] && _ikesu_guard_inside=0
  [[ ${BASH_LINENO[0]-} == 0 ]] && _ikesu_guard_inside=0
- [[ ${_ikesu_guard_startup_risk-} == 1 ]] && _ikesu_guard_inside=0
  if [[ $_ikesu_guard_inside == 1 ]]; then
-  case $- in *u*) builtin set +u; _ikesu_guard_nounset=1;; esac
-  (( BASH_VERSINFO[0] >= 5 )) || [[ -n ${BASH_EXECUTION_STRING:-} ]] || _ikesu_guard_startup_scan "$1"
-  case "$1" in *[Dd][Ee][Bb][Uu][Gg]*|*functrace*|*extdebug*|set*+*T*) _ikesu_guard_dispatch "$1";; esac
+  if [[ -n ${_ikesu_guard_startup_strict-} ]]; then
+   _ikesu_guard_dispatch "$1"
+  else
+   # A line of the user's file that names the guard's state is judged too.
+   case "$1" in *trap*[Dd][Ee][Bb][Uu][Gg]*|*set*functrace*|*set*+*T*|*shopt*extdebug*) _ikesu_guard_dispatch "$1";;
+   *_ikesu_guard_*) [[ ${BASH_SOURCE[1]-} == "$_ikesu_guard_startup_file" ]] || _ikesu_guard_dispatch "$1";; esac
+  fi
   return 0
  fi
  _ikesu_guard_finalize
  _ikesu_guard_dispatch "$1"
 }
+_ikesu_guard_startup_done() {
+ _ikesu_guard_startup_stage=done
+}
 _ikesu_guard_finalize() {
- local _ikesu_guard_trap_name _ikesu_guard_trap_flags=$- _ikesu_guard_trap_words _ikesu_guard_trap_RETURN _ikesu_guard_trap_ERR _ikesu_guard_trap_EXIT
+ local _ikesu_guard_trap_name _ikesu_guard_trap_words _ikesu_guard_trap_RETURN _ikesu_guard_trap_ERR _ikesu_guard_trap_EXIT
  [[ ${_ikesu_guard_finalized-} == 1 ]] && return 0
- # Read the user's traps with functrace on (a subshell shows RETURN only
- # then) and wrap RETURN first, so no function returns into the raw text.
+ # A set -u of the user's file is restored after the setup.
+ case $- in *u*) builtin set +u; _ikesu_guard_nounset=1;; esac
+ # Read the traps with functrace on: a subshell shows RETURN only then. It
+ # stays on: the startup ends by setting it.
  builtin set -T
  _ikesu_guard_trap_RETURN=$(builtin trap -p RETURN)
  _ikesu_guard_trap_ERR=$(builtin trap -p ERR)
  _ikesu_guard_trap_EXIT=$(builtin trap -p EXIT)
- [[ $_ikesu_guard_trap_flags == *T* ]] || builtin set +T
- # The trap wrapper existed before the user's file. Wrap only traps it set
- # with the builtin directly.
- for _ikesu_guard_trap_name in RETURN ERR EXIT; do
+ # ERR and RETURN set with the builtin directly are wrapped like the others.
+ for _ikesu_guard_trap_name in RETURN ERR; do
   _ikesu_guard_trap_words="_ikesu_guard_trap_$_ikesu_guard_trap_name"
   [[ -n ${!_ikesu_guard_trap_words} ]] || continue
   builtin eval "_ikesu_guard_trap_words=(${!_ikesu_guard_trap_words#trap })"
-  case "${_ikesu_guard_trap_words[1]-}" in ''|_ikesu_guard_run_exit_trap|'if _ikesu_guard_trap_check '*) continue;; esac
+  case "${_ikesu_guard_trap_words[1]-}" in ''|'if _ikesu_guard_trap_check '*) continue;; esac
   trap -- "${_ikesu_guard_trap_words[1]}" "$_ikesu_guard_trap_name"
  done
 if [[ ${_ikesu_guard_reason_name+x} ]] && [[ %s ]]; then
@@ -215,12 +256,15 @@ if [[ ${_ikesu_guard_reason_name+x} ]] && [[ %s ]]; then
 if [[ %s ]] && [[ -n "${BASH_EXECUTION_STRING:-}" ]]; then
  %s guard line --via exec-string -- "${BASH_EXECUTION_STRING-}" || exit $?
 fi
+ # An EXIT text the user's file left gets the judgment of a registration.
+ [[ -z $_ikesu_guard_trap_EXIT ]] || _ikesu_guard_debug "$_ikesu_guard_trap_EXIT" force
  set -o functrace
  _ikesu_guard_finalized=1
  readonly _ikesu_guard_finalized _ikesu_guard_wrapper_names
- builtin trap 'case $- in *T*) builtin set +T; _ikesu_guard_dispatch "${BASH_COMMAND-}"; builtin set -T;; *) _ikesu_guard_dispatch "${BASH_COMMAND-}";; esac' DEBUG
+ builtin trap '_ikesu_guard_dispatch "${BASH_COMMAND-}"' DEBUG
+ true
 }
-readonly -f _ikesu_guard_startup_scan _ikesu_guard_startup_debug _ikesu_guard_finalize
+readonly -f _ikesu_guard_startup_debug _ikesu_guard_startup_done _ikesu_guard_finalize
 fi
 `, a.shellActive(), bashRequestReasonRestore, a.shellActive(), a.invocation())
 }
@@ -262,7 +306,7 @@ export IKESU_GUARD_ZDOTDIR_ORIG IKESU_GUARD_ZDOTDIR_SET
 	for _, phase := range phases {
 		body := a.generationHeader() + suspendNounset + restoreZdotdir + fmt.Sprintf("if [[ -f \"${ZDOTDIR:-${HOME-}}/%s\" ]]; then source \"${ZDOTDIR:-${HOME-}}/%s\"; fi\n", phase.name, phase.name) + capture + childenv.GuardPathPin
 		if phase.name == ".zshenv" {
-			body += wrappers + a.lineHook()
+			body += wrappers + zshWrapperTexts + a.lineHook()
 		}
 		body += "if " + phase.next + "; then export ZDOTDIR=\"${IKESU_GUARD_SHELL_DIR-}\"; fi\n" + restoreNounset
 		if phase.name == ".zshenv" {
@@ -277,3 +321,8 @@ export IKESU_GUARD_ZDOTDIR_ORIG IKESU_GUARD_ZDOTDIR_SET
 	files["bash-env.current"] = []byte(a.bashStartup(dir))
 	return files
 }
+
+// zshWrapperTexts keeps the forwarding functions' text without tabs, for the
+// TRAPDEBUG skip of their own lines (see zshInternalCases).
+const zshWrapperTexts = `_ikesu_guard_ztexts="${${functions[_ikesu_guard_forward]-}//$'\t'/}${${functions[_ikesu_guard_command]-}//$'\t'/}"
+`

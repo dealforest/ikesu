@@ -143,7 +143,7 @@ func boundaryTier(i Input) (string, int) {
 			}
 		}
 	case "trap":
-		if !has(args, "-p") {
+		if !has([]string{"-p", "-P", "-l"}, arg(args, 0)) {
 			for _, a := range args {
 				if has([]string{"DEBUG", "ERR", "RETURN"}, trapSignal(a)) {
 					return "判定のトラップの変更・解除には承認が必要です", TierL3
