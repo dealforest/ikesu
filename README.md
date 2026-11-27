@@ -67,15 +67,44 @@ Lets you answer agents' confirmations and questions in a native window. The pane
 
 ### Sidebar plugins
 
-Executable scripts in `~/.config/ikesu/plugins/sidebar/` run at the interval in their name (named like SwiftBar plugins). The lines they print before `---` are shown, with their ANSI colors, at the bottom of the sidebar. Scripts get the sidebar width in `IKESU_SIDEBAR_COLUMNS`.
+Executable scripts in `~/.config/ikesu/plugins/sidebar/` run at the interval in their name (named like SwiftBar plugins). The lines they print before `---` are shown, with their ANSI SGR colors, at the bottom of the sidebar. Scripts receive the target sidebar's inner width in `IKESU_SIDEBAR_COLUMNS`.
+
+With `config_version = 2` (the default for fresh configs), opt in from `~/.config/ikesu/config.toml`:
+
+```toml
+[ui.sidebar_plugins]
+enabled = true
+```
+
+#### Placement and metadata
+
+- Directory: `~/.config/ikesu/plugins/sidebar/` or `left/` (defaults to the left sidebar), or `right/` (defaults to the right sidebar)
+- File name: `<name>.<number><unit>[.<ext>]` (`s`, `m`, `h`, `d`; must be executable via `chmod +x`)
+- Comment metadata in the first 20 lines overrides folder placement, title, and sort order:
+
+```sh
+# ikesu.position = right   # left or right
+# ikesu.title = Weather    # heading label (defaults to <name>)
+# ikesu.order = 10         # sort order (ascending, default 0)
+```
+
+The folder is rescanned every 10 seconds, so adding, editing, or removing scripts takes effect without restarting. Intervals under 10 seconds run every 10 seconds, and a script still running after 10 seconds is stopped. Each plugin gets a heading; click it to fold.
+
+#### Sample plugins
+
+Ready-to-use samples live in [examples/sidebar-plugins/](examples/sidebar-plugins/):
+
+| File | Side | Description |
+|---|---|---|
+| [resources.1m.sh](examples/sidebar-plugins/resources.1m.sh) | Left | macOS CPU usage (0–100%), memory, and disk bars plus 1m/5m/15m load averages |
+| [weather.10m.py](examples/sidebar-plugins/weather.10m.py) | Right | Real-time weather, today's min/max temperature, and 2-hourly precipitation trend via Open-Meteo (defaults to Tokyo; override `LAT`/`LON` or `WEATHER_LAT`/`WEATHER_LON`) |
+| [usage.30s.sh](examples/sidebar-plugins/usage.30s.sh) | Right | AI usage limit bars via AgentPal (`AgentPal usage`) |
 
 ```sh
 mkdir -p ~/.config/ikesu/plugins/sidebar
-printf '#!/bin/sh\ncurl -s "wttr.in/Tokyo?format=3"\n' > ~/.config/ikesu/plugins/sidebar/tenki.1h.sh
-chmod +x ~/.config/ikesu/plugins/sidebar/tenki.1h.sh
+cp examples/sidebar-plugins/resources.1m.sh examples/sidebar-plugins/weather.10m.py ~/.config/ikesu/plugins/sidebar/
+chmod +x ~/.config/ikesu/plugins/sidebar/*
 ```
-
-Write the interval as `10s`, `5m`, `1h` or `1d`. Intervals under ten seconds run every ten seconds, and a script still running after ten seconds is stopped. Each plugin gets a heading; click it to fold. For Claude Code and Codex usage limits, call AgentPal's `agentpal usage` from a plugin.
 
 ## Koi pond
 

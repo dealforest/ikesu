@@ -284,10 +284,10 @@ func (a *App) mainMenuItems() []render.MenuItem {
 		koiLabel = "koi: on"
 	}
 	items := []render.MenuItem{
-		{Label: "new workspace"}, {Label: "new tab"}, {Label: "delete idle panes…"}, {Label: menuPruneWorkspaces}, {Separator: true}, {Label: "settings"}, {Label: "keybinds"}, {Label: "reload config"}, {Label: koiLabel}, {Label: "sidebar narrow"}, {Label: "sidebar normal"}, {Label: "sidebar wide"}, {Separator: true}, {Label: "restore agents...", Disabled: a.restoreHook == nil}, {Label: menuReopenSpace, Disabled: a.closedSpaceReopen == nil}, {Separator: true}, {Label: "detach", Disabled: a.detacher == nil}, {Separator: true}, {Label: "add machine..."}, {Label: "remove machine..."}, {Separator: true}, {Label: "stop server"}, {Label: "restart", Disabled: a.restartHook == nil},
+		{Label: "new workspace"}, {Label: "new tab"}, {Separator: true}, {Label: "delete idle panes…"}, {Label: menuPruneWorkspaces}, {Separator: true}, {Label: "settings"}, {Label: "keybinds"}, {Label: "reload config"}, {Label: koiLabel}, {Label: "sidebar narrow"}, {Label: "sidebar normal"}, {Label: "sidebar wide"}, {Separator: true}, {Label: "restore agents...", Disabled: a.restoreHook == nil}, {Label: menuReopenSpace, Disabled: a.closedSpaceReopen == nil}, {Separator: true}, {Label: "detach", Disabled: a.detacher == nil}, {Separator: true}, {Label: "add machine..."}, {Label: "remove machine..."}, {Separator: true}, {Label: "stop server"}, {Label: "restart", Disabled: a.restartHook == nil},
 	}
 	if !a.sidebarConfig.UI.NativeMenus {
-		items = append(items[:6], append([]render.MenuItem{{Label: "Android pairing QR..."}}, items[6:]...)...)
+		items = append(items[:7], append([]render.MenuItem{{Label: "Android pairing QR..."}}, items[7:]...)...)
 	}
 	if a.clientMachines || a.machineRequest != nil {
 		var base, machines []render.MenuItem
