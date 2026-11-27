@@ -352,19 +352,20 @@ fi
 }
 
 // zshStartupHook comes before the user's .zshenv in a shell that is not
-// interactive. It keeps the directory of the generated files read-only, the
+// interactive. It keeps the guard's shell directory (the loaders and the
+// generated files) read-only, the
 // helpers that list the user's functions and the traps, and a TRAPDEBUG for
 // the startup that judges the lines of the user's files that register a trap
 // (an EXIT text may run when a startup file ends the shell).
 func (a *Assets) zshStartupHook() string {
 	return fmt.Sprintf(`if [[ ! -o interactive ]]; then
-typeset -gr _ikesu_guard_zdir="${${(%%):-%%x}:h}"
+typeset -gr _ikesu_guard_zdir=%s _ikesu_guard_zgen="${${(%%):-%%x}:h}"
 _ikesu_guard_zfuncs() {
  # The functions the generated files defined are the guard's.
  local _ikesu_guard_n
  _ikesu_guard_zf=
  for _ikesu_guard_n in ${(k)functions}; do
-  [[ ${functions_source[$_ikesu_guard_n]-} == "$_ikesu_guard_zdir"/* ]] || _ikesu_guard_zf+="$_ikesu_guard_n "
+  [[ ${functions_source[$_ikesu_guard_n]-} == ("$_ikesu_guard_zdir"|"$_ikesu_guard_zgen")/* ]] || _ikesu_guard_zf+="$_ikesu_guard_n "
  done
 }
 _ikesu_guard_ztraps() {
@@ -380,7 +381,9 @@ _ikesu_guard_ztraps() {
 }
 setopt DEBUG_BEFORE_CMD
 TRAPDEBUG() {
- [[ ${funcfiletrace[1]-} == "$_ikesu_guard_zdir"/* ]] && return 0
+ # The loaders and the generated files are the guard's; the loader may name
+ # the generated file by another path than the shell directory.
+ [[ ${funcfiletrace[1]-} == ("$_ikesu_guard_zdir"|"$_ikesu_guard_zgen")/* ]] && return 0
  if [[ %s ]]; then
   case "${ZSH_DEBUG_CMD-}" in
   *trap*|*TRAP*|*functions*) _ikesu_guard_zfuncs; IKESU_GUARD_SHELL_FUNCTIONS=$_ikesu_guard_zf %s guard line --via zsh-debug -- "${ZSH_DEBUG_CMD-}" || exit $?;;
@@ -389,7 +392,7 @@ TRAPDEBUG() {
  return 0
 }
 fi
-`, quote(filepath.Dir(a.RuntimePath())), a.shellActive(), a.invocation())
+`, quote(filepath.Dir(a.RuntimePath())), quote(filepath.Dir(a.RuntimePath())), a.shellActive(), a.invocation())
 }
 
 // zshInternalCases narrows the frame skip of TRAPDEBUG to the forwarding
