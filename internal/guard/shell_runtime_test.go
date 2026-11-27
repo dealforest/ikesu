@@ -235,3 +235,175 @@ func TestBashRuntimeSnapshotAndFailureStops(t *testing.T) {
 		})
 	}
 }
+
+const guardOptionsDangerousScript = `rm "$IKESU_RUNTIME_ROOT/home/../victim"
+printf after > "$IKESU_RUNTIME_ROOT/after"
+`
+
+func TestBashRuntimeShellOptions(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "ikesu")
+	guardBinary(t, binary)
+	const safeScript = `x=1
+[[ $x -eq 1 ]]
+new_variable=assigned
+(( x + 1 ))
+f() { printf '%s\n' "$new_variable" > "$IKESU_RUNTIME_ROOT/result"; }
+f
+`
+	for name, shell := range map[string]string{"system": "/bin/bash", "homebrew": "/opt/homebrew/bin/bash"} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := os.Stat(shell); err != nil {
+				if name == "homebrew" && os.IsNotExist(err) {
+					t.Skip("Homebrew bashがないため、この版だけ未実施")
+				}
+				t.Fatal(err)
+			}
+			for _, options := range []struct {
+				name, checks, errTrap string
+				args                  []string
+			}{
+				{name: "default"},
+				{name: "nounset", checks: "[[ $- == *u* ]] || exit 72\n", args: []string{"-u"}},
+				{name: "errexit", checks: "[[ $- == *e* ]] || exit 72\n", args: []string{"-e"}},
+				{name: "pipefail", checks: "[[ -o pipefail ]] || exit 72\n", args: []string{"-o", "pipefail"}},
+				{name: "strict", checks: "[[ $- == *e* && $- == *u* && -o pipefail ]] || exit 72\n", args: []string{"-euo", "pipefail"}},
+				{name: "errtrace", checks: "[[ $- == *e* && $- == *E* ]] || exit 72\n", errTrap: `trap 'printf err >> "$IKESU_RUNTIME_ROOT/err-trap"' ERR` + "\n", args: []string{"-eE"}},
+			} {
+				for kind, script := range map[string]string{"safe": safeScript, "dangerous": guardOptionsDangerousScript} {
+					t.Run(options.name+"/"+kind, func(t *testing.T) {
+						t.Parallel()
+						root := t.TempDir()
+						orig := filepath.Join(root, "original")
+						body := ": \"$UNDEFINED_IN_ORIGINAL\"\nORIGINAL_LOADER_SEEN=1\n" + options.errTrap
+						if err := os.WriteFile(orig, []byte(body), 0600); err != nil {
+							t.Fatal(err)
+						}
+						env := prepareGuardOptionsFixture(t, root, binary, shell, "BASH_ENV="+orig)
+						err, output := runGuardOptionsScript(t, root, shell, env, options.args, "[[ $ORIGINAL_LOADER_SEEN == 1 && $SHELLOPTS == *functrace* ]] || exit 71\n"+options.checks+script)
+						if kind == "safe" {
+							if err != nil {
+								t.Fatalf("safe script: %v\n%s", err, output)
+							}
+							if result, err := os.ReadFile(filepath.Join(root, "result")); err != nil || string(result) != "assigned\n" {
+								t.Fatalf("result=%q err=%v\n%s", result, err, output)
+							}
+							if _, err := os.Stat(filepath.Join(root, "err-trap")); !os.IsNotExist(err) {
+								t.Fatalf("ERR trap ran inside guard: %v\n%s", err, output)
+							}
+						} else {
+							assertGuardOptionsStopped(t, root, err, output)
+						}
+					})
+				}
+			}
+		})
+	}
+}
+
+func TestShellRuntimeNounsetStartup(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "ikesu")
+	guardBinary(t, binary)
+	for _, tc := range []struct {
+		name, shell string
+		args, extra []string
+	}{
+		{name: "bash-option", shell: "/bin/bash", args: []string{"-u"}},
+		{name: "bash-environment", shell: "/bin/bash", extra: []string{"SHELLOPTS=nounset"}},
+		{name: "zsh-option", shell: "/bin/zsh", args: []string{"-u"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			env := EnvMap(prepareGuardOptionsFixture(t, root, binary, tc.shell, tc.extra...))
+			delete(env, "IKESU_GUARD_ZDOTDIR_SET")
+			delete(env, "IKESU_GUARD_ZDOTDIR_ORIG")
+			delete(env, "IKESU_GUARD_BASH_ENV_ORIG")
+			err, output := runGuardOptionsScript(t, root, tc.shell, environment(env), tc.args, "[[ $- == *u* ]] || exit 72\n"+guardOptionsDangerousScript)
+			assertGuardOptionsStopped(t, root, err, output)
+		})
+	}
+}
+
+func prepareGuardOptionsFixture(t *testing.T, root, binary, shell string, extra ...string) []string {
+	t.Helper()
+	if err := os.Mkdir(filepath.Join(root, "home"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "victim"), []byte("unchanged"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a := NewAssets(root, "p_1", binary, Config{})
+	if shell == "/bin/zsh" {
+		a.ConfigureShell(shell)
+	}
+	t.Cleanup(func() { a.Close() })
+	env, err := a.Prepare(append([]string{"HOME=" + root, "PATH=/usr/bin:/bin", "IKESU_PANE_ID=p1", "IKESU_SOCKET_PATH=" + realGuardFixture(t), "IKESU_SOCKET_PATH_EXPLICIT=1", "IKESU_RUNTIME_ROOT=" + root}, extra...), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Sync("codex"); err != nil {
+		t.Fatal(err)
+	}
+	return env
+}
+
+func runGuardOptionsScript(t *testing.T, root, shell string, env, options []string, script string) (error, string) {
+	t.Helper()
+	file := filepath.Join(root, "script.sh")
+	if err := os.WriteFile(file, []byte(script), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, shell, append(append([]string{}, options...), file)...)
+	cmd.Env, cmd.Dir = env, root
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("shell timed out: %v\n%s", err, output)
+	}
+	return err, string(output)
+}
+
+func assertGuardOptionsStopped(t *testing.T, root string, err error, output string) {
+	t.Helper()
+	if err == nil || !strings.Contains(output, "申請文") {
+		t.Fatalf("expected guard rejection: %v\n%s", err, output)
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "victim")); err != nil || string(data) != "unchanged" {
+		t.Fatalf("victim changed: %q, %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "after")); !os.IsNotExist(err) {
+		t.Fatalf("post-failure line ran: %v", err)
+	}
+}
+
+func TestBashRuntimePipefailWithUnreadSnapshot(t *testing.T) {
+	for name, options := range map[string][]string{"default": nil, "pipefail": {"-o", "pipefail"}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			a := NewAssets(root, "p_1", "/unused", Config{})
+			if err := os.MkdirAll(filepath.Dir(a.MarkerPath), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(a.MarkerPath, nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			startup := a.bashStartup(filepath.Dir(a.RuntimePath()))
+			right := a.identity() + " builtin exec " + quote(a.RuntimePath()) + ` guard line --via bash-debug --shell-pid "$$" -- "$1"`
+			if strings.Count(startup, right) != 1 {
+				t.Fatal("could not locate snapshot consumer")
+			}
+			startup = strings.Replace(startup, right, "exit 0", 1)
+			script := "snapshot_data=" + strings.Repeat("x", 200*1024) + "\n" + startup + "printf survived > result\n"
+			env := []string{"PATH=/usr/bin:/bin", "IKESU_GUARD_BIN=" + a.Bin}
+			err, output := runGuardOptionsScript(t, root, "/bin/bash", env, options, script)
+			if err != nil {
+				t.Fatalf("shell did not survive: %v\n%s", err, output)
+			}
+			if result, err := os.ReadFile(filepath.Join(root, "result")); err != nil || string(result) != "survived" {
+				t.Fatalf("result=%q err=%v\n%s", result, err, output)
+			}
+		})
+	}
+}

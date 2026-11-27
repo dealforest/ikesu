@@ -41,7 +41,7 @@ _ikesu_guard_simple_form() {
   case " $_ikesu_guard_text " in *' -eq '*|*' -ne '*|*' -gt '*|*' -ge '*|*' -lt '*|*' -le '*)
    case "$_ikesu_guard_text" in *'${'*) return 1;; esac
    # Consume $$ as a pair before checking the character after each remaining $.
-   case "${_ikesu_guard_text//\$\$/}" in *'$'[!a-zA-Z_#?$!]*) return 1;; esac
+   case "${_ikesu_guard_text//\$\$/}" in *'$'[!a-zA-Z_#?\$!]*) return 1;; esac
    _ikesu_guard_text="${_ikesu_guard_text//\$/}"
    _ikesu_guard_text="${_ikesu_guard_text//\"/}"
    _ikesu_guard_text="${_ikesu_guard_text//\'/}"
