@@ -10,6 +10,9 @@ import (
 )
 
 // Exercise the generated builtin-only selector without installing any trap.
+// The full race run can exceed five seconds because each combination of input,
+// IFS, and nounset starts a fresh process on both Bash versions. Run them
+// sequentially to keep the number of concurrent shell processes bounded.
 func TestBashCheapSelector(t *testing.T) {
 	for name, shell := range map[string]string{"system": "/bin/bash", "homebrew": "/opt/homebrew/bin/bash"} {
 		t.Run(name, func(t *testing.T) {
