@@ -1201,7 +1201,13 @@ func (s *Server) attach(conn net.Conn) {
 			s.app.Do(func() {
 				list := c.viewer.IdlePanes(s.app)
 				list.ServerGeneration = s.generation
-				c.post(clientMsg{Type: "idle_panes_result", IdleRequest: m.IdleRequest, IdlePanes: &list})
+				roots := s.idlePaneRoots(list)
+				request := m.IdleRequest
+				// One ps run outside the app loop; the list goes out either way.
+				go func() {
+					measureIdleMemory(roots, &list)
+					c.post(clientMsg{Type: "idle_panes_result", IdleRequest: request, IdlePanes: &list})
+				}()
 			})
 		case "idle_delete":
 			s.app.Do(func() {

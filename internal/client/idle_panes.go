@@ -3,7 +3,10 @@ package client
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
 
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/kazuph/ikesu/internal/endpoint"
@@ -16,6 +19,7 @@ type idleEntry struct {
 	machine, label, server string
 	pane                   endpoint.IdlePane
 	selected               bool
+	keep                   string // why the pane starts unchecked; "" when it starts checked
 }
 type idleFailure struct{ label, reason string }
 type idleDialog struct {
@@ -23,11 +27,17 @@ type idleDialog struct {
 	entries                       []idleEntry
 	failures                      []idleFailure
 	pending                       map[string]int
+	machines                      []idleMachine // queried machines, in sidebar order
 	threshold, cursor             int
 	loading, confirming, deleting bool
 	deleted, failed               int
 	kept                          bool
 }
+
+type idleMachine struct{ id, label string }
+
+// idleDialogLines is how many body lines render.Dialog draws.
+const idleDialogLines = 10
 
 var idleThresholds = []time.Duration{24 * time.Hour, 3 * 24 * time.Hour, 7 * 24 * time.Hour}
 var idleThresholdLabels = []string{"24h", "3d", "1w"}
@@ -47,6 +57,7 @@ func (m *machineClient) openIdlePanes() {
 		}
 		if err := e.connection.enqueue(msg{Type: "idle_panes", IdleRequest: d.request}); err == nil {
 			d.pending[id] = 1
+			d.machines = append(d.machines, idleMachine{id, e.profile.Label})
 		} else {
 			d.failures = append(d.failures, idleFailure{e.profile.Label, err.Error()})
 		}
@@ -67,8 +78,8 @@ func (m *machineClient) idleListResult(id string, request uint64, list *endpoint
 		e := m.endpoints[id]
 		for _, p := range list.Panes {
 			hq := m.oyagoi != nil && m.oyagoi.Machine == id && m.oyagoi.Session == m.selectionSession(id) && m.oyagoi.Workspace == p.Workspace && m.oyagoi.Generation == p.WorkspaceGeneration
-			checked := idleInitiallySelected(p, hq, id == m.active)
-			d.entries = append(d.entries, idleEntry{machine: id, label: e.profile.Label, server: list.ServerGeneration, pane: p, selected: checked})
+			keep := idleKeepReason(p, hq, id == m.active)
+			d.entries = append(d.entries, idleEntry{machine: id, label: e.profile.Label, server: list.ServerGeneration, pane: p, selected: keep == "", keep: keep})
 		}
 	} else if e := m.endpoints[id]; e != nil {
 		d.failures = append(d.failures, idleFailure{e.profile.Label, "invalid response"})
@@ -80,7 +91,58 @@ func (m *machineClient) idleListResult(id string, request uint64, list *endpoint
 }
 
 func idleInitiallySelected(p endpoint.IdlePane, hq, activeMachine bool) bool {
-	return (p.State == "idle" || p.State == "done") && p.InputKnown && !p.PendingInput && !(p.Focused && activeMachine) && !hq
+	return idleKeepReason(p, hq, activeMachine) == ""
+}
+
+// idleKeepReason says why a pane starts unchecked, in the words the dialog
+// shows next to it. An empty reason means the pane starts checked.
+func idleKeepReason(p endpoint.IdlePane, hq, activeMachine bool) string {
+	switch {
+	case hq:
+		return "HQ"
+	case p.Focused && activeMachine:
+		return "今見ている"
+	case p.State != "idle" && p.State != "done":
+		return "動作中・確認待ち（" + p.State + "）"
+	case !p.InputKnown:
+		return "入力欄を読めない"
+	case p.PendingInput:
+		return "入力途中の文字がある"
+	}
+	return ""
+}
+
+// selectedMemory sums the measured memory of the checked panes; known is
+// false when any checked pane has no measurement (an older server).
+func (d *idleDialog) selectedMemory() (kib int64, known bool) {
+	known = true
+	for _, i := range d.visible() {
+		if e := d.entries[i]; e.selected {
+			kib += e.pane.MemoryKiB
+			known = known && e.pane.MemoryKiB > 0
+		}
+	}
+	return kib, known
+}
+
+func idleMemory(kib int64) string {
+	if kib >= 1024*1024 {
+		return fmt.Sprintf("%.1f GiB", float64(kib)/(1024*1024))
+	}
+	return fmt.Sprintf("%d MiB", (kib+512)/1024)
+}
+
+// progress lists each queried machine as done (✓) or still answering (…).
+func (d *idleDialog) progress() string {
+	parts := make([]string, 0, len(d.machines))
+	for _, machine := range d.machines {
+		mark := " ✓"
+		if d.pending[machine.id] > 0 {
+			mark = " …"
+		}
+		parts = append(parts, machine.label+mark)
+	}
+	return strings.Join(parts, " · ")
 }
 func (d *idleDialog) visible() []int {
 	var out []int
@@ -100,9 +162,43 @@ func (d *idleDialog) selected() int {
 	}
 	return n
 }
-func (d *idleDialog) dialog() *render.Dialog {
+
+// dialog renders the list. cols is the terminal width; lines are cut to fit.
+func (d *idleDialog) dialog(cols int) *render.Dialog {
+	box := &render.Dialog{Title: "delete idle panes", Cancel: "close", CenterTerminal: true, PreserveTitleCase: true}
+	// Widen the box to its longest line (render.Dialog fits only the detail),
+	// cutting lines that would not fit the terminal.
+	fit := func(lines []string) []string {
+		box.Detail = ansi.Truncate(box.Detail, max(1, cols-8), "…")
+		box.Width = ansi.StringWidth(box.Detail) + 5
+		for i := range lines {
+			lines[i] = ansi.Truncate(lines[i], max(1, cols-8), "…")
+			box.Width = max(box.Width, ansi.StringWidth(lines[i])+5)
+		}
+		return lines
+	}
 	if d.confirming {
-		return &render.Dialog{Title: "delete idle panes", Detail: fmt.Sprintf("delete %d panes? This stops their processes.", d.selected()), Confirm: "delete", Cancel: "cancel", CenterTerminal: true, PreserveTitleCase: true}
+		n := d.selected()
+		box.Detail = fmt.Sprintf("%d 個のペインを閉じて、中のプロセスを止めます。", n)
+		lines := []string{"worktree・ブランチ・ファイルは消しません（マージとは関係ありません）。"}
+		if kib, known := d.selectedMemory(); known && n > 0 {
+			lines = append(lines, "空くメモリ: 約 "+idleMemory(kib))
+		}
+		box.Lines = fit(lines)
+		box.Confirm, box.Cancel = "close panes", "back"
+		return box
+	}
+	if d.deleting {
+		box.Detail = "ペインを閉じています… " + d.progress()
+		fit(nil)
+		box.Confirm, box.Cancel, box.ContinueOnly = "", "", true
+		return box
+	}
+	if d.loading {
+		box.Detail = "動いていないペインを調べています… " + d.progress()
+		fit(nil)
+		box.Confirm, box.ContinueOnly = "cancel", true
+		return box
 	}
 	labels := [3]string{}
 	for i, label := range idleThresholdLabels {
@@ -112,20 +208,36 @@ func (d *idleDialog) dialog() *render.Dialog {
 			labels[i] = "○ " + label
 		}
 	}
-	detail := fmt.Sprintf("idle for: [%s] [%s] [%s] (tab)", labels[0], labels[1], labels[2])
-	if d.loading {
-		detail = "loading panes…"
-	}
-	if d.deleting {
-		detail = "deleting panes…"
-	}
-	lines := []string{}
 	visible := d.visible()
+	selected := d.selected()
+	box.Detail = fmt.Sprintf("止まっている時間: [%s] [%s] [%s] (tab で切替)", labels[0], labels[1], labels[2])
+	lines := []string{"ペインを閉じてプロセスを止めます。worktree・ファイルは消しません（マージとは関係ありません）。"}
+	if len(visible) == 0 {
+		lines = append(lines, fmt.Sprintf("%s以上止まっているペインはありません（調べたエージェントのペイン %d 個）。", idleThresholdLabels[d.threshold], len(d.entries)))
+	} else {
+		summary := fmt.Sprintf("該当 %d 個 · 閉じる [x] %d 個", len(visible), selected)
+		if kib, known := d.selectedMemory(); known && selected > 0 {
+			summary += " · 空くメモリ 約 " + idleMemory(kib)
+		}
+		lines = append(lines, summary, "[x] 閉じる: 待機中か完了で、入力途中の文字がない   [ ] 残す: 理由を行の最後に表示")
+	}
+	var tail []string
+	if d.kept {
+		tail = append(tail, "最後の1個のペインは閉じずに残しています")
+	}
+	for _, failure := range d.failures {
+		tail = append(tail, failure.label+": "+failure.reason)
+	}
+	if len(visible) > 0 {
+		tail = append(tail, "space で切替 · a で全部 · enter で閉じる前の確認へ")
+	}
 	if d.cursor >= len(visible) {
 		d.cursor = max(0, len(visible)-1)
 	}
-	start := max(0, d.cursor-6)
-	end := min(len(visible), start+7)
+	// The dialog shows 10 lines; the pane rows get what the notes leave.
+	window := max(1, idleDialogLines-len(lines)-len(tail))
+	start := max(0, d.cursor-window+1)
+	end := min(len(visible), start+window)
 	for _, i := range visible[start:end] {
 		e := d.entries[i]
 		mark := " "
@@ -133,24 +245,26 @@ func (d *idleDialog) dialog() *render.Dialog {
 			mark = "x"
 		}
 		pointer := " "
-		if len(visible) > 0 && visible[d.cursor] == i {
+		if visible[d.cursor] == i {
 			pointer = ">"
 		}
-		age := idleAge(time.Duration(e.pane.AgeNanos))
-		state := e.pane.State
-		if !e.pane.InputKnown {
-			state += " · input unknown"
+		line := fmt.Sprintf("%s [%s] p%d · %s · %s / %s · %s · %s止まっている", pointer, mark, e.pane.ID, e.label, e.pane.WorkspaceName, e.pane.TabName, e.pane.Agent, idleAge(time.Duration(e.pane.AgeNanos)))
+		if e.pane.MemoryKiB > 0 {
+			line += " · " + idleMemory(e.pane.MemoryKiB)
 		}
-		lines = append(lines, fmt.Sprintf("%s [%s] p%d · %s · %s / %s · %s · idle %s · %s", pointer, mark, e.pane.ID, e.label, e.pane.WorkspaceName, e.pane.TabName, e.pane.Agent, age, state))
+		if e.keep != "" {
+			line += " · 残す: " + e.keep
+		}
+		lines = append(lines, line)
 	}
-	if d.kept {
-		lines = append(lines, "last pane, kept")
+	box.Lines = fit(append(lines, tail...))
+	if selected > 0 || len(d.failures) > 0 {
+		box.Confirm = "review"
+	} else {
+		// Nothing to close: enter and the one button just close the dialog.
+		box.Confirm, box.ContinueOnly = "close", true
 	}
-	for _, failure := range d.failures {
-		lines = append(lines, failure.label+": "+failure.reason)
-	}
-	lines = append(lines, "space toggle · a all · enter delete selected")
-	return &render.Dialog{Title: "delete idle panes", Detail: detail, Lines: lines, Confirm: "delete selected", Cancel: "close", CenterTerminal: true, PreserveTitleCase: true}
+	return box
 }
 func idleAge(age time.Duration) string {
 	if age >= 24*time.Hour {
@@ -163,10 +277,15 @@ func idleAge(age time.Duration) string {
 }
 func (m *machineClient) idleInput(ev input.Event) bool {
 	d := m.idle
-	if ev.Kind == input.KindMouseRelease && ev.Mouse.Button == uv.MouseLeft && !d.loading && !d.deleting {
+	if ev.Kind == input.KindMouseRelease && ev.Mouse.Button == uv.MouseLeft && !d.deleting {
 		mouse := m.mouse.CellEvent(ev, m.size).Mouse
-		_, cancel, confirm := render.DialogRects(d.dialog(), layout.Rect{W: m.size.Cols, H: m.size.Rows})
-		if contains(cancel.X, cancel.Y, cancel.W, cancel.H, mouse.X, mouse.Y) {
+		box := d.dialog(m.size.Cols)
+		_, cancel, confirm := render.DialogRects(box, layout.Rect{W: m.size.Cols, H: m.size.Rows})
+		if box.ContinueOnly && contains(confirm.X, confirm.Y, confirm.W, confirm.H, mouse.X, mouse.Y) {
+			// Loading or nothing to close: the only button closes the dialog.
+			m.idle = nil
+		} else if d.loading {
+		} else if contains(cancel.X, cancel.Y, cancel.W, cancel.H, mouse.X, mouse.Y) {
 			if d.confirming {
 				d.confirming = false
 			} else {
@@ -192,7 +311,13 @@ func (m *machineClient) idleInput(ev input.Event) bool {
 		}
 		return true
 	}
-	if d.loading || d.deleting {
+	if d.deleting {
+		return true
+	}
+	if d.loading {
+		if ev.Key.Code == uv.KeyEnter {
+			m.idle = nil
+		}
 		return true
 	}
 	if d.confirming {
@@ -226,6 +351,8 @@ func (m *machineClient) idleInput(ev input.Event) bool {
 	case uv.KeyEnter:
 		if d.selected() > 0 || len(d.failures) > 0 {
 			d.confirming = true
+		} else {
+			m.idle = nil
 		}
 	}
 	return true
@@ -311,7 +438,7 @@ func (m *machineClient) finishIdleDelete() {
 	if d == nil || !d.deleting || len(d.pending) > 0 {
 		return
 	}
-	m.idleToast = fmt.Sprintf("deleted %d · failed %d", d.deleted, d.failed)
+	m.idleToast = fmt.Sprintf("ペインを %d 個閉じた · 失敗 %d", d.deleted, d.failed)
 	for _, failure := range d.failures {
 		m.idleToast += " · " + failure.label + ": " + failure.reason
 	}

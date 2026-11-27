@@ -82,6 +82,10 @@ func (m *MachineSidebar) drawRight(f *Frame, active Input) {
 	if active.State.RightSidebarArea().W == 0 {
 		return
 	}
+	// The list opens with a rule. Start it on the row under the header (the
+	// pane's top border row) so its rules line up with the space list's rules.
+	area.Y--
+	area.H++
 	rows := m.rightRows(active)
 	m.RightMaxScroll = max(0, len(rows)-area.H)
 	m.RightScroll = max(0, min(m.RightScroll, m.RightMaxScroll))
