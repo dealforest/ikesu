@@ -11,7 +11,7 @@ _ikesu_guard_plain_variable() {
  local _ikesu_guard_name="$1" _ikesu_guard_decl _ikesu_guard_flags
  case "$_ikesu_guard_name" in ''|[!a-zA-Z_]*|*[!a-zA-Z0-9_]*) return 1;; esac
  _ikesu_guard_reserved_name "$_ikesu_guard_name" && return 1
- _ikesu_guard_decl=$(builtin declare -p "$_ikesu_guard_name" 2>/dev/null) || return 0
+ _ikesu_guard_decl=$(builtin trap - ERR; builtin declare -p "$_ikesu_guard_name" 2>/dev/null) || return 0
  _ikesu_guard_flags="${_ikesu_guard_decl#declare }"
  _ikesu_guard_flags="${_ikesu_guard_flags%% *}"
  [[ -z ${_ikesu_guard_flags//[-rx]/} ]]
@@ -39,6 +39,9 @@ _ikesu_guard_simple_form() {
   [[ $_ikesu_guard_text == *"${_ikesu_guard_reason_name:-AI_GUARD_REQUEST_REASON}"* ]] && return 1
   case "$_ikesu_guard_text" in *AI_GUARD_*|*IKESU_*|*_ikesu_guard_*|*BASH_ENV*|*ZDOTDIR*|*'${ENV'*|*'${PATH'*|*CLAUDE_CODE_SHELL_PREFIX*|*'['*|*'('*) return 1;; esac
   case " $_ikesu_guard_text " in *' -eq '*|*' -ne '*|*' -gt '*|*' -ge '*|*' -lt '*|*' -le '*)
+   case "$_ikesu_guard_text" in *'${'*) return 1;; esac
+   # Consume $$ as a pair before checking the character after each remaining $.
+   case "${_ikesu_guard_text//\$\$/}" in *'$'[!a-zA-Z_#?\$!]*) return 1;; esac
    _ikesu_guard_text="${_ikesu_guard_text//\$/}"
    _ikesu_guard_text="${_ikesu_guard_text//\"/}"
    _ikesu_guard_text="${_ikesu_guard_text//\'/}"

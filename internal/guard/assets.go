@@ -147,26 +147,26 @@ func (a *Assets) shellFunctions() string {
    (
     set +o functrace
 %s    %s guard exec --via shell-func -- "$@"
-   )
+   ) || return $?
   else %s guard exec --via shell-func -- "$@"; fi
  else builtin command "$@"; fi
 }
 _ikesu_guard_command() {
  if [[ "${1:-}" != -* ]]; then
- case "${1:-}" in %s) _ikesu_guard_forward "$@"; return $?;; esac
+ case "${1:-}" in %s) _ikesu_guard_forward "$@" || return $?; return 0;; esac
  fi
  builtin command "$@"
 }
 `, a.shellActive(), bashRequestReasonRestore, a.invocation(), a.invocation(), strings.Join(a.Config.Commands(), "|"))
 	for _, cmd := range a.Config.Commands() {
 		fmt.Fprintf(&b, `if ! typeset -f %s >/dev/null 2>&1 && ! alias %s >/dev/null 2>&1; then
-function %s { _ikesu_guard_forward %s "$@"; }
+function %s { _ikesu_guard_forward %s "$@" || return $?; }
 fi
 `, quote(cmd), quote(cmd), cmd, quote(cmd))
 	}
 	if len(a.Config.Commands()) > 0 {
 		b.WriteString(`if ! typeset -f command >/dev/null 2>&1 && ! alias command >/dev/null 2>&1; then
-command() { _ikesu_guard_command "$@"; }
+command() { _ikesu_guard_command "$@" || return $?; }
 fi
 `)
 	}
@@ -178,7 +178,7 @@ func (a *Assets) lineHook() string {
 if [[ -o interactive ]]; then
  _ikesu_guard_accept_line() {
   if [[ %s ]]; then
-   %s guard line --via accept-line -- "$BUFFER" || { zle redisplay; return 0; }
+   %s guard line --via accept-line -- "${BUFFER-}" || { zle redisplay; return 0; }
   fi
   zle .accept-line
  }

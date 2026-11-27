@@ -10,6 +10,9 @@ import (
 )
 
 // Exercise the generated builtin-only selector without installing any trap.
+// The full race run can exceed five seconds because each combination of input,
+// IFS, and nounset starts a fresh process on both Bash versions. Run them
+// sequentially to keep the number of concurrent shell processes bounded.
 func TestBashCheapSelector(t *testing.T) {
 	for name, shell := range map[string]string{"system": "/bin/bash", "homebrew": "/opt/homebrew/bin/bash"} {
 		t.Run(name, func(t *testing.T) {
@@ -24,6 +27,29 @@ func TestBashCheapSelector(t *testing.T) {
 			start := strings.Index(hook, "_ikesu_guard_needs_check() {")
 			end := strings.Index(hook, "_ikesu_guard_debug() {")
 			selector := "_ikesu_guard_reason_name=PROJECT_REASON\n" + bashSimpleForms + hook[start:end]
+			assertSelection := func(prefix, line string, check bool) {
+				t.Helper()
+				for _, ifs := range []string{":", ""} {
+					// Compare the printed status so an unbound-variable abort
+					// is not mistaken for "no check".
+					for _, nounset := range []string{"", "set -u\n"} {
+						script := nounset + selector + "\nIFS=" + quote(ifs) + "\n" + prefix + "_ikesu_guard_needs_check " + quote(line) + "\nprintf 'rc=%s' \"$?\"\n"
+						ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+						cmd := exec.CommandContext(ctx, shell, "--noprofile", "--norc", "-c", script)
+						cmd.Env = []string{"PATH=/usr/bin:/bin"}
+						out, err := cmd.CombinedOutput()
+						timedOut := ctx.Err() != nil
+						cancel()
+						want := "rc=1"
+						if check {
+							want = "rc=0"
+						}
+						if timedOut || err != nil || string(out) != want {
+							t.Fatalf("prefix=%q line=%q IFS=%q nounset=%v wantCheck=%v err=%v out=%s", prefix, line, ifs, nounset != "", check, err, out)
+						}
+					}
+				}
+			}
 			for _, tc := range []struct {
 				line  string
 				check bool
@@ -36,28 +62,13 @@ func TestBashCheapSelector(t *testing.T) {
 				{"X=1 > out", true}, {"[[ x == y ]] > out", true}, {"(( i++ )) > out", true}, {"local -n X=PATH", true}, {"declare -i X=1", true}, {"PATH=x", true}, {"local AI_GUARD_DANGER_WORD_ACK=1", true}, {"declare IKESU_PANE_ID=other", true}, {"BASH_ENV=x", true}, {"ENV=x", true}, {"CLAUDE_CODE_SHELL_PREFIX=x", true}, {"(( PATH=1 ))", true},
 				{"eval ':'", true}, {"source path", true}, {". path", true}, {"xargs rm", true}, {"find . -exec rm {} \\;", true}, {"bash -c ':'", true}, {"command rm", true}, {"builtin eval ':'", true}, {"exec rm", true},
 				{"unset _ikesu_guard_word", true}, {"declare _ikesu_guard_word=x", true}, {"set +T", true}, {"trap ':' DEBUG", true}, {"_ikesu_guard_needs_check() { :; }", true},
+				{"[[ $1 -eq 0 ]]", true}, {"[[ ${1} -gt 0 ]]", true}, {"[[ $* -eq 0 ]]", true}, {"[[ $@ -eq 0 ]]", true}, {"[[ ${!1} -eq 0 ]]", true}, {"[[ ${@:1} -eq 0 ]]", true},
+				{"[[ $? -ne 0 ]]", false}, {"[[ $$ -gt 0 ]]", false}, {"[[ $! -gt 0 ]]", false},
 			} {
-				for _, ifs := range []string{":", ""} {
-					// Scripts run with set -u must get the same decision without an unbound-variable abort.
-					for _, nounset := range []string{"", "set -u\n"} {
-						script := nounset + selector + "\nIFS=" + quote(ifs) + "\n_ikesu_guard_needs_check " + quote(tc.line) + "\nprintf 'rc=%s' \"$?\"\n"
-						ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-						cmd := exec.CommandContext(ctx, shell, "--noprofile", "--norc", "-c", script)
-						cmd.Env = []string{"PATH=/usr/bin:/bin"}
-						out, err := cmd.CombinedOutput()
-						timedOut := ctx.Err() != nil
-						cancel()
-						// Compare the printed status so an aborted shell is not mistaken for "no check".
-						want := "rc=1"
-						if tc.check {
-							want = "rc=0"
-						}
-						if timedOut || err != nil || string(out) != want {
-							t.Fatalf("line=%q IFS=%q nounset=%v wantCheck=%v err=%v out=%s", tc.line, ifs, nounset != "", tc.check, err, out)
-						}
-					}
-				}
+				assertSelection("", tc.line, tc.check)
 			}
+			assertSelection("i='PATH=1'\n", "(( i ))", true)
+			assertSelection("i=5\n", "(( i ))", false)
 		})
 	}
 }

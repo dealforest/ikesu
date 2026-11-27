@@ -6,7 +6,32 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kazuph/ikesu/internal/childenv"
 )
+
+func TestPreparedBashPromptIsScrubbed(t *testing.T) {
+	for _, mode := range []string{"enforce", "record"} {
+		t.Run(mode, func(t *testing.T) {
+			d := t.TempDir()
+			a := NewAssets(d, "p_1", "/usr/bin/true", Config{Mode: mode})
+			t.Cleanup(func() { a.Close() })
+			a.ConfigureShell("/bin/bash")
+			const userPrompt = "printf user\n: second"
+			env, err := a.Prepare([]string{"HOME=" + d, "PATH=/usr/bin:/bin", "IKESU_PANE_ID=p1", "PROMPT_COMMAND=" + userPrompt}, d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if prompt := EnvMap(env)["PROMPT_COMMAND"]; !strings.HasPrefix(prompt, userPrompt+"\n") {
+				t.Fatalf("guard hook not appended: %q", prompt)
+			}
+			child := EnvMap(childenv.Scrub(env))
+			if child["PROMPT_COMMAND"] != userPrompt || child["PATH"] != "/usr/bin:/bin" {
+				t.Fatalf("scrubbed PROMPT_COMMAND=%q PATH=%q", child["PROMPT_COMMAND"], child["PATH"])
+			}
+		})
+	}
+}
 
 func TestAssetsLifecycleAndShellChain(t *testing.T) {
 	for _, shell := range []string{"/bin/zsh", "/bin/bash"} {

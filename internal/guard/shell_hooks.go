@@ -17,7 +17,7 @@ func (a *Assets) debugHook(shell string) string {
 		}
 		return fmt.Sprintf(`if [[ $- != *i* ]]; then
 if [[ %s ]] && [[ -n "${BASH_EXECUTION_STRING:-}" ]]; then
- %s guard line --via exec-string -- "$BASH_EXECUTION_STRING" || exit $?
+ %s guard line --via exec-string -- "${BASH_EXECUTION_STRING-}" || exit $?
 fi
 %s%s_ikesu_guard_needs_check() {
  local _ikesu_guard_line="$1" _ikesu_guard_word
@@ -45,12 +45,16 @@ _ikesu_guard_debug() {
  if [[ %s ]]; then
 %s  _ikesu_guard_needs_check "$1" || return 0
   (
+   builtin trap - ERR
+   builtin trap '' PIPE
    set +o functrace
    builtin compgen -v | while IFS= builtin read -r _ikesu_guard_snapshot_name; do
     case "$_ikesu_guard_snapshot_name" in _ikesu_guard_*) continue;; esac
     builtin declare -p "$_ikesu_guard_snapshot_name"
    done
-  ) | (
+   builtin :
+  ) 2>/dev/null | (
+   builtin trap - ERR
    set +o functrace
 %s   %s guard line --via bash-debug --shell-pid "$$" -- "$1"
   ) || { builtin kill -s KILL "$$"; exit 1; }
@@ -68,19 +72,19 @@ _ikesu_guard_dispatch() {
 }
 readonly -f _ikesu_guard_debug _ikesu_guard_dispatch _ikesu_guard_needs_check
 set -o functrace
-trap '_ikesu_guard_dispatch "$BASH_COMMAND"' DEBUG
+trap '_ikesu_guard_dispatch "${BASH_COMMAND-}"' DEBUG
 fi
 `, a.shellActive(), a.invocation(), protectForward, bashSimpleForms, strings.Join(append(targets, quote("")), "|"), a.shellActive(), bashRequestReasonRestore, bashRequestReasonRestore, a.identity()+" builtin exec "+quote(a.RuntimePath()))
 	}
 	return fmt.Sprintf(`if [[ ! -o interactive ]]; then
 if [[ %s ]] && [[ -n "${ZSH_EXECUTION_STRING:-}" ]]; then
- %s guard line --via exec-string -- "$ZSH_EXECUTION_STRING" || exit $?
+ %s guard line --via exec-string -- "${ZSH_EXECUTION_STRING-}" || exit $?
 fi
 setopt DEBUG_BEFORE_CMD
 TRAPDEBUG() {
  case "${funcstack[2]:-}" in _ikesu_guard_forward|_ikesu_guard_command) return 0;; esac
  if [[ %s ]]; then
-  %s guard line --via zsh-debug -- "$ZSH_DEBUG_CMD" || exit $?
+  %s guard line --via zsh-debug -- "${ZSH_DEBUG_CMD-}" || exit $?
  fi
  return 0
 }
