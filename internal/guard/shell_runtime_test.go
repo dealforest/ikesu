@@ -383,6 +383,73 @@ func TestBashRuntimeWrappedFailureRunsUserERR(t *testing.T) {
 	}
 }
 
+func TestBashRuntimeClearsInternalERR(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "ikesu")
+	guardBinary(t, binary)
+	for name, shell := range map[string]string{"system": "/bin/bash", "homebrew": "/opt/homebrew/bin/bash"} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := os.Stat(shell); err != nil {
+				if name == "homebrew" && os.IsNotExist(err) {
+					t.Skip("Homebrew bashがないため、この版だけ未実施")
+				}
+				t.Fatal(err)
+			}
+			t.Parallel()
+			root := t.TempDir()
+			env := EnvMap(prepareGuardOptionsFixture(t, root, binary, shell))
+			loader, err := os.ReadFile(env["BASH_ENV"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload, err := os.ReadFile(env["BASH_ENV"] + ".current")
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Observe trap state immediately before each operation. All guard
+			// calls still go through the real CLI, including guard refresh.
+			probe := func(stage string) string {
+				return "builtin trap -p ERR > " + quote(filepath.Join(root, stage))
+			}
+			replaceOnce := func(input, before, after string) string {
+				t.Helper()
+				if strings.Count(input, before) != 1 {
+					t.Fatalf("expected exactly one probe location for %q", before)
+				}
+				return strings.Replace(input, before, after, 1)
+			}
+			observedPayload := replaceOnce(string(payload), "   builtin compgen -v", "   "+probe("snapshot")+"\n   builtin compgen -v")
+			observedPayload = replaceOnce(observedPayload, "\n   IKESU_GUARD_MARKER=", "\n   "+probe("decision")+"\n   IKESU_GUARD_MARKER=")
+			payloadPath := filepath.Join(root, "observed-payload")
+			if err := os.WriteFile(payloadPath, []byte(observedPayload), 0600); err != nil {
+				t.Fatal(err)
+			}
+			observedLoader := replaceOnce(string(loader), "IKESU_GUARD_MARKER=", probe("refresh")+"; IKESU_GUARD_MARKER=")
+			observedLoader = replaceOnce(observedLoader, `source "$_ikesu_guard_generation/bash-env.current"`, "source "+quote(payloadPath))
+			observedLoader = "trap ':' ERR\n" + probe("user-shell") + "\n" + observedLoader
+			env["BASH_ENV"] = filepath.Join(root, "observed-loader")
+			if err := os.WriteFile(env["BASH_ENV"], []byte(observedLoader), 0600); err != nil {
+				t.Fatal(err)
+			}
+			err, output := runGuardOptionsScript(t, root, shell, environment(env), []string{"-E"}, "printf done > result\n")
+			if err != nil {
+				t.Fatalf("guarded shell failed: %v\n%s", err, output)
+			}
+			if data, err := os.ReadFile(filepath.Join(root, "result")); err != nil || string(data) != "done" {
+				t.Fatalf("guarded command did not finish: %q, %v", data, err)
+			}
+			if data, err := os.ReadFile(filepath.Join(root, "user-shell")); err != nil || !strings.Contains(string(data), "ERR") {
+				t.Fatalf("user ERR trap was not installed: %q, %v", data, err)
+			}
+			for _, stage := range []string{"refresh", "snapshot", "decision"} {
+				if data, err := os.ReadFile(filepath.Join(root, stage)); err != nil || len(data) != 0 {
+					t.Errorf("%s: expected cleared ERR trap, got %q, %v", stage, data, err)
+				}
+			}
+		})
+	}
+}
+
 func prepareGuardOptionsFixture(t *testing.T, root, binary, shell string, extra ...string) []string {
 	t.Helper()
 	if err := os.Mkdir(filepath.Join(root, "home"), 0700); err != nil {
