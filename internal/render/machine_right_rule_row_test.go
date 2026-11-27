@@ -8,8 +8,8 @@ import (
 )
 
 // The right list's first rule sits on the pane's top border row, like the
-// space list's first rule, except where a narrow header wraps its sort button
-// onto that row; the sort button must stay visible there.
+// space list's first rule, at every width. Where a narrow header wraps its sort
+// button onto that row, the button stays drawn and clickable over the rule.
 func TestMachineRightFirstRuleRowKeepsSortButton(t *testing.T) {
 	for _, width := range []int{18, 20, 26, 40, 72} {
 		for _, jobs := range []bool{false, true} {
@@ -32,15 +32,15 @@ func TestMachineRightFirstRuleRowKeepsSortButton(t *testing.T) {
 				t.Fatalf("width %d: sort button covered: %q", width, row(a.Y+1))
 			}
 			first := a.Y + 1
-			if wrapped {
-				first = a.Y + 2
-			}
 			if !strings.Contains(row(first), "──") {
-				t.Fatalf("width %d jobs %v: first rule not on row %d: %q / %q", width, jobs, first, row(a.Y+1), row(a.Y+2))
+				t.Fatalf("width %d jobs %v: first rule not on row %d: %q", width, jobs, first, row(first))
 			}
 			for _, hit := range m.Hits {
 				if hit.Right && hit.Rect.Y < first {
 					t.Fatalf("width %d: hit above the list: %+v", width, hit)
+				}
+				if wrapped && hit.Right && hit.Rect.Y == sort.Y && hit.Rect.X+hit.Rect.W > sort.X {
+					t.Fatalf("width %d: row hit covers the sort button: %+v sort=%+v", width, hit, sort)
 				}
 			}
 		}
