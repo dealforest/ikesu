@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/kazuph/ikesu/internal/childenv"
 )
 
 // ConfigureShell is called before Prepare for the interactive pane shell.
@@ -17,9 +19,6 @@ func (a *Assets) ConfigureShell(shell string) {
 		a.unsupported = "shell の起動後に shim の PATH を保証できません: " + shell
 	}
 }
-
-const pinPath = `case "${PATH-}" in "${IKESU_GUARD_BIN-}"|"${IKESU_GUARD_BIN-}":*) ;; *) export PATH="${IKESU_GUARD_BIN-}:${PATH-}";; esac
-`
 
 const restoreZdotdir = `if [[ "${IKESU_GUARD_ZDOTDIR_SET-}" == 1 ]]; then export ZDOTDIR="${IKESU_GUARD_ZDOTDIR_ORIG-}"; else unset ZDOTDIR; fi
 `
@@ -46,13 +45,7 @@ func (a *Assets) prepareStartup(m map[string]string, dir string) error {
 		}
 		m["IKESU_GUARD_READY"] = filepath.Join(dir, "ready")
 		_ = os.Remove(m["IKESU_GUARD_READY"])
-		hook := pinPath
-		if a.Config.EffectiveMode() == "enforce" {
-			hook += "export IKESU_GUARD_ENFORCING=1\n"
-		}
-		hook += `if [[ ! -f "${IKESU_GUARD_READY-}" ]]; then builtin printf '' > "${IKESU_GUARD_READY-}"; fi
-`
-		m["PROMPT_COMMAND"] = m["PROMPT_COMMAND"] + "\n" + hook
+		m["PROMPT_COMMAND"] += childenv.GuardPromptHook(a.Config.EffectiveMode() == "enforce")
 		delete(m, "IKESU_GUARD_ENFORCING")
 	}
 	if a.unsupported != "" {
@@ -83,21 +76,20 @@ fi
 func (a *Assets) bashStartup(dir string) string {
 	// Read the user's BASH_ENV with nounset suspended so an unset variable
 	// cannot interrupt startup. Restore it before DEBUG would check the set.
+	suspendNounset := `builtin unset _ikesu_guard_nounset
+case $- in *u*) builtin set +u; _ikesu_guard_nounset=1;; esac
+`
 	restoreNounset := `if [[ ${_ikesu_guard_nounset-} == 1 ]]; then builtin unset _ikesu_guard_nounset; builtin set -u; fi
 `
-	return a.generationHeader() + bashRequestReasonCapture + restoreZdotdir + `if [[ -n "${IKESU_GUARD_BASH_ENV_ORIG-}" && -f "${IKESU_GUARD_BASH_ENV_ORIG-}" ]]; then source "${IKESU_GUARD_BASH_ENV_ORIG-}"; fi
-` + fmt.Sprintf("if [[ $- != *i* && ${_ikesu_guard_reason_name+x} ]] && [[ %s ]]; then\n", a.shellActive()) + bashRequestReasonRestore + "fi\n" + pinPath + a.shellFunctions() + a.agentFunctions(dir) + restoreNounset + a.debugHook("bash")
+	return a.generationHeader() + suspendNounset + bashRequestReasonCapture + restoreZdotdir + `if [[ -n "${IKESU_GUARD_BASH_ENV_ORIG-}" && -f "${IKESU_GUARD_BASH_ENV_ORIG-}" ]]; then source "${IKESU_GUARD_BASH_ENV_ORIG-}"; fi
+` + fmt.Sprintf("if [[ $- != *i* && ${_ikesu_guard_reason_name+x} ]] && [[ %s ]]; then\n", a.shellActive()) + bashRequestReasonRestore + "fi\n" + childenv.GuardPathPin + a.shellFunctions() + a.agentFunctions(dir) + restoreNounset + a.debugHook("bash")
 }
 
 // A stable loader asks the currently published native binary to refresh its
 // payload before sourcing it. Neither eval nor PATH participates in lookup.
 func (a *Assets) startupLoader(payload string) string {
 	name := filepath.Base(payload)
-	var prefix string
-	if name == "bash-env.current" {
-		prefix = "case $- in *u*) builtin set +u; _ikesu_guard_nounset=1;; esac\n"
-	}
-	return prefix + "if [[ " + a.shellActive() + " ]]; then\n_ikesu_guard_generation=$(builtin trap - ERR; " + a.invocation() + " guard refresh) || exit $?\nsource \"${_ikesu_guard_generation-}/" + name + "\" || exit $?\nelse\nsource " + quote(filepath.Join(filepath.Dir(a.RuntimePath()), "current", name)) + " || exit $?\nfi\n"
+	return "if [[ " + a.shellActive() + " ]]; then\n_ikesu_guard_generation=$(builtin trap - ERR; " + a.invocation() + " guard refresh) || exit $?\nsource \"$_ikesu_guard_generation/" + name + "\" || exit $?\nelse\nsource " + quote(filepath.Join(filepath.Dir(a.RuntimePath()), "current", name)) + " || exit $?\nfi\n"
 }
 
 func (a *Assets) generationHeader() string {
@@ -111,7 +103,8 @@ func (a *Assets) generationHeader() string {
 func (a *Assets) startupPayloads(dir string) map[string][]byte {
 	files := map[string][]byte{}
 	wrappers := a.shellFunctions() + a.agentFunctions(dir)
-	suspendNounset := `if [[ -o nounset ]]; then unsetopt nounset; _ikesu_guard_nounset=1; fi
+	suspendNounset := `builtin unset _ikesu_guard_nounset
+if [[ -o nounset ]]; then unsetopt nounset; _ikesu_guard_nounset=1; fi
 `
 	restoreNounset := `if [[ ${_ikesu_guard_nounset-} == 1 ]]; then unset _ikesu_guard_nounset; setopt nounset; fi
 `
@@ -127,7 +120,7 @@ export IKESU_GUARD_ZDOTDIR_ORIG IKESU_GUARD_ZDOTDIR_SET
 		{".zlogin", "false"},
 	}
 	for _, phase := range phases {
-		body := a.generationHeader() + suspendNounset + restoreZdotdir + fmt.Sprintf("if [[ -f \"${ZDOTDIR:-${HOME-}}/%s\" ]]; then source \"${ZDOTDIR:-${HOME-}}/%s\"; fi\n", phase.name, phase.name) + capture + pinPath
+		body := a.generationHeader() + suspendNounset + restoreZdotdir + fmt.Sprintf("if [[ -f \"${ZDOTDIR:-${HOME-}}/%s\" ]]; then source \"${ZDOTDIR:-${HOME-}}/%s\"; fi\n", phase.name, phase.name) + capture + childenv.GuardPathPin
 		if phase.name == ".zshenv" {
 			body += wrappers + a.lineHook()
 		}

@@ -50,7 +50,7 @@ _ikesu_guard_debug() {
    set +o functrace
    builtin compgen -v | while IFS= builtin read -r _ikesu_guard_snapshot_name; do
     case "$_ikesu_guard_snapshot_name" in _ikesu_guard_*) continue;; esac
-    builtin declare -p "$_ikesu_guard_snapshot_name" || break
+    builtin declare -p "$_ikesu_guard_snapshot_name"
    done
    builtin :
   ) 2>/dev/null | (

@@ -314,12 +314,71 @@ func TestShellRuntimeNounsetStartup(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			root := t.TempDir()
+			if tc.shell == "/bin/zsh" {
+				original := `: "$UNDEFINED_IN_ORIGINAL"
+printf reached > "$IKESU_RUNTIME_ROOT/zshenv-result"
+`
+				if err := os.WriteFile(filepath.Join(root, ".zshenv"), []byte(original), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			env := EnvMap(prepareGuardOptionsFixture(t, root, binary, tc.shell, tc.extra...))
 			delete(env, "IKESU_GUARD_ZDOTDIR_SET")
 			delete(env, "IKESU_GUARD_ZDOTDIR_ORIG")
 			delete(env, "IKESU_GUARD_BASH_ENV_ORIG")
 			err, output := runGuardOptionsScript(t, root, tc.shell, environment(env), tc.args, "[[ $- == *u* ]] || exit 72\n"+guardOptionsDangerousScript)
 			assertGuardOptionsStopped(t, root, err, output)
+			if tc.shell == "/bin/zsh" {
+				data, err := os.ReadFile(filepath.Join(root, "zshenv-result"))
+				if err != nil || string(data) != "reached" {
+					t.Fatalf("user .zshenv stopped at an unset variable: %q, %v\n%s", data, err, output)
+				}
+			}
+		})
+	}
+}
+
+func TestBashRuntimeWrappedFailureRunsUserERR(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "ikesu")
+	guardBinary(t, binary)
+	for name, shell := range map[string]string{"system": "/bin/bash", "homebrew": "/opt/homebrew/bin/bash"} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := os.Stat(shell); err != nil {
+				if name == "homebrew" && os.IsNotExist(err) {
+					t.Skip("Homebrew bashがないため、この版だけ未実施")
+				}
+				t.Fatal(err)
+			}
+			for _, option := range []string{"-E", "-eE"} {
+				for _, invocation := range []string{"git status", "command git status"} {
+					t.Run(option+"/"+invocation, func(t *testing.T) {
+						t.Parallel()
+						root := t.TempDir()
+						orig := filepath.Join(root, "original")
+						body := `trap 'printf "%s\n" "${FUNCNAME[0]:-main}" >> "$IKESU_RUNTIME_ROOT/err-trap"' ERR
+`
+						if err := os.WriteFile(orig, []byte(body), 0600); err != nil {
+							t.Fatal(err)
+						}
+						env := prepareGuardOptionsFixture(t, root, binary, shell, "BASH_ENV="+orig)
+						script := invocation + "\nprintf '%s' \"$?\" > \"$IKESU_RUNTIME_ROOT/after\"\n"
+						err, output := runGuardOptionsScript(t, root, shell, env, []string{option}, script)
+						after, readErr := os.ReadFile(filepath.Join(root, "after"))
+						if option == "-eE" {
+							code, ok := err.(*exec.ExitError)
+							if !ok || code.ExitCode() != 128 || !os.IsNotExist(readErr) {
+								t.Fatalf("expected exit 128 without a following line: err=%v after=%q readErr=%v\n%s", err, after, readErr, output)
+							}
+						} else if err != nil || readErr != nil || string(after) != "128" {
+							t.Fatalf("expected continuation with git exit 128: err=%v after=%q readErr=%v\n%s", err, after, readErr, output)
+						}
+						data, err := os.ReadFile(filepath.Join(root, "err-trap"))
+						if err != nil || string(data) != "main\n" {
+							t.Fatalf("expected one user ERR trap: %q, %v\n%s", data, err, output)
+						}
+					})
+				}
+			}
 		})
 	}
 }
@@ -378,6 +437,20 @@ func assertGuardOptionsStopped(t *testing.T, root string, err error, output stri
 }
 
 func TestBashRuntimePipefailWithUnreadSnapshot(t *testing.T) {
+	for name, shell := range map[string]string{"system": "/bin/bash", "homebrew": "/opt/homebrew/bin/bash"} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := os.Stat(shell); err != nil {
+				if name == "homebrew" && os.IsNotExist(err) {
+					t.Skip("Homebrew bashがないため、この版だけ未実施")
+				}
+				t.Fatal(err)
+			}
+			testBashRuntimePipefailWithUnreadSnapshot(t, shell)
+		})
+	}
+}
+
+func testBashRuntimePipefailWithUnreadSnapshot(t *testing.T, shell string) {
 	for name, options := range map[string][]string{"default": nil, "pipefail": {"-o", "pipefail"}} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -397,7 +470,7 @@ func TestBashRuntimePipefailWithUnreadSnapshot(t *testing.T) {
 			startup = strings.Replace(startup, right, "exit 0", 1)
 			script := "snapshot_data=" + strings.Repeat("x", 200*1024) + "\n" + startup + "printf survived > result\n"
 			env := []string{"PATH=/usr/bin:/bin", "IKESU_GUARD_BIN=" + a.Bin}
-			err, output := runGuardOptionsScript(t, root, "/bin/bash", env, options, script)
+			err, output := runGuardOptionsScript(t, root, shell, env, options, script)
 			if err != nil {
 				t.Fatalf("shell did not survive: %v\n%s", err, output)
 			}
