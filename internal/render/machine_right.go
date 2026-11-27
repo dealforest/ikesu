@@ -82,6 +82,23 @@ func (m *MachineSidebar) drawRight(f *Frame, active Input) {
 	if active.State.RightSidebarArea().W == 0 {
 		return
 	}
+	// The list opens with a rule. Start it on the row under the header (the
+	// pane's top border row) so its rules line up with the space list's rules.
+	// The rows keep these places at every width; where a narrow agents header
+	// wraps its sort button onto that row, the button is drawn over the row and
+	// the row's hit stops short of it, so the button still takes its clicks.
+	area.Y--
+	area.H++
+	// A narrow sidebar shows a copy of the default-width one, so the header
+	// that is seen is the default-width header.
+	shown := active.State
+	if shown.RightSidebarArea().W < model.SidebarMinDefault {
+		shown = sidebarReferenceInput(active).State
+	}
+	sort := RightSidebarHeaderFor(active.State, active.State.RightSidebarArea().Y).Sort
+	if seen := RightSidebarHeaderFor(shown, shown.RightSidebarArea().Y).Sort; active.JobsPanel || seen.Y != area.Y || seen.W == 0 {
+		sort = layout.Rect{}
+	}
 	rows := m.rightRows(active)
 	m.RightMaxScroll = max(0, len(rows)-area.H)
 	m.RightScroll = max(0, min(m.RightScroll, m.RightMaxScroll))
@@ -91,6 +108,9 @@ func (m *MachineSidebar) drawRight(f *Frame, active Input) {
 		group := m.Groups[entry.group]
 		y := area.Y + n
 		hit := MachineHit{Machine: group.ID, Row: entry.row, Header: entry.header, Fold: entry.fold, Rule: entry.rule, Right: true, Rect: layout.Rect{X: area.X, Y: y, W: area.W, H: 1}}
+		if sort.W > 0 && y == sort.Y {
+			hit.Rect.W = max(0, sort.X-area.X)
+		}
 		m.Hits = append(m.Hits, hit)
 		if entry.rule {
 			f.Fill(area.X, y, area.W, 1, "─", uv.Style{Fg: f.Palette.Dim, Bg: f.Palette.PopupBG})
@@ -120,5 +140,10 @@ func (m *MachineSidebar) drawRight(f *Frame, active Input) {
 		if in.SidebarConfig.UI.TransparentSidebarCards {
 			clearSidebarCardBackground(f, in.State, entry.row, area.X, y, area.W)
 		}
+	}
+	if sort.W > 0 {
+		// The wrapped sort button stays on top of the row it shares.
+		f.Fill(sort.X-1, sort.Y, sort.W+1, 1, " ", uv.Style{Fg: f.Palette.Text, Bg: f.Palette.PopupBG})
+		f.Text(sort.X, sort.Y, SidebarAgentSortLabel(active.State), uv.Style{Fg: f.Palette.Dim, Attrs: uv.AttrBold}, sort.X+sort.W)
 	}
 }

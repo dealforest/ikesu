@@ -674,8 +674,10 @@ class ScreenActivity : Activity() {
                     setText(signal.optString("input")); setSelection(text.length); textSize = 18f; setTextColor(GREEN); isSingleLine = true
                 }
                 var answered = false
+                // A progress box (no_buttons) takes no input: no buttons, no dismiss, no Esc.
+                val noButtons = signal.optBoolean("no_buttons")
                 val builder = AlertDialog.Builder(this).setTitle(signal.optString("title")).setMessage(message.ifEmpty { null })
-                    .setPositiveButton(signal.optString("confirm").ifEmpty { "OK" }) { _, _ ->
+                if (!noButtons) builder.setPositiveButton(signal.optString("confirm").ifEmpty { "OK" }) { _, _ ->
                         answered = true
                         // An input dialog: clear ikesu's field (Ctrl+U), type the edited text, then Enter.
                         if (field != null) {
@@ -684,9 +686,10 @@ class ScreenActivity : Activity() {
                             send(byteArrayOf(21) + typed.toByteArray(Charsets.UTF_8) + byteArrayOf(13))
                         } else send(byteArrayOf(13))
                     }
-                if (!signal.optBoolean("continue_only")) builder.setNegativeButton(signal.optString("cancel").ifEmpty { "やめる" }) { _, _ -> answered = true; send(byteArrayOf(27)) }
+                if (!signal.optBoolean("continue_only") && !noButtons) builder.setNegativeButton(signal.optString("cancel").ifEmpty { "やめる" }) { _, _ -> answered = true; send(byteArrayOf(27)) }
                 field?.let { builder.setView(it) }
-                native = builder.setOnDismissListener { nativeShown = null; if (!answered) send(byteArrayOf(27)) }.show().apply { setCanceledOnTouchOutside(!signal.optBoolean("continue_only")) }
+                builder.setCancelable(!noButtons)
+                native = builder.setOnDismissListener { nativeShown = null; if (!answered && !noButtons) send(byteArrayOf(27)) }.show().apply { setCanceledOnTouchOutside(!signal.optBoolean("continue_only") && !noButtons) }
             }
             else -> return
         }
