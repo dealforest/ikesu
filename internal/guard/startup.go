@@ -88,8 +88,9 @@ case $- in *u*) builtin set +u; _ikesu_guard_nounset=1;; esac
 `
 	return a.generationHeader() + suspendNounset + bashRequestReasonCapture + restoreZdotdir + a.debugHook("bash") + a.bashFinalize(dir, restoreNounset) + `if [[ $- != *i* ]]; then
 _ikesu_guard_startup_file="${BASH_SOURCE[0]-}"
+_ikesu_guard_startup_loader="${BASH_SOURCE[1]-}"
 _ikesu_guard_startup_orig="${IKESU_GUARD_BASH_ENV_ORIG-}"
-readonly _ikesu_guard_startup_file _ikesu_guard_startup_orig
+readonly _ikesu_guard_startup_file _ikesu_guard_startup_loader _ikesu_guard_startup_orig
 set -o functrace
 builtin trap 'case $- in *T*) builtin set +T; _ikesu_guard_startup_debug "${BASH_COMMAND-}"; builtin set -T;; *) _ikesu_guard_startup_debug "${BASH_COMMAND-}";; esac' DEBUG
 fi
@@ -163,12 +164,14 @@ _ikesu_guard_finalize() {
  _ikesu_guard_trap_ERR=$(builtin trap -p ERR)
  _ikesu_guard_trap_EXIT=$(builtin trap -p EXIT)
  [[ $_ikesu_guard_trap_flags == *T* ]] || builtin set +T
-%s readonly -f trap
+ # The trap wrapper existed before the user's file. Wrap only traps it set
+ # with the builtin directly.
  for _ikesu_guard_trap_name in RETURN ERR EXIT; do
   _ikesu_guard_trap_words="_ikesu_guard_trap_$_ikesu_guard_trap_name"
   [[ -n ${!_ikesu_guard_trap_words} ]] || continue
   builtin eval "_ikesu_guard_trap_words=(${!_ikesu_guard_trap_words#trap })"
-  [[ -n ${_ikesu_guard_trap_words[1]-} ]] && trap -- "${_ikesu_guard_trap_words[1]}" "$_ikesu_guard_trap_name"
+  case "${_ikesu_guard_trap_words[1]-}" in ''|_ikesu_guard_run_exit_trap|'if _ikesu_guard_trap_check '*) continue;; esac
+  trap -- "${_ikesu_guard_trap_words[1]}" "$_ikesu_guard_trap_name"
  done
 if [[ ${_ikesu_guard_reason_name+x} ]] && [[ %s ]]; then
 %sfi
@@ -182,7 +185,7 @@ fi
 }
 readonly -f _ikesu_guard_startup_scan _ikesu_guard_startup_debug _ikesu_guard_finalize
 fi
-`, bashTrapWrapper, a.shellActive(), bashRequestReasonRestore, childenv.GuardPathPin, a.bashWrapperNames()+a.shellWrappers(), a.agentFunctions(dir), restoreNounset, a.shellActive(), a.invocation())
+`, a.shellActive(), bashRequestReasonRestore, childenv.GuardPathPin, a.bashWrapperNames()+a.shellWrappers(), a.agentFunctions(dir), restoreNounset, a.shellActive(), a.invocation())
 }
 
 // A stable loader asks the currently published native binary to refresh its

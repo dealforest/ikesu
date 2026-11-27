@@ -90,18 +90,20 @@ func (a *Assets) bashFrameLines(frame string) []string {
 		return []string{`[[ "${1:-}" != -* ]]`, `case "${1:-}" in `, `_ikesu_guard_forward "$@"`, "return $?", "return 0", `builtin command "$@"`}
 	case "_ikesu_guard_run_exit_trap":
 		return bashExitTrapLines
+	case "exit":
+		return []string{`builtin exit "${1-$_ikesu_guard_exit_saved}"`}
 	}
 	return nil
 }
 
 var bashExitTrapLines = []string{
-	`_ikesu_guard_exit_mark=$( { ( :; _ikesu_guard_trap_return "$_ikesu_guard_exit_saved" && :; builtin eval "$_ikesu_guard_trap_body_EXIT"; builtin printf done >&223; ) 223>&1 >&222 222>&-; } )`,
+	`_ikesu_guard_exit_mark=$( { ( :; exit() { builtin exit "${1-$_ikesu_guard_exit_saved}"; }; _ikesu_guard_trap_return "$_ikesu_guard_exit_saved" && :; builtin eval "$_ikesu_guard_trap_body_EXIT"; builtin printf done >&223; ) 223>&1 >&222 222>&-; } )`,
 	":", `_ikesu_guard_trap_return "$_ikesu_guard_exit_saved"`, `builtin eval "$_ikesu_guard_trap_body_EXIT"`,
 	"builtin printf done 1>&223", "builtin printf done >&223", "_ikesu_guard_exit_rc=$?",
 	"[[ $_ikesu_guard_exit_mark == done ]]", `return "$_ikesu_guard_exit_saved"`, `builtin exit "$_ikesu_guard_exit_rc"`,
 }
 
-// bashTrapWrapper replaces the trap builtin after the user's BASH_ENV. EXIT
+// bashTrapWrapper replaces the trap builtin before the user's BASH_ENV. EXIT
 // and 0 run through _ikesu_guard_run_exit_trap; ERR and RETURN keep their
 // text inline after a check. trap -p, trap -P and plain trap show the text
 // the user registered. Other signals and options go to the builtin as is.

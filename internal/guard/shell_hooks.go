@@ -14,14 +14,17 @@ var bashInternalLines = map[string][]string{
 	"_ikesu_guard_forward":       {"local _ikesu_guard_in_wrapper=1"},
 	"_ikesu_guard_command":       {"local _ikesu_guard_in_wrapper=1"},
 	"_ikesu_guard_run_exit_trap": {"local _ikesu_guard_in_wrapper=1 _ikesu_guard_exit_saved=$? _ikesu_guard_exit_mark= _ikesu_guard_exit_rc=0"},
-	"trap":                       {bashTrapWrapperFirstLine},
+	// exit is defined only inside the subshell that runs a stored EXIT text,
+	// so a bare exit there keeps the status from before the trap.
+	"exit": {"local _ikesu_guard_in_wrapper=1"},
+	"trap": {bashTrapWrapperFirstLine},
 }
 
 const bashTrapWrapperFirstLine = "local _ikesu_guard_in_wrapper=1 _ikesu_guard_trap_out= _ikesu_guard_trap_name= _ikesu_guard_trap_sig= _ikesu_guard_trap_action= _ikesu_guard_trap_text= _ikesu_guard_trap_q= _ikesu_guard_trap_rc=0"
 
 func (a *Assets) bashInternalCases() string {
 	var b strings.Builder
-	for _, frame := range []string{"_ikesu_guard_forward", "_ikesu_guard_command", "_ikesu_guard_run_exit_trap", "trap"} {
+	for _, frame := range []string{"_ikesu_guard_forward", "_ikesu_guard_command", "_ikesu_guard_run_exit_trap", "exit", "trap"} {
 		for n, line := range append(append([]string{}, bashInternalLines[frame]...), a.bashFrameLines(frame)...) {
 			if n == 0 {
 				fmt.Fprintf(&b, "  %s) return 0;;\n", quote(frame+":"+line))
@@ -32,7 +35,7 @@ func (a *Assets) bashInternalCases() string {
 	}
 	// Bash reports a function's call line once more as the first event inside
 	// it. The caller's frame already decided that line.
-	for _, frame := range []string{"_ikesu_guard_forward", "_ikesu_guard_command", "_ikesu_guard_run_exit_trap", "_ikesu_guard_trap_check", "_ikesu_guard_trap_return", "trap"} {
+	for _, frame := range []string{"_ikesu_guard_forward", "_ikesu_guard_command", "_ikesu_guard_run_exit_trap", "_ikesu_guard_trap_check", "_ikesu_guard_trap_return", "exit", "trap"} {
 		fmt.Fprintf(&b, "  %s|%s*) return 0;;\n", quote(frame+":"+frame), quote(frame+":"+frame+" "))
 	}
 	// These frames run no user text of their own: the check and the status
@@ -134,24 +137,29 @@ _ikesu_guard_dispatch() {
 _ikesu_guard_trap_check() {
  local _ikesu_guard_debug_busy=1
  local _ikesu_guard_trap_ref="_ikesu_guard_trap_body_$1"
- if [[ $1 == RETURN ]]; then
-  case "${FUNCNAME[1]-}" in _ikesu_guard_*|trap) return 1;; esac
-  case " ${_ikesu_guard_wrapper_names-} " in *" ${FUNCNAME[1]-} "*) return 1;; esac
- fi
  builtin printf -v "_ikesu_guard_trap_saved_$1" '%%s' "${2:-0}"
+ # RETURN also runs when a guard function returns, and when source leaves the
+ # user's BASH_ENV or this file. Those are not the user's returns: skip them.
+ if [[ $1 == RETURN ]]; then
+  case "${FUNCNAME[1]-}" in _ikesu_guard_*) return 1;; esac
+  [[ -n ${BASH_SOURCE[1]-} && ( ${BASH_SOURCE[1]} == "${_ikesu_guard_startup_file-}" || ${BASH_SOURCE[1]} == "${_ikesu_guard_startup_loader-}" ) ]] && return 1
+ fi
+ # Until the setup finishes, the user's BASH_ENV is not judged; its own
+ # traps run as part of it.
+ [[ ${_ikesu_guard_finalized-} == 1 ]] || return 0
  _ikesu_guard_debug "${!_ikesu_guard_trap_ref-}" force
  return 0
 }
 _ikesu_guard_trap_return() { return "${1:-0}"; }
 _ikesu_guard_run_exit_trap() {
  local _ikesu_guard_in_wrapper=1 _ikesu_guard_exit_saved=$? _ikesu_guard_exit_mark= _ikesu_guard_exit_rc=0
- if { _ikesu_guard_exit_mark=$( { ( :; _ikesu_guard_trap_return "$_ikesu_guard_exit_saved" && :; builtin eval "$_ikesu_guard_trap_body_EXIT"; builtin printf done >&223; ) 223>&1 >&222 222>&-; } ); } 222>&1; then :; else _ikesu_guard_exit_rc=$?; fi
+ if { _ikesu_guard_exit_mark=$( { ( :; exit() { builtin exit "${1-$_ikesu_guard_exit_saved}"; }; _ikesu_guard_trap_return "$_ikesu_guard_exit_saved" && :; builtin eval "$_ikesu_guard_trap_body_EXIT"; builtin printf done >&223; ) 223>&1 >&222 222>&-; } ); } 222>&1; then :; else _ikesu_guard_exit_rc=$?; fi
  [[ $_ikesu_guard_exit_mark == done ]] && return "$_ikesu_guard_exit_saved"
  builtin exit "$_ikesu_guard_exit_rc"
 }
-readonly -f _ikesu_guard_debug _ikesu_guard_dispatch _ikesu_guard_needs_check _ikesu_guard_trap_check _ikesu_guard_trap_return _ikesu_guard_run_exit_trap
+%sreadonly -f _ikesu_guard_debug _ikesu_guard_dispatch _ikesu_guard_needs_check _ikesu_guard_trap_check _ikesu_guard_trap_return _ikesu_guard_run_exit_trap trap
 fi
-`, a.shellCore(), protectForward, bashSimpleForms, strings.Join(append(targets, quote("")), "|"), a.bashInternalCases(), a.bashWrapperCalls(), a.shellActive(), bashRequestReasonRestore, bashRequestReasonRestore, a.identity()+" builtin exec "+quote(a.RuntimePath()))
+`, a.shellCore(), protectForward, bashSimpleForms, strings.Join(append(targets, quote("")), "|"), a.bashInternalCases(), a.bashWrapperCalls(), a.shellActive(), bashRequestReasonRestore, bashRequestReasonRestore, a.identity()+" builtin exec "+quote(a.RuntimePath()), bashTrapWrapper)
 	}
 	return fmt.Sprintf(`if [[ ! -o interactive ]]; then
 if [[ %s ]] && [[ -n "${ZSH_EXECUTION_STRING:-}" ]]; then
