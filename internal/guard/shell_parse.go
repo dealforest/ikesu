@@ -15,9 +15,10 @@ import (
 // Shell analysis never executes substitutions or invokes a shell. Script
 // operands use the bounded file reader; Walk visits function bodies as well.
 func lineCommands(i Input, line string) ([]Input, error) {
+	i = withShellFunctions(i)
 	tree, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(line), "guard line")
 	if err != nil {
-		if i.runtimeLine {
+		if i.runtimeLine && !i.trapRegistration {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("シェルの構文を分解できません: %w", err)
@@ -63,11 +64,40 @@ func lineCommands(i Input, line string) ([]Input, error) {
 		setError(e)
 	}
 	syntax.Walk(tree, func(node syntax.Node) bool {
-		if i.runtimeLine {
+		if redefinesTrapName(i, node, line) {
+			setError(fmt.Errorf("登録済みのトラップが呼ぶ名前を作り直す形は承認が必要です"))
+		}
+		// In bash a TRAP<SIG> name is an ordinary function.
+		if fn, ok := node.(*syntax.FuncDecl); ok && i.LineVia != "bash-debug" && isZshTrapFunction(fn.Name.Value) {
+			if fn.Name.Value == "TRAPDEBUG" {
+				setError(fmt.Errorf("判定のトラップの変更には承認が必要です"))
+			} else {
+				nested, e := trapActionCommands(i, trapBodyText(fn.Body, line))
+				for n := range nested {
+					nested[n].callOffset = int(fn.Pos().Offset())
+				}
+				commands = append(commands, nested...)
+				if e != nil {
+					setError(e)
+				}
+			}
+			return false
+		}
+		// A trap text gets no later DEBUG event for its substitutions.
+		if i.runtimeLine && !i.trapRegistration && !i.trapBody {
 			switch node.(type) {
 			case *syntax.CmdSubst, *syntax.ProcSubst, *syntax.FuncDecl:
 				return false
 			}
+		}
+		// A line the shell runs may not set the guard's own state, such as
+		// the flag that ends its startup. Reading it changes nothing.
+		if (i.LineVia == "bash-debug" || i.LineVia == "zsh-debug") && setsGuardState(node, line) {
+			setError(fmt.Errorf("判定の内部の変数を書き換える形は承認が必要です"))
+		}
+		// zsh defines a function, TRAP<SIG> included, through this table.
+		if i.LineVia != "bash-debug" && setsFunctionTable(node, line) {
+			setError(fmt.Errorf("関数の表への代入で関数やトラップを入れる形は確かめられません"))
 		}
 		call, ok := node.(*syntax.CallExpr)
 		if !ok || len(call.Args) == 0 {
@@ -159,6 +189,23 @@ func lineCommands(i Input, line string) ([]Input, error) {
 			next.AuthorizationEnv[key] = value
 		}
 		unwrapped, e := unwrapCommand(next)
+		if i.trapRegistration && !knownTrapCall(unwrapped) {
+			setError(fmt.Errorf("トラップのコマンドを安全に確定できません"))
+		}
+		if i.trapBody && i.shellFunctions[unwrapped.Command] {
+			setError(fmt.Errorf("トラップから利用者の関数を呼ぶ形は承認が必要です"))
+		}
+		if unwrapped.Command == "trap" {
+			if next.Command != unwrapped.Command {
+				setError(fmt.Errorf("判定の trap ラッパーを経由しない実行には承認が必要です"))
+			} else if !unwrapped.Unresolved {
+				nested, trapErr := trapRegistrationCommands(unwrapped)
+				commands = append(commands, nested...)
+				if trapErr != nil {
+					setError(trapErr)
+				}
+			}
+		}
 		if i.runtimeLine && unknownWords[unwrapped.Command] {
 			setError(unresolvedScriptError{"実行するコマンド名を安全に確定できません"})
 		}
@@ -587,4 +634,120 @@ func unresolvedVerdict(c Config, command Input, judge func(Config, Input) Verdic
 		}
 	}
 	return found, have
+}
+
+// setsGuardState reports a command that assigns, declares, reads into or
+// unsets a variable of the guard (_ikesu_guard_*), or whose target name is
+// only known when it runs. It follows runtimeReasonSyntax: assignments,
+// declare/export/typeset/local/readonly, let, and printf -v in either form.
+func setsGuardState(node syntax.Node, line string) bool {
+	return writesName(node, line, func(name string) bool { return strings.Contains(name, "_ikesu_guard_") })
+}
+
+// setsFunctionTable reports a zsh write to the functions table, which defines
+// a function, TRAP<SIG> included.
+func setsFunctionTable(node syntax.Node, line string) bool {
+	return writesName(node, line, func(name string) bool {
+		return name == "functions" || strings.HasPrefix(name, "functions[") || strings.HasPrefix(name, "functions+")
+	})
+}
+
+func writesName(node syntax.Node, line string, match func(string) bool) bool {
+	text := func(n syntax.Node) string { return line[n.Pos().Offset():n.End().Offset()] }
+	dynamic := func(s string) bool { return strings.ContainsAny(s, "$`") }
+	switch n := node.(type) {
+	case *syntax.Assign:
+		if n.Name != nil {
+			name := n.Name.Value
+			if n.Index != nil {
+				name += "["
+			}
+			return match(name)
+		}
+	case *syntax.LetClause:
+		return match(text(n)) || strings.Contains(text(n), "_ikesu_guard_")
+	case *syntax.DeclClause:
+		var words []string
+		for _, arg := range n.Args {
+			if arg.Name != nil {
+				name := arg.Name.Value
+				if arg.Index != nil {
+					name += "["
+				}
+				if match(name) {
+					return true
+				}
+				continue
+			}
+			if arg.Value != nil {
+				words = append(words, text(arg.Value))
+			}
+		}
+		if displayDeclaration(append([]string{n.Variant.Value}, words...)) || functionDeclaration(words) {
+			return false
+		}
+		for _, word := range words {
+			word = strings.Trim(word, "'\"")
+			if strings.HasPrefix(word, "-") {
+				continue
+			}
+			if match(word) || match(strings.SplitN(word, "=", 2)[0]) || dynamic(word) {
+				return true
+			}
+		}
+	case *syntax.CallExpr:
+		if len(n.Args) == 0 {
+			return false
+		}
+		words := make([]string, len(n.Args))
+		for k, word := range n.Args {
+			words[k] = strings.Trim(text(word), "'\"")
+		}
+		for len(words) > 0 && has([]string{"builtin", "command"}, words[0]) {
+			words = words[1:]
+		}
+		if len(words) == 0 {
+			return false
+		}
+		var names []string
+		switch words[0] {
+		case "declare", "typeset", "local", "export", "readonly", "unset", "read", "mapfile", "readarray", "let", "getopts", "integer", "float", "unsetenv", "setenv":
+			if displayDeclaration(words) || has([]string{"declare", "typeset"}, words[0]) && functionDeclaration(words[1:]) {
+				return false
+			}
+			for _, word := range words[1:] {
+				if !strings.HasPrefix(word, "-") {
+					names = append(names, word)
+				}
+			}
+		case "printf", "print":
+			for k := 1; k < len(words); k++ {
+				switch {
+				case words[k] == "-v" && k+1 < len(words):
+					names = append(names, words[k+1])
+				case strings.HasPrefix(words[k], "-v"):
+					names = append(names, strings.TrimPrefix(words[k], "-v"))
+				}
+			}
+		default:
+			return false
+		}
+		for _, name := range names {
+			if match(name) || match(strings.SplitN(name, "=", 2)[0]) || dynamic(name) && words[0] != "unset" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// functionDeclaration reports declare -f or -F: they print or mark functions
+// and set no variable.
+func functionDeclaration(words []string) bool {
+	for _, word := range words {
+		if strings.HasPrefix(word, "-") && word != "--" && strings.ContainsAny(word, "fF") {
+			return true
+		}
+	}
+	return false
 }

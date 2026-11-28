@@ -51,6 +51,7 @@ func TestViewerLastActivitySizesPTYWithTwoOrThreeClientsAndSplits(t *testing.T) 
 				}
 				owner := viewers[len(viewers)-1]
 				if split {
+					owner.Input(a, []byte("x"))
 					owner.with(a, func(ui *App) { ui.exec(model.CmdSplitFocused{Dir: layout.Vertical}) })
 				}
 				for _, v := range viewers {
@@ -64,7 +65,7 @@ func TestViewerLastActivitySizesPTYWithTwoOrThreeClientsAndSplits(t *testing.T) 
 	}
 }
 
-func TestViewerResizeClaimsPTYAndDrawsStayLocal(t *testing.T) {
+func TestViewerResizeUpdatesOwnerPTYAndDrawsStayLocal(t *testing.T) {
 	teststate.Lock(t)
 	a := sizeOwnerRuntimeApp(t)
 	if err := a.StartInitialPane(); err != nil {
@@ -82,13 +83,15 @@ func TestViewerResizeClaimsPTYAndDrawsStayLocal(t *testing.T) {
 			}
 		}
 	}
-	check(72, 26)
+	check(172, 46)
 	first.Resize(a, 220, 55, 0, 0)
+	check(192, 51)
+	second.Resize(a, 101, 31, 0, 0)
 	check(192, 51)
 	for _, tc := range []struct {
 		v    *Viewer
 		w, h int
-	}{{first, 220, 55}, {second, 100, 30}} {
+	}{{first, 220, 55}, {second, 101, 31}} {
 		var got [2]int
 		tc.v.SetSnapshotSink(func(in render.Input) error { got = [2]int{in.State.Cols, in.State.Rows}; return nil })
 		tc.v.Draw(a, a.SessionPaneSnaps())
@@ -97,10 +100,8 @@ func TestViewerResizeClaimsPTYAndDrawsStayLocal(t *testing.T) {
 		}
 	}
 	check(192, 51)
-	second.Resize(a, 101, 31, 0, 0)
-	check(73, 27)
-	if a.st.Cols != 101 || a.st.Rows != 31 {
-		t.Fatal("session dimensions did not follow latest resize", a.st.Cols, a.st.Rows)
+	if a.st.Cols != 220 || a.st.Rows != 55 {
+		t.Fatal("session dimensions did not follow owner's resize", a.st.Cols, a.st.Rows)
 	}
 }
 
@@ -114,6 +115,7 @@ func TestViewerExplicitSplitFromNonOwnerUsesSizeOwner(t *testing.T) {
 	first.Begin(a, 0, 0)
 	owner := a.NewViewer(io.Discard, 100, 30, nil)
 	owner.Begin(a, 0, 0)
+	owner.Input(a, []byte("x"))
 	first.with(a, func(ui *App) { ui.exec(model.CmdSplitFocused{Dir: layout.Vertical}) })
 	for id, size := range viewerTerminalSizes(a) {
 		if size != [2]int{35, 26} {
@@ -194,8 +196,10 @@ func TestViewerDisconnectKeepsFrozenBasisUntilOneRemains(t *testing.T) {
 				}
 			}
 			if detachOwner {
+				viewers[2].Input(a, []byte("x"))
 				viewers[2].Detach(a)
 				viewers[0].Resize(a, 220, 55, 0, 0)
+				viewers[1].Input(a, []byte("x"))
 				viewers[1].Resize(a, 110, 35, 0, 0)
 				check(82, 31)
 				viewers[1].Detach(a)
@@ -203,6 +207,7 @@ func TestViewerDisconnectKeepsFrozenBasisUntilOneRemains(t *testing.T) {
 				viewers[1].Detach(a)
 				viewers[0].Resize(a, 220, 55, 0, 0)
 				check(192, 51)
+				viewers[2].Input(a, []byte("x"))
 				viewers[2].Resize(a, 190, 45, 0, 0)
 				check(162, 41)
 				viewers[2].Detach(a)
@@ -220,6 +225,8 @@ func TestViewerDisconnectKeepsFrozenBasisUntilOneRemains(t *testing.T) {
 			check(192, 51)
 			fresh := a.NewViewer(io.Discard, 100, 30, nil)
 			fresh.Begin(a, 0, 0)
+			check(192, 51)
+			fresh.Input(a, []byte("x"))
 			check(72, 26)
 		})
 	}

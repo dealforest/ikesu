@@ -69,15 +69,44 @@ ikesu mac-dialog status
 
 ### サイドバーのプラグイン
 
-`~/.config/ikesu/plugins/sidebar/` に置いた実行できるスクリプトを、名前に書いた間隔ごとに動かします。出力の `---` より前の行を、色（ANSI）ごとサイドバーの下に出します（SwiftBar と同じ名前の付け方）。スクリプトには、サイドバーの幅が `IKESU_SIDEBAR_COLUMNS` で渡ります。
+`~/.config/ikesu/plugins/sidebar/` に置いた実行できるスクリプトを、名前に書いた間隔ごとに動かします。出力の `---` より前の行を、色（ANSI SGR）ごとサイドバーの下に出します（SwiftBar と同じ名前の付け方）。スクリプトには、表示先サイドバーの内側幅が `IKESU_SIDEBAR_COLUMNS` で渡ります。
+
+`config_version = 2`（新規設定の既定）では、`~/.config/ikesu/config.toml` で有効にします。
+
+```toml
+[ui.sidebar_plugins]
+enabled = true
+```
+
+#### 置き場所とメタデータ
+
+- 設置先: `~/.config/ikesu/plugins/sidebar/` 直下・`left/`（既定: 左サイドバー）、または `right/`（既定: 右サイドバー）
+- ファイル名: `<名前>.<数字><単位>[.<拡張子>]`（単位は `s`・`m`・`h`・`d`、実行権限 `chmod +x` が必要）
+- 先頭20行以内の `#` コメントで表示位置・見出し・並び順を指定できます（フォルダより優先）:
+
+```sh
+# ikesu.position = right   # left または right
+# ikesu.title = 天気       # 見出し名（省略時はファイル名の <名前>）
+# ikesu.order = 10         # 表示順（小さい順、既定 0）
+```
+
+10秒ごとにフォルダを再走査するため、追加・変更・削除は再起動なしで反映されます。10秒より短い間隔は10秒にし、10秒で終わらないスクリプトは止めます。プラグインごとに見出しが付き、クリックすると閉じます。
+
+#### サンプルプラグイン
+
+[examples/sidebar-plugins/](examples/sidebar-plugins/) に、すぐ使えるサンプルを同梱しています。
+
+| ファイル | 表示位置 | 内容 |
+|---|---|---|
+| [resources.1m.sh](examples/sidebar-plugins/resources.1m.sh) | 左 | macOS の CPU 実使用率（0〜100%）・メモリ・ディスクをバー表示＋1m/5m/15m ロードアベレージ |
+| [weather.10m.py](examples/sidebar-plugins/weather.10m.py) | 右 | Open-Meteo による現在の天気・今日の最低/最高気温・2時間ごとの降水推移（既定は東京、`LAT`/`LON` または `WEATHER_LAT`/`WEATHER_LON` で地点変更可） |
+| [usage.30s.sh](examples/sidebar-plugins/usage.30s.sh) | 右 | AgentPal の `usage` で Claude Code / Gemini / Codex などの使用量バーを表示 |
 
 ```sh
 mkdir -p ~/.config/ikesu/plugins/sidebar
-printf '#!/bin/sh\ncurl -s "wttr.in/Tokyo?format=3"\n' > ~/.config/ikesu/plugins/sidebar/tenki.1h.sh
-chmod +x ~/.config/ikesu/plugins/sidebar/tenki.1h.sh
+cp examples/sidebar-plugins/resources.1m.sh examples/sidebar-plugins/weather.10m.py ~/.config/ikesu/plugins/sidebar/
+chmod +x ~/.config/ikesu/plugins/sidebar/*
 ```
-
-間隔は `10s`・`5m`・`1h`・`1d` のように書きます。10秒より短い間隔は10秒にし、10秒で終わらないスクリプトは止めます。プラグインごとに見出しが付き、クリックすると閉じます。Claude Code と Codex の使用量は、AgentPal の `agentpal usage` をプラグインから呼ぶと出せます。
 
 ## 錦鯉の池
 

@@ -335,6 +335,16 @@ func (m *machineClient) input(event input.Event) error {
 					}
 					return nil
 				}
+				if hit.Rule {
+					// A press on a rule does nothing (the row under it on the server is
+					// another one). A release or motion of a gesture that started
+					// elsewhere still goes to the server, so a pane gets its release.
+					if event.Kind == input.KindMouseClick {
+						m.suppressRelease = true
+						return nil
+					}
+					break
+				}
 				if hit.Right && !hit.Header {
 					return m.rightMachineInput(hit, event)
 				}
@@ -366,13 +376,18 @@ func (m *machineClient) input(event input.Event) error {
 					return m.createWorkspace(hit.Machine)
 				}
 				if hit.Header && event.Kind == input.KindMouseClick {
-					// The left list's ▾/▸ header folds that machine's space rows.
-					toggled := !hit.Right && event.Mouse.Button == uv.MouseLeft
+					// A ▾/▸ header folds that machine's rows: space rows on the left,
+					// agent or job rows on the right.
+					toggled := (!hit.Right || hit.Fold) && event.Mouse.Button == uv.MouseLeft
 					if toggled {
-						if m.sidebar.Collapsed == nil {
-							m.sidebar.Collapsed = map[string]bool{}
+						folded := &m.sidebar.Collapsed
+						if hit.Right {
+							folded = &m.sidebar.RightCollapsed
 						}
-						m.sidebar.Collapsed[hit.Machine] = !m.sidebar.Collapsed[hit.Machine]
+						if *folded == nil {
+							*folded = map[string]bool{}
+						}
+						(*folded)[hit.Machine] = !(*folded)[hit.Machine]
 					}
 					if !m.endpoints[hit.Machine].profile.Enabled {
 						m.suppressRelease = true
@@ -455,6 +470,14 @@ func (m *machineClient) input(event input.Event) error {
 					return nil
 				}
 				return m.sidebarInput(hit, event)
+			}
+			// The machine list composes several servers, so its empty rows (under
+			// folded or short machines) are not the server's own rows there.
+			if event.Kind == input.KindMouseClick && len(m.sidebar.Groups) > 1 {
+				if contains(list.X, list.Y, list.W, list.H, event.Mouse.X, event.Mouse.Y) {
+					m.suppressRelease = true
+					return nil
+				}
 			}
 		}
 	}

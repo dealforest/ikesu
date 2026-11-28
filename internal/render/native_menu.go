@@ -37,6 +37,7 @@ type nativeDialogPayload struct {
 	Cancel       string   `json:"cancel"`
 	Input        *string  `json:"input"`
 	ContinueOnly bool     `json:"continue_only"`
+	NoButtons    bool     `json:"no_buttons,omitempty"` // progress only: no buttons, no dismiss
 }
 
 const nativeNoneJSON = `{"kind":"none"}`
@@ -52,7 +53,7 @@ func NativeMenuJSON(menu *Menu, dialog *Dialog) string {
 			lines = []string{}
 		}
 		p := nativeDialogPayload{Kind: "dialog", Title: dialog.Title, Detail: dialog.Detail, Lines: lines,
-			Confirm: dialog.Confirm, Cancel: dialog.Cancel, ContinueOnly: dialog.ContinueOnly}
+			Confirm: dialog.Confirm, Cancel: dialog.Cancel, ContinueOnly: dialog.ContinueOnly, NoButtons: dialog.NoButtons}
 		if dialog.InputEdit || dialog.WorktreeCreate {
 			text := dialog.Input
 			p.Input = &text

@@ -240,25 +240,37 @@ func (d *privateDirectory) link(name, target string) error {
 	return unix.Renameat(d.fd(), tmp, d.fd(), name)
 }
 func (d *privateDirectory) lock(exclusive bool) (func(), error) {
-	fd, err := unix.Openat(d.fd(), "generation.lock", unix.O_RDWR|unix.O_CREAT|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
+	mode := unix.LOCK_SH
+	if exclusive {
+		mode = unix.LOCK_EX
+	}
+	return d.lockFile("generation.lock", mode)
+}
+
+func (d *privateDirectory) lockFile(name string, mode int) (func(), error) {
+	f, err := d.openLockFile(name)
 	if err != nil {
 		return nil, err
 	}
-	f := os.NewFile(uintptr(fd), "generation.lock")
+	if err = unix.Flock(int(f.Fd()), mode); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return func() { f.Close() }, nil
+}
+
+func (d *privateDirectory) openLockFile(name string) (*os.File, error) {
+	fd, err := unix.Openat(d.fd(), name, unix.O_RDWR|unix.O_CREAT|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
+	if err != nil {
+		return nil, err
+	}
+	f := os.NewFile(uintptr(fd), name)
 	var s unix.Stat_t
 	if err = unix.Fstat(fd, &s); err != nil || s.Mode&unix.S_IFMT != unix.S_IFREG || int(s.Uid) != os.Geteuid() || s.Mode&0077 != 0 {
 		f.Close()
 		return nil, fmt.Errorf("untrusted guard generation lock")
 	}
-	mode := unix.LOCK_SH
-	if exclusive {
-		mode = unix.LOCK_EX
-	}
-	if err = unix.Flock(fd, mode); err != nil {
-		f.Close()
-		return nil, err
-	}
-	return func() { unix.Flock(fd, unix.LOCK_UN); f.Close() }, nil
+	return f, nil
 }
 func generationName(name string) bool {
 	return strings.HasPrefix(name, "generation-") && filepath.Base(name) == name

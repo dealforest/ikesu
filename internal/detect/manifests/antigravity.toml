@@ -42,6 +42,8 @@ visible_blocker = true
 contains = ["↑/↓ Navigate"]
 any = [
   { contains = ["→ Next", "enter Select", "esc Skip"] },
+  # A lone question (1/1) has no Next: "↑/↓ Navigate · enter Select · esc Skip" (agy 1.5.17, 2026-11-26).
+  { contains = ["enter Select", "esc Skip"] },
   { contains = ["enter Write-in"] },
   { contains = ["enter Submit All"] },
   { contains = ["enter Submit"] },

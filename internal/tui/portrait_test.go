@@ -163,6 +163,8 @@ func TestPortraitTwoViewersStayIndependentWithPTYOwner(t *testing.T) {
 		expectPTY(wide, false)
 		tall.Resize(a, 160, 45, 1600, 1801)
 		checkPortrait(t, a, wide, false)
+		expectPTY(wide, false)
+		tall.Input(a, []byte("x"))
 		expectPTY(tall, true)
 	}
 	tall.Detach(a)

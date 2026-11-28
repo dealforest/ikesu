@@ -49,8 +49,21 @@ func TestMachineRightSidebarPluginClick(t *testing.T) {
 				t.Fatalf("machine row overlaps plugin heading: %+v", hit)
 			}
 		}
+		heads := render.SidebarPanelHeadings(panel(), r)
+		if len(heads) != 1 || !panel().Rules {
+			t.Fatalf("right plugin headings = %+v rules=%t", heads, panel().Rules)
+		}
+		frame := render.ComposeClient(*in, &m.sidebar, "test", false).Frame
+		var title strings.Builder
+		for x := heads[0].Rect.X; x < heads[0].Rect.X+heads[0].Rect.W; x++ {
+			title.WriteString(frame.Cell(x, heads[0].Rect.Y).Content)
+		}
+		if !strings.Contains(title.String(), "Right plugin") {
+			t.Fatalf("heading row %d = %q", heads[0].Rect.Y, title.String())
+		}
 		for _, final := range []byte{'M', 'm'} {
-			ev := mouseEvent(t, fmt.Sprintf("\x1b[<0;%d;%d%c", r.X+2, r.Y+1, final))
+			// SGR mouse positions are 1-based.
+			ev := mouseEvent(t, fmt.Sprintf("\x1b[<0;%d;%d%c", heads[0].Rect.X+2, heads[0].Rect.Y+1, final))
 			if err := m.input(ev); err != nil {
 				t.Fatal(err)
 			}

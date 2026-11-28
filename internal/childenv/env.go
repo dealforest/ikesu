@@ -23,6 +23,24 @@ var markers = map[string]bool{
 	"IKESU_RETAINED_REEXEC":     true,
 }
 
+// GuardPathPin is shared by the shell startup and prompt hooks.
+const GuardPathPin = `case "${PATH-}" in "${IKESU_GUARD_BIN-}"|"${IKESU_GUARD_BIN-}":*) ;; *) export PATH="${IKESU_GUARD_BIN-}:${PATH-}";; esac` + "\n"
+
+// GuardPromptHook returns the suffix appended to the user's PROMPT_COMMAND.
+func GuardPromptHook(enforce bool) string {
+	hook := "\n" + GuardPathPin
+	if enforce {
+		hook += "export IKESU_GUARD_ENFORCING=1\n"
+	}
+	return hook + `if [[ ! -f "${IKESU_GUARD_READY-}" ]]; then builtin printf '' > "${IKESU_GUARD_READY-}"; fi` + "\n"
+}
+
+func legacyGuardPromptHook(prefix, enforce string) string {
+	pin := `case "$PATH" in "$` + prefix + `BIN"|"$` + prefix + `BIN":*) ;; *) export PATH="$` + prefix + `BIN:$PATH";; esac` + "\n"
+	ready := `if [[ ! -f "$` + prefix + `READY" ]]; then builtin printf '' > "$` + prefix + `READY"; fi` + "\n"
+	return "\n" + pin + enforce + ready
+}
+
 // Scrub restores proven generated shell settings before dropping pane state.
 // Explicit launch extras and fresh guard injection must follow this call.
 func Scrub(env []string) []string {
@@ -79,10 +97,14 @@ func Scrub(env []string) []string {
 			}
 		}
 		// Only an exact suffix produced by our startup writer is removed.
-		pin := `case "$PATH" in "$` + prefix + `BIN"|"$` + prefix + `BIN":*) ;; *) export PATH="$` + prefix + `BIN:$PATH";; esac` + "\n"
-		ready := `if [[ ! -f "$` + prefix + `READY" ]]; then builtin printf '' > "$` + prefix + `READY"; fi` + "\n"
+		var suffixes []string
+		if ns == "IKESU" {
+			suffixes = append(suffixes, GuardPromptHook(false), GuardPromptHook(true))
+		}
 		for _, enforce := range []string{"", "export " + prefix + "ENFORCING=1\n", "export IKESU_GUARD_ENFORCING=1\n"} {
-			suffix := "\n" + pin + enforce + ready
+			suffixes = append(suffixes, legacyGuardPromptHook(prefix, enforce))
+		}
+		for _, suffix := range suffixes {
 			if strings.HasSuffix(m["PROMPT_COMMAND"], suffix) {
 				m["PROMPT_COMMAND"] = strings.TrimSuffix(m["PROMPT_COMMAND"], suffix)
 				if m["PROMPT_COMMAND"] == "" && m[prefix+"PROMPT_COMMAND_SET"] == "0" {

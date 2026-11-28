@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/kazuph/ikesu/internal/api"
-	"github.com/kazuph/ikesu/internal/teststate"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kazuph/ikesu/internal/api"
+	"github.com/kazuph/ikesu/internal/teststate"
 )
 
 func TestGuardLogStatusAndCompareCLI(t *testing.T) {
@@ -22,12 +23,18 @@ func TestGuardLogStatusAndCompareCLI(t *testing.T) {
 	if e := os.MkdirAll(filepath.Dir(path), 0700); e != nil {
 		t.Fatal(e)
 	}
-	var records strings.Builder
+	var archive, current strings.Builder
 	for n := 0; n < 25; n++ {
-		fmt.Fprintf(&records, "{\"ts_epoch\":1767225600,\"cmd_line\":\"echo %d\",\"verdict\":\"allow\",\"rule\":\"default\"}\n", n)
+		records := &archive
+		if n >= 15 {
+			records = &current
+		}
+		fmt.Fprintf(records, "{\"ts_epoch\":1767225600,\"cmd_line\":\"echo %d\",\"verdict\":\"allow\",\"rule\":\"default\"}\n", n)
 	}
-	if e := os.WriteFile(path, []byte(records.String()), 0600); e != nil {
-		t.Fatal(e)
+	for name, records := range map[string]string{path + ".1": archive.String(), path: current.String()} {
+		if err := os.WriteFile(name, []byte(records), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	run := func(a ...string) (int, string) {
 		t.Helper()
@@ -47,7 +54,7 @@ func TestGuardLogStatusAndCompareCLI(t *testing.T) {
 		t.Fatal(status)
 	}
 	code, out = run("log", "--json")
-	if code != 0 || strings.Count(out, "\n") != 20 || strings.Contains(out, `"echo 4"`) || !strings.Contains(out, `"echo 5"`) {
+	if code != 0 || strings.Count(out, "\n") != 20 || strings.Contains(out, `"echo 4"`) || !strings.Contains(out, `"echo 5"`) || strings.Index(out, `"echo 14"`) >= strings.Index(out, `"echo 15"`) {
 		t.Fatal(code, out)
 	}
 	code, out = run("log", "--lines", "0")
@@ -59,7 +66,7 @@ func TestGuardLogStatusAndCompareCLI(t *testing.T) {
 		t.Fatal(code, out)
 	}
 	g, ai := filepath.Join(d, "g.jsonl"), filepath.Join(d, "ai.tsv")
-	if e := os.WriteFile(g, []byte("{\"ts_epoch\":1767225600,\"cmd_line\":\"echo hi\",\"verdict\":\"allow\"}\n"), 0600); e != nil {
+	if e := os.WriteFile(g+".1", []byte("{\"ts_epoch\":1767225600,\"cmd_line\":\"echo hi\",\"verdict\":\"allow\"}\n"), 0600); e != nil {
 		t.Fatal(e)
 	}
 	if e := os.WriteFile(ai, []byte("2027-01-01T00:00:00Z\tALLOW\techo hi\n"), 0600); e != nil {

@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kazuph/ikesu/internal/api"
+	"golang.org/x/sys/unix"
 )
 
 func TestGuardEntryUpgradeKeepsClaudePane(t *testing.T) {
@@ -178,8 +180,97 @@ func TestGuardGenerationRollbackAfterRealHandoffFailure(t *testing.T) {
 		}
 		before[path] = data
 	}
-	if out, err := s.cli("server", "live-handoff", "--import-exe", binPath); err == nil || !strings.Contains(out, "handoff_failed") {
-		t.Fatalf("generation failure did not abort handoff: %v %s", err, out)
+	firstDir := filepath.Dir(paths[1])
+	current := filepath.Join(firstDir, "current")
+	previous, err := os.Readlink(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousDir := filepath.Join(firstDir, previous)
+	aged := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(previousDir, aged, aged); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pause the real importer at exec, after the sender's checkpoint. The
+	// second pane's lock can then stall only the importer, after the first
+	// pane has switched generation.
+	launcherDir := t.TempDir()
+	ready := filepath.Join(launcherDir, "ready")
+	fifo := filepath.Join(launcherDir, "start")
+	if err := unix.Mkfifo(fifo, 0600); err != nil {
+		t.Fatal(err)
+	}
+	start, err := os.OpenFile(fifo, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer start.Close()
+	launcher := filepath.Join(launcherDir, "importer")
+	script := fmt.Sprintf("#!/bin/sh\n: > %q\nread unused < %q || exit 1\nexec %q \"$@\"\n", ready, fifo, binPath)
+	if err := os.WriteFile(launcher, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	type handoffOutcome struct {
+		out string
+		err error
+	}
+	handoff := make(chan handoffOutcome, 1)
+	go func() {
+		out, err := s.cli("server", "live-handoff", "--import-exe", launcher)
+		handoff <- handoffOutcome{out, err}
+	}()
+	s.waitFor("sender checkpoint", 5*time.Second, func(string) bool {
+		_, err := os.Stat(ready)
+		return err == nil
+	})
+	gate, err := os.OpenFile(filepath.Join(secondDir, "generation.lock"), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gate.Close()
+	if err := unix.Flock(int(gate.Fd()), unix.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := start.WriteString("go\n"); err != nil {
+		t.Fatal(err)
+	}
+	s.waitFor("first generation switched before handoff confirmation", 5*time.Second, func(string) bool {
+		name, err := os.Readlink(current)
+		return err == nil && name != previous
+	})
+	pruning, err := os.OpenFile(filepath.Join(s.stateDir, s.name, "guard", "handoff-prune.lock"), os.O_RDWR|os.O_CREATE, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pruning.Close()
+	if err := unix.Flock(int(pruning.Fd()), unix.LOCK_SH|unix.LOCK_NB); err != unix.EWOULDBLOCK {
+		t.Errorf("importer did not suspend pruning before handoff confirmation: %v", err)
+		if err == nil {
+			unix.Flock(int(pruning.Fd()), unix.LOCK_UN)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(previousDir, "manifest.json")); err != nil {
+		t.Errorf("sender's generation disappeared before confirmation: %v", err)
+	}
+	if err := unix.Flock(int(gate.Fd()), unix.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-handoff:
+		if result.err == nil || !strings.Contains(result.out, "handoff_failed") {
+			t.Fatalf("generation failure did not abort handoff: %v %s", result.err, result.out)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("handoff did not roll back after the second pane failed")
+	}
+	if restored, err := os.Readlink(current); err != nil || restored != previous {
+		t.Fatalf("current generation after rollback: %s, %v", restored, err)
+	}
+	fresh := exec.Command("/bin/bash", "-c", "printf ROLLBACK_NEW_SHELL")
+	fresh.Env = []string{"BASH_ENV=" + filepath.Join(firstDir, "bash-env"), "PATH=/usr/bin:/bin"}
+	if out, err := fresh.CombinedOutput(); err != nil || string(out) != "ROLLBACK_NEW_SHELL" {
+		t.Fatalf("new Bash failed after rollback: %v %s", err, out)
 	}
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
