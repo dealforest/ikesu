@@ -92,16 +92,30 @@ func TestProcessScrubBeforeChildren(t *testing.T) {
 
 func TestGeneratedPromptSuffixKeepsUserLines(t *testing.T) {
 	user := "echo user\nprintf user"
-	pin := `case "$PATH" in "$IKESU_GUARD_BIN"|"$IKESU_GUARD_BIN":*) ;; *) export PATH="$IKESU_GUARD_BIN:$PATH";; esac` + "\n"
-	ready := `if [[ ! -f "$IKESU_GUARD_READY" ]]; then builtin printf '' > "$IKESU_GUARD_READY"; fi` + "\n"
-	for _, enforce := range []string{"", "export IKESU_GUARD_ENFORCING=1\n"} {
-		m := envMap(Scrub([]string{"PROMPT_COMMAND=" + user + "\n" + pin + enforce + ready, "IKESU_GUARD_PROMPT_COMMAND_SET=1"}))
-		if m["PROMPT_COMMAND"] != user {
-			t.Fatal(m)
-		}
-	}
-	m := envMap(Scrub([]string{"PROMPT_COMMAND=" + user + "\n" + pin + ready + "echo user-added\n", "IKESU_GUARD_PROMPT_COMMAND_SET=1"}))
-	if m["PROMPT_COMMAND"] != user+"\n"+pin+ready+"echo user-added\n" {
-		t.Fatal("unproven user suffix removed")
+	for name, hook := range map[string]string{
+		"current-record":  GuardPromptHook(false),
+		"current-enforce": GuardPromptHook(true),
+		"legacy-record":   legacyGuardPromptHook("IKESU_GUARD_", ""),
+		"legacy-enforce":  legacyGuardPromptHook("IKESU_GUARD_", "export IKESU_GUARD_ENFORCING=1\n"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := envMap(Scrub([]string{"PROMPT_COMMAND=" + user + hook, "IKESU_GUARD_PROMPT_COMMAND_SET=1"}))
+			if m["PROMPT_COMMAND"] != user {
+				t.Fatal(m)
+			}
+			m = envMap(Scrub([]string{"PROMPT_COMMAND=" + hook, "IKESU_GUARD_PROMPT_COMMAND_SET=0"}))
+			if _, exists := m["PROMPT_COMMAND"]; exists {
+				t.Fatal("unset user prompt became set", m)
+			}
+			m = envMap(Scrub([]string{"PROMPT_COMMAND=" + hook, "IKESU_GUARD_PROMPT_COMMAND_SET=1"}))
+			if value, exists := m["PROMPT_COMMAND"]; !exists || value != "" {
+				t.Fatal("empty user prompt changed", m)
+			}
+			withTail := user + hook + "echo user-added\n"
+			m = envMap(Scrub([]string{"PROMPT_COMMAND=" + withTail, "IKESU_GUARD_PROMPT_COMMAND_SET=1"}))
+			if m["PROMPT_COMMAND"] != withTail {
+				t.Fatal("unproven user suffix removed")
+			}
+		})
 	}
 }

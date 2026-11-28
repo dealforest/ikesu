@@ -234,7 +234,7 @@ func (a *App) buildWorkspaceMenu(x, y, ws int, source *api.WorktreeSourceInfo) {
 			items = append(items, it)
 		}
 	}
-	items = append(items, render.MenuItem{Label: "Duplicate"}, render.MenuItem{Separator: true}, render.MenuItem{Label: "Rename"}, render.MenuItem{Label: "Close"})
+	items = append(items, render.MenuItem{Label: "Duplicate"}, render.MenuItem{Separator: true}, render.MenuItem{Label: "Rename"}, render.MenuItem{Label: "Close space"})
 	items = append(items, group...)
 	items = append(items, render.MenuItem{Separator: true})
 	if a.machineRequest != nil {
@@ -272,7 +272,7 @@ func (a *App) tabMenuItems(ws, ti int) []render.MenuItem {
 		{Label: menuMoveTabRight, Disabled: ti >= n-1},
 		{Label: menuMoveTabToSpace, Disabled: len(a.st.Workspaces) < 2},
 		{Separator: true},
-		{Label: "Close"},
+		{Label: "Close tab"},
 	}
 }
 
@@ -284,10 +284,10 @@ func (a *App) mainMenuItems() []render.MenuItem {
 		koiLabel = "koi: on"
 	}
 	items := []render.MenuItem{
-		{Label: "new workspace"}, {Label: "new tab"}, {Label: "delete idle panes…"}, {Label: menuPruneWorkspaces}, {Separator: true}, {Label: "settings"}, {Label: "keybinds"}, {Label: "reload config"}, {Label: koiLabel}, {Label: "sidebar narrow"}, {Label: "sidebar normal"}, {Label: "sidebar wide"}, {Separator: true}, {Label: "restore agents...", Disabled: a.restoreHook == nil}, {Label: menuReopenSpace, Disabled: a.closedSpaceReopen == nil}, {Separator: true}, {Label: "detach", Disabled: a.detacher == nil}, {Separator: true}, {Label: "add machine..."}, {Label: "remove machine..."}, {Separator: true}, {Label: "stop server"}, {Label: "restart", Disabled: a.restartHook == nil},
+		{Label: "new workspace"}, {Label: "new tab"}, {Separator: true}, {Label: "delete idle panes…"}, {Label: menuPruneWorkspaces}, {Separator: true}, {Label: "settings"}, {Label: "keybinds"}, {Label: "reload config"}, {Label: koiLabel}, {Label: "sidebar narrow"}, {Label: "sidebar normal"}, {Label: "sidebar wide"}, {Separator: true}, {Label: "restore agents...", Disabled: a.restoreHook == nil}, {Label: menuReopenSpace, Disabled: a.closedSpaceReopen == nil}, {Separator: true}, {Label: "detach", Disabled: a.detacher == nil}, {Separator: true}, {Label: "add machine..."}, {Label: "remove machine..."}, {Separator: true}, {Label: "stop server"}, {Label: "restart", Disabled: a.restartHook == nil},
 	}
 	if !a.sidebarConfig.UI.NativeMenus {
-		items = append(items[:6], append([]render.MenuItem{{Label: "Android pairing QR..."}}, items[6:]...)...)
+		items = append(items[:7], append([]render.MenuItem{{Label: "Android pairing QR..."}}, items[7:]...)...)
 	}
 	if a.clientMachines || a.machineRequest != nil {
 		var base, machines []render.MenuItem
@@ -499,7 +499,7 @@ func (a *App) activateMenu(i int) {
 			a.setWorkspaceMenuSection(m.ws, model.SectionNone)
 		case "New workspace":
 			a.newWorkspace()
-		case "Close workspace…", "Close":
+		case "Close workspace…", "Close space":
 			a.openCloseWorkspaceDialog(m.ws)
 		case "New worktree":
 			a.newWorktreeDialog(m.ws)
@@ -538,7 +538,7 @@ func (a *App) activateMenu(i int) {
 			default:
 				a.openTabSpaceMenu(m.m.X, m.m.Y, wi, ti)
 			}
-		case "Close":
+		case "Close tab":
 			a.closeTabAt(m.ws, m.tab)
 		}
 	case menuMove:

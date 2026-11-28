@@ -16,6 +16,9 @@ type IdlePane struct {
 	PendingInput        bool   `json:"pending_input"`
 	InputKnown          bool   `json:"input_known"`
 	Focused             bool   `json:"focused"`
+	// MemoryKiB is the resident memory of the pane's process tree; 0 when not
+	// measured (older servers, or the sample failed).
+	MemoryKiB int64 `json:"memory_kib,omitempty"`
 }
 
 type IdlePanes struct {

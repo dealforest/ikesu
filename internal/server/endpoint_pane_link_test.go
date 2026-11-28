@@ -42,6 +42,24 @@ func TestPaneLinkActionsOnInitiatingDisplaySocket(t *testing.T) {
 	}
 	c.send(t, clientMsg{Type: "input", Data: encode64([]byte("/bin/sh '" + fixture + "'\n"))})
 	waitRead(t, s.dir, fmt.Sprintf("p%d", pid), "PANE_LINK_PROBE_READY")
+	// A right click reads the link from the frame the display painted, as a
+	// person clicks what they see; wait until each display has painted it.
+	for _, view := range []*testConn{c, other, legacy} {
+		view.readUntil(t, 4*time.Second, func(m clientMsg) bool {
+			if view.lastFrame == nil {
+				return false
+			}
+			var b strings.Builder
+			for y := range view.lastInput.State.Rows {
+				for x := range view.lastInput.State.Cols {
+					if cell := view.lastFrame.Cell(x, y); cell != nil {
+						b.WriteString(cell.Content)
+					}
+				}
+			}
+			return strings.Contains(b.String(), "PANE_LINK_PROBE_READY")
+		})
+	}
 	region := c.lastInput.State.DisplayPaneRects()[0].Rect
 	inner, _ := model.PaneContentRect(region, c.lastInput.State.PaneBorders)
 	rightClickContinuation := func(view *testConn) []clientMsg {

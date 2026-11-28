@@ -2,6 +2,7 @@ package tui
 
 import (
 	"io"
+	"slices"
 	"time"
 
 	"github.com/kazuph/ikesu/internal/input"
@@ -22,10 +23,11 @@ type Viewer struct {
 	pendingAt           time.Time
 	focusUntil          time.Time
 	focusEpoch          uint64
-	heldKeys            []input.Event
+	heldKeys            []viewerInput
 	display             displayState
 	legacySidebarRows   bool
 	rightSidebarPlugins bool
+	panelRules          bool
 	copyText            func(string, error)
 }
 
@@ -35,6 +37,11 @@ func (v *Viewer) SetContinuousSidebarRows(supported bool) {
 
 func (v *Viewer) SetRightSidebarPlugins(supported bool) {
 	v.rightSidebarPlugins = supported
+}
+
+// SetSidebarPanelRules picks the plugin layout both ends draw and hit-test.
+func (v *Viewer) SetSidebarPanelRules(supported bool) {
+	v.panelRules = supported
 }
 
 type viewSelection struct {
@@ -93,6 +100,7 @@ func (a *App) NewViewer(out io.Writer, cols, rows int, detach func(string)) *Vie
 	ui.fr, ui.enc = &input.Framer{}, &render.Encoder{}
 	ui.drawViewers, ui.tickViewers, ui.visiblePane = nil, nil, nil
 	ui.scroll = map[int]int{}
+	ui.paintedPaneViews = nil
 	ui.scrollbarUntil = nil
 	ui.sidebarHover, ui.rightSidebarHover = false, false
 	ui.focusHistory = nil
@@ -190,7 +198,7 @@ func (v *Viewer) Resize(a *App, cols, rows, xp, yp int) {
 		ui.enc.Reset()
 		ui.SetCellPixels(xp, yp)
 		ui.setScreenPixels(xp, yp)
-		v.takeSize(a)
+		v.takeSizeIfAvailable(a)
 		ui.syncLayout()
 		ui.copyResizeAll(copySizes)
 		ui.dirty = true
@@ -201,8 +209,18 @@ func (v *Viewer) Resize(a *App, cols, rows, xp, yp int) {
 }
 
 func (v *Viewer) Begin(a *App, xp, yp int) {
-	v.with(a, func(ui *App) { ui.setScreenPixels(xp, yp); v.takeSize(a); ui.BeginHostMouse(xp, yp); ui.dirty = true })
-	a.st.Cols, a.st.Rows = v.cols, v.rows
+	if !slices.Contains(a.sizeViewers, v) {
+		a.sizeViewers = append(a.sizeViewers, v)
+	}
+	v.with(a, func(ui *App) {
+		ui.setScreenPixels(xp, yp)
+		v.takeSizeIfAvailable(a)
+		ui.BeginHostMouse(xp, yp)
+		ui.dirty = true
+	})
+	if a.sizeViewer == v {
+		a.st.Cols, a.st.Rows = v.cols, v.rows
+	}
 }
 
 func (v *Viewer) Tick(a *App) {

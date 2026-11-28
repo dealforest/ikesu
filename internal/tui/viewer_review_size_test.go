@@ -233,7 +233,61 @@ func TestViewerFrozenSizeAfterDisconnectAndHandoff(t *testing.T) {
 				t.Fatal("hidden process changed")
 			}
 			small.Input(a, []byte{2, '1'})
+			reviewPTYSize(t, a, hidden, 168, 46, 8, 16)
+			small.Input(a, []byte("\x1b[<35;40;10M"))
 			reviewPTYSize(t, a, hidden, 54, 26, 10, 20)
 		})
 	}
+}
+
+func TestViewerHandoffKeepsPTYSizeWhenNonOwnerReconnectsFirst(t *testing.T) {
+	teststate.Lock(t)
+	a := sizeOwnerRuntimeApp(t)
+	if err := a.StartInitialPane(); err != nil {
+		t.Fatal(err)
+	}
+	pid := a.focusedPane()
+	a.sup.Input(pid, []byte("printf '\\n'; PS1='SIZE_READY> '\n"))
+	specWaitText(t, a.sup.Get(pid), "\nSIZE_READY>")
+	large := a.NewViewer(io.Discard, 196, 50, nil)
+	large.Begin(a, 196*8, 50*16)
+	small := a.NewViewer(io.Discard, 82, 30, nil)
+	small.Begin(a, 82*10, 30*20)
+	large.Input(a, []byte("\x1b[<35;40;10M"))
+	reviewPTYSize(t, a, pid, 168, 46, 8, 16)
+
+	var wire bytes.Buffer
+	if err := gob.NewEncoder(&wire).Encode(a.HandoffState()); err != nil {
+		t.Fatal(err)
+	}
+	var state HandoffState
+	if err := gob.NewDecoder(&wire).Decode(&state); err != nil {
+		t.Fatal(err)
+	}
+	a.RestoreHandoff(state)
+	checkFrozen := func(stage string) {
+		t.Helper()
+		if a.sizeOwners[a.currentSizeTab()].viewer != nil {
+			t.Fatalf("%s unexpectedly assigned an owner", stage)
+		}
+		reviewPTYSize(t, a, pid, 168, 46, 8, 16)
+	}
+	small = a.NewViewer(io.Discard, 82, 30, nil)
+	small.Begin(a, 82*10, 30*20)
+	checkFrozen("former non-owner reconnects")
+	small.SetVisible(a, false)
+	small.SetVisible(a, true)
+	checkFrozen("former non-owner becomes visible")
+	small.Resize(a, 90, 32, 90*10, 32*20)
+	checkFrozen("former non-owner resizes")
+	large = a.NewViewer(io.Discard, 196, 50, nil)
+	large.Begin(a, 196*8, 50*16)
+	checkFrozen("former owner reconnects")
+	large.Detach(a)
+	checkFrozen("only former non-owner remains")
+	small.Input(a, []byte("\x1b[<35;40;10M"))
+	if a.sizeOwners[a.currentSizeTab()].viewer != small {
+		t.Fatal("first actual operation did not acquire the PTY")
+	}
+	reviewPTYSize(t, a, pid, 62, 28, 10, 20)
 }

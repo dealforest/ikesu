@@ -127,7 +127,7 @@ func sidebarContinuousTwoServersEveryCell(t *testing.T, right, upperHalf bool) {
 		in := *m.endpoints[m.active].snapshot
 		f := render.ComposeClient(in, &m.sidebar, "test", false).Frame
 		for _, hit := range m.sidebar.Hits {
-			if hit.Right != right || hit.New || hit.Header {
+			if hit.Right != right || hit.New || hit.Header || hit.Rule { // a rule has no row to compare
 				continue
 			}
 			glyph := ""

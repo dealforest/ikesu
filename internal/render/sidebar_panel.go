@@ -16,6 +16,9 @@ import (
 // per plugin and its output. Click a heading to fold its section.
 type SidebarPanel struct {
 	Sections []SidebarPanelSection
+	// Rules puts each heading between two rules. The server sets it only for
+	// a display that knows this layout, so clicks match on both ends.
+	Rules bool `json:",omitempty"`
 }
 
 // SidebarPanelSection is one foldable section.
@@ -41,14 +44,48 @@ func SidebarPanelRows(p *SidebarPanel, room int) int {
 		return 0
 	}
 	limit := room / sidebarPanelMaxShare
-	n := 0
-	for _, sec := range p.Sections {
-		n++
-		if !sec.Collapsed {
-			n += len(sec.Lines)
+	return min(len(sidebarPanelRowList(p)), max(0, limit))
+}
+
+// sidebarPanelRow is one drawn row: a rule, a heading or a line of a section.
+type sidebarPanelRow struct {
+	section int
+	rule    bool
+	heading bool
+	line    int
+}
+
+// sidebarPanelRowList lays the sections out like the space list's machine
+// headings: each heading sits between two rules, and a folded section's
+// lower rule is shared with the next heading.
+func sidebarPanelRowList(p *SidebarPanel) []sidebarPanelRow {
+	var rows []sidebarPanelRow
+	for i, sec := range p.Sections {
+		if p.Rules && (len(rows) == 0 || !rows[len(rows)-1].rule) {
+			rows = append(rows, sidebarPanelRow{section: i, rule: true})
+		}
+		rows = append(rows, sidebarPanelRow{section: i, heading: true})
+		if p.Rules {
+			rows = append(rows, sidebarPanelRow{section: i, rule: true})
+		}
+		if sec.Collapsed {
+			continue
+		}
+		for line := range sec.Lines {
+			rows = append(rows, sidebarPanelRow{section: i, line: line})
 		}
 	}
-	return min(n, max(0, limit))
+	return rows
+}
+
+// sidebarPanelVisibleRows is what fits in height rows. When only one or two
+// rows fit, the first heading comes before its upper rule.
+func sidebarPanelVisibleRows(p *SidebarPanel, height int) []sidebarPanelRow {
+	rows := sidebarPanelRowList(p)
+	if height < len(rows) && height <= 2 && len(rows) > 0 && rows[0].rule {
+		rows = rows[1:]
+	}
+	return rows[:min(len(rows), max(0, height))]
 }
 
 // SidebarPanelHeading is a clickable heading row.
@@ -88,16 +125,10 @@ func SidebarPanelHeadings(p *SidebarPanel, r layout.Rect) []SidebarPanelHeading 
 	if p == nil || r.H <= 0 {
 		return nil
 	}
-	y, end := r.Y, r.Y+r.H
 	var out []SidebarPanelHeading
-	for _, sec := range p.Sections {
-		if y >= end {
-			break
-		}
-		out = append(out, SidebarPanelHeading{Key: sec.Key, Rect: layout.Rect{X: r.X, Y: y, W: r.W, H: 1}})
-		y++
-		if !sec.Collapsed {
-			y += len(sec.Lines)
+	for i, row := range sidebarPanelVisibleRows(p, r.H) {
+		if row.heading {
+			out = append(out, SidebarPanelHeading{Key: p.Sections[row.section].Key, Rect: layout.Rect{X: r.X, Y: r.Y + i, W: r.W, H: 1}})
 		}
 	}
 	return out
@@ -112,27 +143,21 @@ func drawSidebarPanelAt(f *Frame, p *SidebarPanel, r layout.Rect) {
 		return
 	}
 	x, w := r.X, r.W
-	y, end := r.Y, r.Y+r.H
-	f.Fill(x, y, w, r.H, " ", uv.Style{})
-	for _, sec := range p.Sections {
-		if y >= end {
-			return
-		}
-		drawSectionHeading(f, x, y, w, sec.Title, sec.Collapsed, false, false)
-		y++
-		if sec.Collapsed {
-			continue
-		}
-		for _, line := range sec.Lines {
-			if y >= end {
-				return
-			}
+	f.Fill(x, r.Y, w, r.H, " ", uv.Style{})
+	for i, row := range sidebarPanelVisibleRows(p, r.H) {
+		y, sec := r.Y+i, p.Sections[row.section]
+		switch {
+		case row.rule:
+			f.Fill(x, y, w, 1, "─", uv.Style{Fg: f.Palette.Dim})
+		case row.heading:
+			drawSectionHeading(f, x, y, w, sec.Title, sec.Collapsed, false, false)
+		default:
+			line := sec.Lines[row.line]
 			base := uv.Style{Fg: f.Palette.Text}
 			if line.Error {
 				base = uv.Style{Fg: f.Palette.Dim}
 			}
 			drawANSIText(f, x+1, y, x+w, line.Text, base)
-			y++
 		}
 	}
 }

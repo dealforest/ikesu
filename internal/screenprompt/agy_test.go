@@ -94,6 +94,44 @@ func TestAgyFinalQuestionFooter(t *testing.T) {
 	}
 }
 
+// agy 1.5.17 で1問だけ聞いた画面（2026-11-26 に実物から保存）。Next も Submit も無く、enter で答える。
+func TestAgySingleQuestionObservedForm(t *testing.T) {
+	data, err := os.ReadFile("testdata/agy-question-single.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen := string(data)
+	p := Parse("agy", strings.Split(screen, "\n"))
+	if p == nil {
+		t.Fatal("single question not detected")
+	}
+	if !p.AgyQuestion || p.Question != 1 || p.Total != 1 || p.Cursor != 0 || len(p.Params.Options) != 3 ||
+		p.Params.Options[1].Label != "ラーメン" || p.TextID != "4" || p.Params.Title != "今日の夕飯はどれにする？" {
+		t.Fatalf("unexpected prompt: %+v", p)
+	}
+	// The short footer belongs only to a lone question: in a longer set the last one shows Submit.
+	if Parse("agy", strings.Split(strings.Replace(screen, "Question 1/1:", "Question 2/2:", 1), "\n")) != nil {
+		t.Fatal("accepted the short footer on the last of several questions")
+	}
+	// On the Write-in row the last question of any set is answerable, the same as detection decides.
+	for _, header := range []string{"Question 1/1:", "Question 2/2:"} {
+		s := strings.Replace(screen, "Question 1/1:", header, 1)
+		s = strings.Replace(strings.Replace(s, "> 1.", "  1.", 1), "  4. Write-in", "> 4. Write-in", 1)
+		s = strings.Replace(s, "enter Select", "enter Write-in", 1)
+		if p := Parse("agy", strings.Split(s, "\n")); p == nil || p.Cursor != 3 {
+			t.Fatalf("%s on Write-in: %+v", header, p)
+		}
+	}
+	if Parse("agy", strings.Split(strings.TrimRight(screen, "\n")+"\nGemini finished\n", "\n")) != nil {
+		t.Fatal("old question kept after ordinary output")
+	}
+	for _, footer := range []string{"↑/↓ Navigate · → Next · enter Select · esc Skip", "↑/↓ Navigate · space Toggle · esc Skip", "↑/↓ Navigate · enter Select"} {
+		if Parse("agy", strings.Split(strings.Replace(screen, "↑/↓ Navigate · enter Select · esc Skip", footer, 1), "\n")) != nil {
+			t.Fatalf("accepted footer %q", footer)
+		}
+	}
+}
+
 func TestAgyRejectsStaleQuestionWithLaterScreen(t *testing.T) {
 	b, err := os.ReadFile("testdata/agy-question.txt")
 	if err != nil {

@@ -270,7 +270,9 @@ func trustedDirenvLine(i Input, line string) bool {
 	}
 	trimmed := strings.TrimSpace(line)
 	bootstrap := strings.HasPrefix(trimmed, "eval ")
-	main := trimmed == `"$@"` && i.shellArrays != nil
+	// direnv's own __main__ registers its stdlib function for EXIT before it
+	// runs the .envrc; the registration line is direnv's, as "$@" is.
+	main := (trimmed == `"$@"` || trimmed == "trap __dump_at_exit EXIT") && i.shellArrays != nil
 	if !bootstrap && !main {
 		return false
 	}

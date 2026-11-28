@@ -32,7 +32,7 @@ var auditRuleKinds = map[string]string{
 	"http-write": KindOutward, "sql-write": KindOutward, "aws": KindOutward, "wrangler": KindOutward,
 	"gh-write": KindOutward, "git-main": KindOutward, "git-push-force": KindOutward,
 	"danger-word": KindOutward, "danger-word-line": KindOutward,
-	"rm-paths":   KindDelete,
+	"rm-paths": KindDelete, "mv-paths": KindDelete,
 	"shell-line": KindUnjudged, "shell-script": KindUnjudged,
 	"guard-boundary": KindBoundary, "ownership": KindBoundary,
 	"d1-sql-write": KindOutward, "git-alias": KindBoundary,
@@ -499,54 +499,34 @@ type missedLine struct {
 	Pane    string `json:"pane_id"`
 }
 
-const tailChunk = 1 << 20
-
-// SampleMissed は decisions.jsonl を後ろから 1MB ずつ読み、sinceEpoch より古い行で止まる。
+// SampleMissed は決定記録を本体、.1 の順に末尾から読み、sinceEpoch より古い行で止まる。
 // 「未確定を通した: 」で allow になり外向きの語を含む行から n 件を無作為に選ぶ。
 func SampleMissed(path string, sinceEpoch int64, n int, rng *rand.Rand) ([]MissedSample, int64, error) {
-	return sampleMissed(path, sinceEpoch, n, rng)
-}
-
-func sampleMissed(path string, sinceEpoch int64, n int, rng *rand.Rand) ([]MissedSample, int64, error) {
-	f, err := os.Open(path)
-	if os.IsNotExist(err) {
-		return nil, 0, nil
-	}
+	files, err := openDecisionLogFiles(path)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		return nil, 0, err
-	}
-	pos := st.Size()
-	var carry []byte
-	var read int64
+	defer closeLogFiles(files)
 	var picked []MissedSample
 	seen := 0
-	done := false
-	handle := func(line []byte) {
+	handle := func(line []byte) bool {
 		if len(bytes.TrimSpace(line)) == 0 {
-			return
+			return false
 		}
 		// 多くの行は「未確定を通した」を含まない。その行は時刻だけを安く読んで、期間の終わりかを見る。
 		if !bytes.Contains(line, undeterminedPrefixBytes) {
-			if e, ok := quickEpoch(line); ok && e < sinceEpoch {
-				done = true
-			}
-			return
+			epoch, ok := quickEpoch(line)
+			return ok && epoch < sinceEpoch
 		}
 		var m missedLine
 		if json.Unmarshal(line, &m) != nil {
-			return
+			return false
 		}
 		if m.Epoch < sinceEpoch {
-			done = true
-			return
+			return true
 		}
 		if m.Verdict != "allow" || !strings.HasPrefix(m.Reason, undeterminedPrefix) || !outwardWord.MatchString(m.CmdLine) {
-			return
+			return false
 		}
 		s := MissedSample{TS: m.TS, Rule: m.Rule, CmdLine: truncateRunes(redact(m.CmdLine), 200), Cwd: m.Cwd, PaneID: m.Pane}
 		seen++
@@ -555,30 +535,11 @@ func sampleMissed(path string, sinceEpoch int64, n int, rng *rand.Rand) ([]Misse
 		} else if j := rng.Intn(seen); j < n {
 			picked[j] = s
 		}
+		return false
 	}
-	for pos > 0 && !done && read < maxMissedScanBytes {
-		size := int64(tailChunk)
-		if pos < size {
-			size = pos
-		}
-		pos -= size
-		buf := make([]byte, size)
-		if _, err := f.ReadAt(buf, pos); err != nil && err != io.EOF {
-			return picked, read, err
-		}
-		read += size
-		data := append(buf, carry...)
-		lines := bytes.Split(data, []byte{'\n'})
-		start := 0
-		if pos > 0 {
-			carry = lines[0]
-			start = 1
-		} else {
-			carry = nil
-		}
-		for k := len(lines) - 1; k >= start && !done; k-- {
-			handle(lines[k])
-		}
+	read, err := walkLogLines(files, maxMissedScanBytes, handle)
+	if err != nil {
+		return picked, read, err
 	}
 	sort.Slice(picked, func(a, b int) bool { return picked[a].TS < picked[b].TS })
 	return picked, read, nil

@@ -49,8 +49,7 @@ func (a *App) selectionScrollBy(delta int) {
 	if p == nil {
 		return
 	}
-	a.setScrollOff(s.pane, min(max(a.scroll[s.pane]+delta, 0), p.Snapshot().ScrollbackLen))
-	s.hy = viewTop(p, a.scroll[s.pane], s.inner.H)
+	s.hy = a.scrollSelection(p, s, min(max(a.scroll[s.pane]+delta, 0), p.Snapshot().ScrollbackLen))
 	if s.autoDir < 0 {
 		s.hy += s.inner.H - 1
 	}

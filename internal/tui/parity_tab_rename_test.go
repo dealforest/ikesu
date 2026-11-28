@@ -58,7 +58,7 @@ func TestParityTabRenameSelectsTargetAndKeepsDefaultName(t *testing.T) {
 	for _, item := range a.menu.m.Items {
 		labels = append(labels, item.Label)
 	}
-	if wid < 14 || height != len(labels)+2 || a.menu.m.Sel != 0 || !reflect.DeepEqual(labels, []string{"New tab", "Rename", "", "Move tab left", "Move tab right", "Move to space…", "", "Close"}) {
+	if wid < 14 || height != len(labels)+2 || a.menu.m.Sel != 0 || !reflect.DeepEqual(labels, []string{"New tab", "Rename", "", "Move tab left", "Move tab right", "Move to space…", "", "Close tab"}) {
 		t.Fatal("tab menu does not match the observed actions and initial selection")
 	}
 	a.activateMenu(1)

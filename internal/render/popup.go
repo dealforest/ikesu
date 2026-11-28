@@ -1,6 +1,9 @@
 package render
 
-import uv "github.com/charmbracelet/ultraviolet"
+import (
+	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/kazuph/ikesu/internal/layout"
+)
 
 func drawPopup(f *Frame, in Input, out *Output) {
 	s := in.State
@@ -34,6 +37,7 @@ func drawPopup(f *Frame, in Input, out *Output) {
 		return
 	}
 	x, y, w, h := r.X+1, r.Y+1, max(4, r.W-3), r.H-2
+	out.recordPaneViewport(pid, layout.Rect{X: x, Y: y, W: w, H: h}, snap.Viewport)
 	f.CopyGrid(x, y, clipGrid(snap.Grid, w, h))
 	paneGraphics(f, pid, snap, x, y, w, h)
 	if w < r.W-2 {

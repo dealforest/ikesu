@@ -66,7 +66,7 @@ func parseAgy(screen []string) *Prompt {
 			editor = true
 			continue
 		}
-		if agyFooter(trim, index == total) {
+		if agyFooter(trim, index == total) || total == 1 && agySingleFooter(trim) {
 			footer = agyview.Tail(screen[start+1+rowIndex+1:])
 			break
 		}
@@ -105,6 +105,11 @@ func parseAgy(screen []string) *Prompt {
 	presentQuestion(p)
 	return p
 }
+
+// A lone question (1/1, observed in agy 1.5.17 on 2026-11-26) has no Next and no
+// Submit: "↑/↓ Navigate · enter Select · esc Skip", and enter answers it. The
+// caller checks 1/1; detection uses the same footer rule (agyview.ShortFooter).
+func agySingleFooter(line string) bool { return agyview.ShortFooter(line) }
 
 // The final question submits its answer directly; no separate submit key is sent.
 func agyFooter(line string, final bool) bool {

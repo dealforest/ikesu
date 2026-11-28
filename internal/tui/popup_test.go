@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/kazuph/ikesu/internal/api"
@@ -45,8 +46,9 @@ func TestG2PopupOwnerInputPasteLFReorderAndSelectionCleanupActualPTY(t *testing.
 	a.exec(model.CmdNewWorkspace{Cwd: a.cwd})
 	bID := a.focusedPane()
 	a.sup.Kill(bID)
+	bInner := a.innerRect(bID)
 	wantB := "B\x1b[27;2;13~P\x1b[<0;2;2M\x1b[<0;2;2m"
-	b, err := a.sup.SpawnWith(bID, a.cwd, 80, 20, nil, []string{"/bin/sh", "-c", capture(bFile, len(wantB), "\x1b[?1000h\x1b[?1006hBREADY")})
+	b, err := a.sup.SpawnWith(bID, a.cwd, bInner.W, bInner.H, nil, []string{"/bin/sh", "-c", capture(bFile, len(wantB), "\x1b[?1000h\x1b[?1006hBREADY")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +61,6 @@ func TestG2PopupOwnerInputPasteLFReorderAndSelectionCleanupActualPTY(t *testing.
 		t.Fatal("hidden popup was drawn")
 	}
 	specFeed(a, "B\x1b[27;2;13~\x1b[200~P\x1b[201~")
-	bInner := a.innerRect(bID)
 	bMouse := uv.Mouse{X: bInner.X + 1, Y: bInner.Y + 1, Button: uv.MouseLeft}
 	a.onMouse(input.Event{Kind: input.KindMouseClick, Mouse: bMouse})
 	a.onMouse(input.Event{Kind: input.KindMouseRelease, Mouse: bMouse})
@@ -192,5 +193,88 @@ func TestStage6aPopupMinimumPTYGeometry(t *testing.T) {
 		if r.W != tc.inner || r.H != 2 {
 			t.Fatal(tc, r)
 		}
+	}
+}
+
+func TestPopupWheelDuringSelectionCopiesThroughPaintedReleaseRow(t *testing.T) {
+	teststate.Lock(t)
+	teststate.Setenv(t, "SSH_CONNECTION", "isolated-test")
+	for _, tc := range []struct {
+		name    string
+		repaint bool
+		legacy  bool
+		last    string
+	}{
+		{"repainted", true, false, "R98"},
+		{"unpainted", false, false, "REA"},
+		// A client that predates painted viewports still follows the wheel.
+		{"legacy client", true, true, "R98"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testPopupWheelSelection(t, tc.repaint, tc.legacy, tc.last)
+		})
+	}
+}
+
+func testPopupWheelSelection(t *testing.T, repaint, legacy bool, wantLast string) {
+	t.Helper()
+	a := specRuntimeApp(t)
+	t.Cleanup(a.sup.KillAll)
+	width, height := api.PopupSize{Cells: 40}, api.PopupSize{Cells: 12}
+	command := `i=1; while [ "$i" -le 100 ]; do printf 'R%02d\r\n' "$i"; i=$((i+1)); done; printf READY; exec /bin/cat`
+	if _, err := a.OpenPluginPopup(a.cwd, []string{"/bin/sh", "-c", command}, nil, &width, &height); err != nil {
+		t.Fatal(err)
+	}
+	pid := a.st.Popup.PaneID
+	specWaitText(t, a.sup.Get(pid), "READY")
+	var clipboard bytes.Buffer
+	viewer := a.NewViewer(&clipboard, a.st.Cols, a.st.Rows, nil)
+	viewer.Begin(a, 0, 0)
+	var out *render.Output
+	viewer.SetSnapshotSink(func(in render.Input) error {
+		out = render.ComposeClient(in, nil, "", false)
+		return nil
+	})
+	draw := func() {
+		viewer.with(a, func(ui *App) { ui.draw() })
+		sent := *out
+		if legacy {
+			sent.PaneViewports = nil
+		}
+		viewer.Rendered(a, sent, 0)
+	}
+	draw()
+	inner := out.PaneViewports[pid].Inner
+	visibleRow := func(y int) string {
+		var row strings.Builder
+		for x := inner.X; x < inner.X+3; x++ {
+			row.WriteString(out.Frame.Cell(x, y).Content)
+		}
+		return row.String()
+	}
+	y := inner.Y + inner.H - 1
+	if first, last := visibleRow(inner.Y), visibleRow(y); first != "R92" || last != "REA" {
+		t.Fatalf("before wheel, painted rows = %q to %q, want R92 to READY", first, last)
+	}
+	viewer.Input(a, []byte(fmt.Sprintf("\x1b[<0;%d;%dM", inner.X+1, inner.Y+1)))
+	viewer.Input(a, []byte(fmt.Sprintf("\x1b[<64;%d;%dM", inner.X+1, y+1)))
+	if repaint {
+		draw()
+	}
+	last := visibleRow(y)
+	if last != wantLast {
+		t.Fatalf("painted release row = %q, want %q", last, wantLast)
+	}
+	clipboard.Reset()
+	viewer.Input(a, []byte(fmt.Sprintf("\x1b[<0;%d;%dm", inner.X+3, y+1)))
+	want := "R92\nR93\nR94\nR95\nR96\nR97\n"
+	if !repaint {
+		want += "R98\nR99\nR100\n"
+	}
+	want += last
+	payload, ok := strings.CutPrefix(clipboard.String(), "\x1b]52;c;")
+	got, err := base64.StdEncoding.DecodeString(strings.TrimSuffix(payload, "\a"))
+	if !ok || err != nil || string(got) != want {
+		t.Fatalf("clipboard = %q, want %q ending at the painted release row", got, want)
 	}
 }

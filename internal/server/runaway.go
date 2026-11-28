@@ -346,3 +346,39 @@ func (s *Server) runawayActionWithSignal(c *clientConn, action *endpoint.Runaway
 	}
 	return errors.New("対象の暴走プロセスを確認できません")
 }
+
+// idlePaneRoots names the shell of each listed pane; it runs on the app loop.
+func (s *Server) idlePaneRoots(list endpoint.IdlePanes) monitor.Roots {
+	roots := make(monitor.Roots, len(list.Panes))
+	for _, p := range list.Panes {
+		if root := s.runawayRoot(p.ID); root.PID > 1 && root.Start != "" {
+			roots[p.ID] = root
+		}
+	}
+	return roots
+}
+
+// idleMemoryTimeout bounds the one process sample behind the idle-pane list.
+const idleMemoryTimeout = 3 * time.Second
+
+// measureIdleMemory fills each pane's process-tree RSS sum from one sample.
+// Shared pages count once per process, so the sum is an estimate. A failed
+// or canceled sample leaves every pane unmeasured (MemoryKiB 0).
+func measureIdleMemory(parent context.Context, roots monitor.Roots, list *endpoint.IdlePanes) {
+	if len(roots) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(parent, idleMemoryTimeout)
+	defer cancel()
+	rows, err := monitor.Sample(ctx, roots)
+	if err != nil {
+		return
+	}
+	total := make(map[int]int64, len(roots))
+	for _, row := range rows {
+		total[row.Pane] += row.RSS
+	}
+	for i := range list.Panes {
+		list.Panes[i].MemoryKiB = total[list.Panes[i].ID]
+	}
+}

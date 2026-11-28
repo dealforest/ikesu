@@ -127,7 +127,7 @@ func (m *MachineSidebar) draw(f *Frame, in Input) {
 		}
 		rows := map[int]SidebarRow{}
 		for _, hit := range vm.Hits {
-			if hit.Right == right && !hit.Header && !hit.IsHeaderButton() {
+			if hit.Right == right && !hit.Header && !hit.IsHeaderButton() && !hit.Rule {
 				rows[hit.Rect.Y] = hit.Row
 			}
 		}

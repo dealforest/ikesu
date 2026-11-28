@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 
+	"github.com/kazuph/ikesu/internal/input"
 	"github.com/kazuph/ikesu/internal/model"
 )
 
@@ -23,7 +24,12 @@ func (v *Viewer) SetVisible(a *App, visible bool) {
 		// Queries emitted while this machine was hidden did not reach the host.
 		v.with(a, func(ui *App) { ui.queryHostMouse() })
 	}
-	v.Input(a, []byte("\x1b[I"))
+	// Endpoint visibility is navigation. A terminal focus report arriving
+	// through Input still counts as an operation.
+	v.with(a, func(ui *App) {
+		v.awaitFocusFrame()
+		ui.onInput(input.Event{Kind: input.KindFocus})
+	})
 	if v.snapshotCopyCanceled {
 		v.snapshotCopyCanceled = false
 		v.with(a, func(ui *App) {
