@@ -137,36 +137,48 @@ func (a *Assets) shellActive() string {
 	return "-e " + quote(a.MarkerPath) + " || -e " + quote(filepath.Join(a.Bin, a.Config.Commands()[0]))
 }
 func (a *Assets) shellFunctions() string {
+	return a.shellCore() + a.shellWrappers()
+}
+
+// shellCore defines the forwarding functions. Each sets a local flag first so
+// the DEBUG hook can tell its own lines from a trap that runs in its frame.
+func (a *Assets) shellCore() string {
 	if len(a.Config.Commands()) == 0 {
 		return ""
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, `_ikesu_guard_forward() {
+	return fmt.Sprintf(`_ikesu_guard_forward() {
+ local _ikesu_guard_in_wrapper=1
  if [[ %s ]]; then
   if [[ -n "${BASH_VERSION:-}" && ${_ikesu_guard_reason_name+x} ]]; then
    (
     set +o functrace
 %s    %s guard exec --via shell-func -- "$@"
-   )
+   ) || return $?
   else %s guard exec --via shell-func -- "$@"; fi
  else builtin command "$@"; fi
 }
 _ikesu_guard_command() {
+ local _ikesu_guard_in_wrapper=1
  if [[ "${1:-}" != -* ]]; then
- case "${1:-}" in %s) _ikesu_guard_forward "$@"; return $?;; esac
+ case "${1:-}" in %s) _ikesu_guard_forward "$@" || return $?; return 0;; esac
  fi
  builtin command "$@"
 }
 `, a.shellActive(), bashRequestReasonRestore, a.invocation(), a.invocation(), strings.Join(a.Config.Commands(), "|"))
+}
+
+// shellWrappers defines the user-facing names unless the user already has them.
+func (a *Assets) shellWrappers() string {
+	var b strings.Builder
 	for _, cmd := range a.Config.Commands() {
 		fmt.Fprintf(&b, `if ! typeset -f %s >/dev/null 2>&1 && ! alias %s >/dev/null 2>&1; then
-function %s { _ikesu_guard_forward %s "$@"; }
+function %s { _ikesu_guard_forward %s "$@" || return $?; }
 fi
 `, quote(cmd), quote(cmd), cmd, quote(cmd))
 	}
 	if len(a.Config.Commands()) > 0 {
 		b.WriteString(`if ! typeset -f command >/dev/null 2>&1 && ! alias command >/dev/null 2>&1; then
-command() { _ikesu_guard_command "$@"; }
+command() { _ikesu_guard_command "$@" || return $?; }
 fi
 `)
 	}
@@ -178,7 +190,7 @@ func (a *Assets) lineHook() string {
 if [[ -o interactive ]]; then
  _ikesu_guard_accept_line() {
   if [[ %s ]]; then
-   %s guard line --via accept-line -- "$BUFFER" || { zle redisplay; return 0; }
+   %s guard line --via accept-line -- "${BUFFER-}" || { zle redisplay; return 0; }
   fi
   zle .accept-line
  }

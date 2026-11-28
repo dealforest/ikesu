@@ -9,11 +9,15 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
 
 var startupPayloadNames = []string{"bash-env.current", ".zshenv.current", ".zprofile.current", ".zshrc.current", ".zlogin.current"}
+
+var runtimeGenerationNames = append([]string{"manifest.json", "ikesu"}, startupPayloadNames...)
 
 type runtimeGeneration struct {
 	Executable string
@@ -173,6 +177,69 @@ func (a *Assets) stableEntries(shell *privateDirectory) error {
 	return shell.link("ikesu", filepath.Join("current", "ikesu"))
 }
 
+const (
+	generationRetention         = time.Hour
+	generationRetirementFile    = "generation-retirements"
+	generationRetirementLimit   = 64
+	generationRecentRetirements = 8
+)
+
+// Both callers hold the publication lock. A missing file is expected for
+// installations that have not yet retired a generation with this version.
+func readGenerationRetirements(shell *privateDirectory) ([]string, error) {
+	data, err := shell.read(generationRetirementFile)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	if err := json.Unmarshal(data, &names); err != nil {
+		return nil, err
+	}
+	return names, nil
+}
+
+// Stamp the previous generation under the publication lock before replacing
+// current. This protects a shell that just obtained its immutable startup path.
+func retireCurrentGeneration(shell *privateDirectory, next string) error {
+	previous, err := shell.readlink("current")
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read current guard generation: %w", err)
+	}
+	if previous == next || !generationName(previous) {
+		return nil
+	}
+	dir, err := shell.child(previous, false)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer dir.close()
+	if err := unix.Futimes(dir.fd(), nil); err != nil {
+		return err
+	}
+	names, err := readGenerationRetirements(shell)
+	if err != nil {
+		return fmt.Errorf("read guard generation retirements: %w", err)
+	}
+	names = append(names, previous)
+	names = names[max(0, len(names)-generationRetirementLimit):]
+	data, err := json.Marshal(names)
+	if err != nil {
+		return err
+	}
+	// Persist protection before replacing current so sweeps cannot see
+	// a retired generation without its history entry.
+	return shell.write(generationRetirementFile, data, 0600)
+}
+
 // Caller holds the cross-process exclusive lock from validation through the
 // one atomic publication. A refresh never edits a published generation.
 func (a *Assets) ensureGeneration(shell *privateDirectory, entries bool) (string, error) {
@@ -200,6 +267,9 @@ func (a *Assets) ensureGeneration(shell *privateDirectory, entries bool) (string
 		if err = a.stableEntries(shell); err != nil {
 			return "", err
 		}
+	}
+	if err = retireCurrentGeneration(shell, name); err != nil {
+		return "", err
 	}
 	if err = shell.link("current", name); err != nil {
 		return "", err
@@ -255,8 +325,142 @@ func (a *Assets) trustedSource() (string, os.FileInfo, error) {
 	return target, info, nil
 }
 
-// Only unpublished directories allocated by this operation are discarded.
-// Published generations remain available to already-started readers.
+// HoldGenerationPruning keeps older senders' on-disk generations available
+// through the importer's handoff handshake.
+func HoldGenerationPruning(root string) (func(), error) {
+	file, err := openHandoffPruneFile(root)
+	if err != nil {
+		return nil, err
+	}
+	if err = unix.Flock(int(file.Fd()), unix.LOCK_EX); err != nil {
+		file.Close()
+		return nil, err
+	}
+	return func() { file.Close() }, nil
+}
+
+func openHandoffPruneFile(root string) (*os.File, error) {
+	state, err := openPrivateState(root, false)
+	if err != nil {
+		return nil, err
+	}
+	defer state.close()
+	dir, err := state.child("guard", false)
+	if err != nil {
+		return nil, err
+	}
+	defer dir.close()
+	return dir.openLockFile("handoff-prune.lock")
+}
+
+const generationPruneBatch = 500
+
+type generationPruner struct {
+	handoff, publication *os.File
+	releaseSweep         func()
+}
+
+// Prepare descriptors synchronously. Once scheduled, a sweep only reads and
+// removes entries, so it cannot recreate lock files during pane teardown.
+func prepareGenerationPruner(root string, shell *privateDirectory) (*generationPruner, error) {
+	releaseSweep, err := shell.lockFile("generation-prune.lock", unix.LOCK_EX|unix.LOCK_NB)
+	if err != nil {
+		return nil, err
+	}
+	publication, err := shell.openLockFile("generation.lock")
+	if err != nil {
+		releaseSweep()
+		return nil, err
+	}
+	handoff, err := openHandoffPruneFile(root)
+	if err != nil {
+		publication.Close()
+		releaseSweep()
+		return nil, err
+	}
+	return &generationPruner{handoff, publication, releaseSweep}, nil
+}
+
+// Enumeration and the gaps between batches leave publication available.
+func (p *generationPruner) prune(shell *privateDirectory, cutoff time.Time) {
+	defer p.releaseSweep()
+	defer p.handoff.Close()
+	defer p.publication.Close()
+	fd, err := unix.Openat(shell.fd(), ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return
+	}
+	listing := os.NewFile(uintptr(fd), shell.path)
+	names, err := listing.Readdirnames(-1)
+	listing.Close()
+	if err != nil {
+		return
+	}
+	for batch := range slices.Chunk(names, generationPruneBatch) {
+		if !p.pruneBatch(shell, batch, cutoff) {
+			return
+		}
+	}
+}
+
+func (p *generationPruner) lockBatch() (func(), error) {
+	publication, handoff := int(p.publication.Fd()), int(p.handoff.Fd())
+	for {
+		if err := unix.Flock(publication, unix.LOCK_EX); err != nil {
+			return nil, err
+		}
+		err := unix.Flock(handoff, unix.LOCK_SH|unix.LOCK_NB)
+		if err == nil {
+			return func() {
+				unix.Flock(handoff, unix.LOCK_UN)
+				unix.Flock(publication, unix.LOCK_UN)
+			}, nil
+		}
+		unix.Flock(publication, unix.LOCK_UN)
+		if err != unix.EWOULDBLOCK {
+			return nil, err
+		}
+		// Wait for the importer without obstructing generation publication.
+		if err = unix.Flock(handoff, unix.LOCK_SH); err != nil {
+			return nil, err
+		}
+		unix.Flock(handoff, unix.LOCK_UN)
+	}
+}
+
+func (p *generationPruner) pruneBatch(shell *privateDirectory, names []string, cutoff time.Time) bool {
+	unlock, err := p.lockBatch()
+	if err != nil {
+		return false
+	}
+	defer unlock()
+	current, err := shell.readlink("current")
+	if err != nil || !generationName(current) {
+		return false
+	}
+	retirements, err := readGenerationRetirements(shell)
+	if err != nil {
+		return false
+	}
+	recent := retirements[max(0, len(retirements)-generationRecentRetirements):]
+	for _, name := range names {
+		if name == current || !generationName(name) || slices.Contains(recent, name) {
+			continue
+		}
+		dir, err := shell.child(name, false)
+		if err != nil {
+			continue
+		}
+		info, err := dir.file.Stat()
+		if err == nil && info.ModTime().Before(cutoff) {
+			removeGeneration(shell, dir, name)
+		}
+		dir.close()
+	}
+	return true
+}
+
+// Discard a generation whose creation or publication failed.
 func discardGeneration(shell *privateDirectory, name string) {
 	if !generationName(name) {
 		return
@@ -269,7 +473,11 @@ func discardGeneration(shell *privateDirectory, name string) {
 		return
 	}
 	defer dir.close()
-	for _, file := range append(append([]string{}, startupPayloadNames...), "manifest.json", "ikesu") {
+	removeGeneration(shell, dir, name)
+}
+
+func removeGeneration(shell, dir *privateDirectory, name string) {
+	for _, file := range runtimeGenerationNames {
 		unix.Unlinkat(dir.fd(), file, 0)
 	}
 	unix.Unlinkat(shell.fd(), name, unix.AT_REMOVEDIR)

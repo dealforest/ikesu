@@ -48,6 +48,10 @@ type Input struct {
 	ApprovedInvocation   func(string, string) bool `json:"-"`
 	ShellParentDirenv    func() (string, string)   `json:"-"`
 	runtimeLine          bool
+	trapRegistration     bool
+	trapBody             bool
+	shellFunctions       map[string]bool
+	trapNames            map[string]bool
 	evalDepth            int
 	shellVariables       map[string]string
 	shellPID             string
@@ -326,8 +330,8 @@ func commandRules(c Config, i Input, cmd string, a []string) Verdict {
 		}
 		return allow
 	case "mv":
-		if strings.Contains(strings.Join(a, " "), "bak") || strings.Contains(strings.Join(a, " "), "backup") {
-			return askL1
+		if !safeMove(i, a) {
+			return askAt("mv-paths", "移動は確認が必要です", TierL3, "")
 		}
 	case "dd", "mkfs", "fdisk", "diskutil", "format", "parted", "gparted":
 		return askL3
@@ -563,6 +567,10 @@ func safeTemporaryRemoval(i Input, path string, probes map[string]string) bool {
 		}
 		dir = parent
 	}
+	return safeTemporaryParent(i, dir, probes)
+}
+
+func safeTemporaryParent(i Input, dir string, probes map[string]string) bool {
 	repoRoot := ""
 	for {
 		_, err := os.Lstat(filepath.Join(dir, ".git"))

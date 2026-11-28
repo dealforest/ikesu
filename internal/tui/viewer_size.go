@@ -25,10 +25,12 @@ type ptySizeBasis struct {
 	viewer                   *Viewer
 	cols, rows, cellW, cellH int
 	display                  displayState
+	provisional              bool
+	inputOrder               uint64
 }
 
 func (v *Viewer) sizeBasis() ptySizeBasis {
-	return ptySizeBasis{v, v.cols, v.rows, v.app.cellW, v.app.cellH, v.display}
+	return ptySizeBasis{viewer: v, cols: v.cols, rows: v.rows, cellW: v.app.cellW, cellH: v.app.cellH, display: v.display}
 }
 
 func (a *App) withPTYGeometry(fn func()) {
@@ -43,6 +45,7 @@ func (a *App) withTabPTYGeometry(tab *model.Tab, fn func()) {
 	basis, ok := root.sizeOwners[tab]
 	if !ok && root.sizeViewer != nil {
 		basis = root.sizeViewer.sizeBasis()
+		basis.provisional = true
 		root.sizeOwners[tab] = basis
 		ok = true
 	}
@@ -79,24 +82,32 @@ func (a *App) ptyRectForPane(pid int) (r layout.Rect) {
 	return r
 }
 
+// Do not recompute recorded geometry on navigation. Even the same owner
+// may have resized while visiting a different tab.
+func (v *Viewer) sizeOnTabEntry(ui *App) {
+	root := ui.viewerOwner
+	if basis, recorded := root.sizeOwners[ui.currentSizeTab()]; !recorded || basis.provisional {
+		v.takeSize(root)
+		ui.syncLayout()
+	}
+}
+
+func (v *Viewer) takeSizeIfAvailable(a *App) {
+	if basis, recorded := a.sizeOwners[a.currentSizeTab()]; !recorded || basis.viewer == v {
+		v.takeSize(a)
+	}
+}
+
 func (v *Viewer) takeSize(a *App) {
-	found := false
-	for _, attached := range a.sizeViewers {
-		if attached == v {
-			found = true
-			break
-		}
-	}
-	if !found {
-		a.sizeViewers = append(a.sizeViewers, v)
-	}
 	a.sizeViewer = v
 	if a.sizeOwners == nil {
 		a.sizeOwners = make(map[*model.Tab]ptySizeBasis)
 	}
 	basis := v.sizeBasis()
 	basis.display = captureDisplay(a.st)
-	a.sizeOwners[a.currentSizeTab()] = basis
+	tab := a.currentSizeTab()
+	basis.inputOrder = a.sizeOwners[tab].inputOrder
+	a.sizeOwners[tab] = basis
 }
 
 // Detach replaces a departing size owner with the first remaining display
@@ -112,12 +123,14 @@ func (v *Viewer) Detach(a *App) {
 				v.releaseSizeTab(a, tab)
 			}
 		}
-		if len(a.sizeViewers) == 0 {
+		if a.sizeViewer == v {
 			a.sizeViewer = nil
+			if len(a.sizeViewers) > 0 {
+				a.sizeViewer = a.sizeViewers[0]
+			}
 		}
 		if len(a.sizeViewers) == 1 {
 			remaining := a.sizeViewers[0]
-			remaining.with(a, func(ui *App) { remaining.takeSize(a); ui.syncLayout() })
 			a.st.Cols, a.st.Rows = remaining.cols, remaining.rows
 		}
 		return
@@ -150,6 +163,7 @@ func (v *Viewer) releaseSizeTab(a *App, tab *model.Tab) {
 	}
 	basis := a.sizeOwners[tab]
 	basis.viewer = nil
+	basis.provisional = false
 	a.sizeOwners[tab] = basis
 }
 

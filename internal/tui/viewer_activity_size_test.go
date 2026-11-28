@@ -37,6 +37,7 @@ func TestViewerActivityClaimsVisibleTabSize(t *testing.T) {
 			large.Begin(a, 0, 0)
 			small := a.NewViewer(io.Discard, 82, 30, nil)
 			small.Begin(a, 0, 0)
+			small.Input(a, []byte("x"))
 			before := viewerTerminalSizes(a)
 			large.Input(a, []byte(tc.bytes))
 			changed := !reflect.DeepEqual(before, viewerTerminalSizes(a))

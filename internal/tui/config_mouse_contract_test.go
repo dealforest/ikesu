@@ -40,7 +40,8 @@ func TestConfigRightClickModifierChangesRealMouseRoute(t *testing.T) {
 	teststate.Lock(t)
 	for _, modifier := range []string{"off", "ctrl"} {
 		a := specRuntimeApp(t)
-		p, err := a.sup.SpawnWith(a.focusedPane(), a.cwd, 80, 20, nil, []string{"/bin/sh", "-c", "printf '\033[?1000hREADY'; exec /bin/cat"})
+		inner := a.innerRect(a.focusedPane())
+		p, err := a.sup.SpawnWith(a.focusedPane(), a.cwd, inner.W, inner.H, nil, []string{"/bin/sh", "-c", "printf '\033[?1000hREADY'; exec /bin/cat"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -50,7 +51,6 @@ func TestConfigRightClickModifierChangesRealMouseRoute(t *testing.T) {
 			t.Fatal(err)
 		}
 		a.SetSidebarConfig(c, false)
-		inner, _ := model.PaneContentRect(a.st.DisplayPaneRects()[0].Rect, true)
 		specFeed(a, fmt.Sprintf("\x1b[<18;%d;%dM", inner.X+2, inner.Y+1))
 		if (a.menu != nil) != (modifier == "off") || (a.fwd == a.focusedPane()) != (modifier == "ctrl") {
 			t.Fatal(modifier, a.menu, a.fwd)

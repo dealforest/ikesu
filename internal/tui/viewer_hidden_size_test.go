@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"io"
+	"maps"
 	"testing"
 
 	"github.com/kazuph/ikesu/internal/config"
@@ -77,6 +78,7 @@ func TestViewerHiddenPanesUseOwnWorkspaceGeometryAndExplicitLayouts(t *testing.T
 			for _, size := range [][2]int{{200, 50}, {100, 30}}[:peers] {
 				owner = a.NewViewer(io.Discard, size[0], size[1], nil)
 				owner.Begin(a, 0, 0)
+				owner.Input(a, []byte("x"))
 				checkCurrentTabSizes(t, a, size[0], size[1])
 			}
 			for _, cmd := range []model.Command{
@@ -103,14 +105,15 @@ func TestViewerVisibleTabUpdatesAtSizeEvents(t *testing.T) {
 				v := a.NewViewer(io.Discard, size[0], size[1], nil)
 				v.Begin(a, 0, 0)
 				viewers = append(viewers, v)
-				checkCurrentTabSizes(t, a, size[0], size[1])
+				checkCurrentTabSizes(t, a, viewers[0].cols, viewers[0].rows)
 			}
 			owner := viewers[len(viewers)-1]
+			owner.Input(a, []byte("x"))
 			owner.Resize(a, 190, 45, 0, 0)
 			checkCurrentTabSizes(t, a, 190, 45)
 			if peers > 1 {
 				viewers[0].Resize(a, 220, 55, 0, 0)
-				checkCurrentTabSizes(t, a, 220, 55)
+				checkCurrentTabSizes(t, a, 190, 45)
 				owner.Detach(a)
 				if peers == 3 {
 					checkCurrentTabSizes(t, a, 220, 55)
@@ -124,15 +127,33 @@ func TestViewerVisibleTabUpdatesAtSizeEvents(t *testing.T) {
 
 func hiddenSizeNavigation(t *testing.T, a *App, v *Viewer) {
 	t.Helper()
-	check := func() {
+	check := func(before map[*model.Tab]ptySizeBasis, sizes map[int][2]int) {
 		t.Helper()
-		v.with(a, func(ui *App) { checkCurrentTabSizes(t, a, v.cols, v.rows) })
+		v.with(a, func(ui *App) {
+			tab := ui.currentSizeTab()
+			if basis, ok := before[tab]; ok && !basis.provisional {
+				after := viewerTerminalSizes(a)
+				for _, pid := range tab.Layout.PaneIDs() {
+					if after[pid] != sizes[pid] {
+						t.Fatalf("navigation changed pane %d size: %v -> %v", pid, sizes[pid], after[pid])
+					}
+				}
+				return
+			}
+			checkCurrentTabSizes(t, a, v.cols, v.rows)
+		})
 	}
-	v.Input(a, []byte{2, '2'})
+	navigate := func(data []byte) {
+		t.Helper()
+		before := maps.Clone(a.sizeOwners)
+		sizes := viewerTerminalSizes(a)
+		v.Input(a, data)
+		check(before, sizes)
+	}
+	navigate([]byte{2, '2'})
 	if v.tabs[a.st.Workspaces[0].ID] != a.st.Workspaces[0].Tabs[1].ID {
 		t.Fatal("tab key did not select second tab")
 	}
-	check()
 	var region render.Output
 	workspaceY := -1
 	v.SetSnapshotSink(func(in render.Input) error {
@@ -150,8 +171,7 @@ func hiddenSizeNavigation(t *testing.T, a *App, v *Viewer) {
 		t.Fatal("tab click targets absent")
 	}
 	click := func(x, y int) {
-		v.Input(a, []byte(fmt.Sprintf("\x1b[<0;%d;%dM\x1b[<0;%d;%dm", x+1, y+1, x+1, y+1)))
-		check()
+		navigate([]byte(fmt.Sprintf("\x1b[<0;%d;%dM\x1b[<0;%d;%dm", x+1, y+1, x+1, y+1)))
 	}
 	click(region.TabHits[0].X, region.TabHits[0].Y)
 	if v.tabs[a.st.Workspaces[0].ID] != a.st.Workspaces[0].Tabs[0].ID {
@@ -164,14 +184,13 @@ func hiddenSizeNavigation(t *testing.T, a *App, v *Viewer) {
 	if v.workspace != a.st.Workspaces[1].ID {
 		t.Fatal("workspace click did not select second workspace")
 	}
-	v.Input(a, []byte{2, 'o'})
-	check()
+	navigate([]byte{2, 'o'})
 	if v.workspace != a.st.Workspaces[0].ID {
 		t.Fatal("workspace key did not return to first workspace")
 	}
 }
 
-func TestViewerSelectedTabsAcquireViewerSizeOnKeyOrClick(t *testing.T) {
+func TestViewerSelectedTabsKeepRecordedSizeOnKeyOrClick(t *testing.T) {
 	teststate.Lock(t)
 	for _, peers := range []int{1, 2, 3} {
 		t.Run(fmt.Sprint(peers), func(t *testing.T) {

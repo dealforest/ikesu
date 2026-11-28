@@ -1,0 +1,14 @@
+? 今日の夕飯はどれにする？
+
+Question
+─────────────────────────────────────────────────────────────
+
+Question 1/1: 今日の夕飯はどれにする？
+
+> 1. カレー
+  2. ラーメン
+  3. 寿司
+  4. Write-in...
+
+  ↑/↓ Navigate · enter Select · esc Skip
+esc to cancel                     auto · Gemini 4 Neon · high

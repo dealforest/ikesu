@@ -72,7 +72,8 @@ func TestMachineNarrowSidebarUsesCompactRows(t *testing.T) {
 	in := Input{State: s, Panes: map[int]*PaneSnap{1: {Agent: "codex", Title: "TITLE", Label: "LABEL", Status: StatusGlyph{Rune: "●", Key: "idle"}}}}
 	m := MachineSidebar{Groups: []MachineGroup{{ID: "local", Label: "local", Input: &in}}}
 	rows := m.rightRows(in)
-	if len(rows) != 2 || !rows[0].header || rows[1].row.Kind != RowAgent {
+	// The rows stay the same at every width: a rule, the heading, a rule, the agent.
+	if len(rows) != 4 || !rows[0].rule || !rows[1].header || !rows[2].rule || rows[3].row.Kind != RowAgent {
 		t.Fatalf("narrow rows=%+v", rows)
 	}
 }
@@ -139,5 +140,25 @@ func TestNarrowSidebarSingleMachineKeepsStandaloneCells(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// Only the ▾/▸ heading folds a machine; the approval lines under it keep
+// their own click (clear the approval and reconnect) and do not fold.
+func TestRightMachineApprovalLinesDoNotFold(t *testing.T) {
+	s := model.New(t.TempDir(), 160, 30)
+	in := Input{State: s}
+	m := MachineSidebar{Groups: []MachineGroup{{ID: "remote", Label: "remote", Status: "awaiting approval", Reason: "open the page"}}}
+	folds, headers := 0, 0
+	for _, row := range m.rightRows(in) {
+		if row.header {
+			headers++
+		}
+		if row.fold {
+			folds++
+		}
+	}
+	if folds != 1 || headers < 3 {
+		t.Fatalf("folds=%d headers=%d", folds, headers)
 	}
 }

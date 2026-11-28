@@ -141,14 +141,15 @@ type sepDrag struct {
 // selState is an in-progress mouse selection inside a pane, expressed in
 // combined-buffer coordinates (scrollback + screen lines).
 type selState struct {
-	pane     int
-	ax, ay   int // anchor
-	hx, hy   int // head
-	moved    bool
-	inner    layout.Rect // pane inner rect at drag start
-	scrollAt int         // scroll offset at drag start
-	autoDir  int
-	autoAt   time.Time
+	pane      int
+	ax, ay    int // anchor
+	hx, hy    int // head
+	moved     bool
+	inner     layout.Rect // pane inner rect at drag start
+	viewTop   int
+	fixedView bool // map pointer positions against the frame where the drag began
+	autoDir   int
+	autoAt    time.Time
 }
 
 // appJob runs fn on the app loop goroutine and signals completion.
@@ -175,6 +176,9 @@ type App struct {
 	viewerOwner       *App
 	viewerContext     *Viewer
 	viewerActive      bool
+	paintedPaneViews  map[int]render.PaneViewport
+	tabSelectionSeq   uint64
+	sizeInputOrder    uint64
 	sizeViewer        *Viewer
 	sizeViewers       []*Viewer
 	sizeOwners        map[*model.Tab]ptySizeBasis

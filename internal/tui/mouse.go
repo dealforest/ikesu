@@ -21,11 +21,18 @@ func (a *App) onMouse(ev input.Event) {
 		return
 	}
 	if a.sidebarConfig.UI.MouseCapture != nil && !*a.sidebarConfig.UI.MouseCapture {
+		if a.fwd >= 0 && (ev.Kind == input.KindMouseMotion || ev.Kind == input.KindMouseRelease) {
+			a.forwardMouse(ev)
+			return
+		}
 		if pr, ok := a.paneAt(ev.Mouse.X, ev.Mouse.Y); ok {
 			if p := a.sup.Get(pr.ID); p != nil && p.Snapshot().MouseTracking {
 				switch ev.Kind {
 				case input.KindMouseClick:
-					a.forwardTo(pr.ID, uv.MouseClickEvent(ev.Mouse))
+					a.fwdStrip = 0
+					if a.forwardTo(pr.ID, uv.MouseClickEvent(ev.Mouse)) {
+						a.fwd = pr.ID
+					}
 				case input.KindMouseRelease:
 					a.forwardTo(pr.ID, uv.MouseReleaseEvent(ev.Mouse))
 				case input.KindMouseMotion:
@@ -153,7 +160,9 @@ func (a *App) click(m uv.Mouse) {
 				a.exec(model.CmdFocusPane{Pane: pr.ID})
 				a.fwd = pr.ID
 				a.fwdStrip = m.Mod
-				a.forwardTo(pr.ID, uv.MouseClickEvent(m))
+				if !a.forwardTo(pr.ID, uv.MouseClickEvent(m)) {
+					a.fwd = -1
+				}
 				return
 			}
 			a.openPaneMenu(m.X, m.Y, pr.ID)
@@ -171,7 +180,8 @@ func (a *App) click(m uv.Mouse) {
 	if a.actionBarHit(m) {
 		return
 	}
-	if l := ws.ActiveLayout(); l != nil {
+	if tab := ws.TabRef(); tab != nil && tab.Layout != nil && tab.Zoomed == 0 {
+		l := tab.Layout
 		if b := l.SplitBorderAt(m.X, m.Y, area); b != nil {
 			grab := b.Pos - m.X
 			if b.Direction == layout.Horizontal {
@@ -242,8 +252,9 @@ func (a *App) click(m uv.Mouse) {
 		// Mouse-reporting panes receive all four events; no menu gesture.
 		a.dblMenu = false
 		a.fwdStrip = 0
-		a.forwardTo(pr.ID, uv.MouseClickEvent(m))
-		a.fwd = pr.ID
+		if a.forwardTo(pr.ID, uv.MouseClickEvent(m)) {
+			a.fwd = pr.ID
+		}
 		return
 	}
 	if m.Mod != 0 {
@@ -252,13 +263,7 @@ func (a *App) click(m uv.Mouse) {
 	if a.sidebarConfig.UI.CopyOnSelect != nil && !*a.sidebarConfig.UI.CopyOnSelect {
 		return
 	}
-	off := a.scroll[pr.ID]
-	a.sel = &selState{
-		pane: pr.ID,
-		ax:   m.X - inner.X, ay: viewTop(p, off, inner.H) + m.Y - inner.Y,
-		hx: m.X - inner.X, hy: viewTop(p, off, inner.H) + m.Y - inner.Y,
-		inner: inner, scrollAt: off,
-	}
+	a.beginSelection(p, inner, m)
 	// Two same-cell left clicks within 500ms (down+up completed) open the
 	// pane menu on the second release (SPEC G1 pane menu). A click that
 	// drags into a selection never opens the menu.
@@ -569,22 +574,23 @@ func (a *App) wheel(m uv.Mouse) {
 
 // hostScroll moves a pane's host scrollback by three lines per notch.
 func (a *App) hostScroll(pid, scrollN int, up bool) {
-	a.showPaneScrollbar(pid)
 	off := a.scroll[pid]
 	if up {
-		off += a.sidebarConfig.MouseScrollLines()
-		if off > scrollN {
-			off = scrollN
-		}
-		a.scroll[pid] = off
+		off = min(off+a.sidebarConfig.MouseScrollLines(), scrollN)
 	} else {
 		off -= a.sidebarConfig.MouseScrollLines()
-		if off <= 0 {
-			delete(a.scroll, pid)
-		} else {
-			a.scroll[pid] = off
+	}
+	// A client that does not report painted viewports gives the release no
+	// frame to follow, so move the selection's view with the wheel instead.
+	if s := a.sel; s != nil && s.pane == pid {
+		if _, painted := a.paintedPaneViews[pid]; !painted {
+			if p := a.sup.Get(pid); p != nil {
+				a.scrollSelection(p, s, off)
+				return
+			}
 		}
 	}
+	a.setScrollOff(pid, off)
 }
 
 // --- drag states ---
@@ -619,18 +625,19 @@ func (a *App) selMouse(ev input.Event) {
 		a.sel = nil
 		return
 	}
-	top := viewTop(p, a.scroll[s.pane], s.inner.H)
-	hx := m.X - s.inner.X
-	hy := top + m.Y - s.inner.Y
-	if !a.st.PopupVisible() && !a.st.OverlayVisible() {
-		hy = top + min(max(m.Y-s.inner.Y, 0), s.inner.H-1)
+	top, inner := a.selectionTop(p, s), s.inner
+	popup := a.st.PopupVisible() || a.st.OverlayVisible()
+	if popup {
+		if view, ok := a.paintedPaneViews[s.pane]; ok {
+			top, inner = view.BufferTop, view.Inner
+		}
 	}
-	if hx < 0 {
-		hx = 0
+	hx := min(max(m.X-inner.X, 0), inner.W-1)
+	hy := m.Y - inner.Y
+	if !popup {
+		hy = min(max(hy, 0), inner.H-1)
 	}
-	if hx >= s.inner.W {
-		hx = s.inner.W - 1
-	}
+	hy += top
 	s.hx, s.hy = hx, hy
 	if hx != s.ax || hy != s.ay {
 		s.moved = true
@@ -698,47 +705,54 @@ func (a *App) forwardMouse(ev input.Event) {
 // When the app negotiated SGR 1016 the coordinates are delivered as
 // pixels: the center pixel of the target cell, computed from the pane's
 // pixel size when known, else the host cell size (SPEC G6).
-func (a *App) forwardTo(pid int, ev uv.MouseEvent) {
+func (a *App) forwardTo(pid int, ev uv.MouseEvent) bool {
 	p := a.sup.Get(pid)
 	if p == nil {
-		return
+		return false
 	}
-	r, ok := a.paneRect(pid)
+	if _, ok := a.paneRect(pid); !ok {
+		return false
+	}
+	view, ok := a.paintedPaneViews[pid]
 	if !ok {
-		return
+		view = a.livePaneViewport(p, a.innerRect(pid))
 	}
-	inner, _ := model.PaneContentRect(r, a.st.PaneBorders)
-	pixel := p.MousePixelMode()
-	cw, ch := a.cellW, a.cellH
-	if pixel {
-		if pw, ph := p.CellPixels(); pw > 0 && ph > 0 {
-			cw, ch = pw, ph
+	m := ev.Mouse()
+	x, y := m.X-view.Inner.X, m.Y-view.Inner.Y+view.ScreenTop
+	valid := pointIn(m.X, m.Y, view.Inner) && x < view.Cols && y >= 0 && y < view.Rows
+	if !valid {
+		if _, released := ev.(uv.MouseReleaseEvent); !released || a.fwd != pid {
+			return false
+		}
+		// Always end a forwarded press, even if the pointer left the pane.
+		x, y = min(max(x, 0), view.Cols-1), min(max(y, 0), view.Rows-1)
+	}
+	if a.fwd == pid {
+		m.Mod &^= a.fwdStrip
+	}
+	m.X, m.Y = x, y
+	cw, ch := view.CellW, view.CellH
+	if cw <= 0 || ch <= 0 {
+		cw, ch = a.cellW, a.cellH
+	}
+	if p.MousePixelMode() && cw > 0 && ch > 0 {
+		m = paneMouseCoord(layout.Rect{}, true, cw, ch, m)
+		if valid && a.mousePixel != nil {
+			m.X += (a.mousePixel.X%a.cellW)*cw/a.cellW - cw/2
+			m.Y += (a.mousePixel.Y%a.cellH)*ch/a.cellH - ch/2
 		}
 	}
-	if pixel && (cw <= 0 || ch <= 0) {
-		pixel = false
-	}
-	tr := func(m uv.Mouse) uv.Mouse {
-		if a.fwd == pid {
-			m.Mod &^= a.fwdStrip
-		}
-		if pixel && a.mousePixel != nil {
-			m.X = a.mousePixel.X - inner.X*a.cellW
-			m.Y = a.mousePixel.Y - inner.Y*a.cellH
-			return m
-		}
-		return paneMouseCoord(inner, pixel, cw, ch, m)
-	}
-	switch e := ev.(type) {
+	switch ev.(type) {
 	case uv.MouseClickEvent:
-		p.SendMouse(uv.MouseClickEvent(tr(uv.Mouse(e))))
+		p.SendMouse(uv.MouseClickEvent(m))
 	case uv.MouseReleaseEvent:
-		p.SendMouse(uv.MouseReleaseEvent(tr(uv.Mouse(e))))
+		p.SendMouse(uv.MouseReleaseEvent(m))
 	case uv.MouseMotionEvent:
-		p.SendMouse(uv.MouseMotionEvent(tr(uv.Mouse(e))))
+		p.SendMouse(uv.MouseMotionEvent(m))
 	case uv.MouseWheelEvent:
-		p.SendMouse(uv.MouseWheelEvent(tr(uv.Mouse(e))))
+		p.SendMouse(uv.MouseWheelEvent(m))
 	}
+	return true
 }
 
 func (a *App) rightClickPass(m uv.Mouse) bool {

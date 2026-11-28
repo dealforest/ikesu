@@ -57,7 +57,7 @@ func (m *machineClient) paint() error {
 		m.forms.Overlay(&in)
 	}
 	if m.idle != nil {
-		in.Dialog, in.Menu = m.idle.dialog(), nil
+		in.Dialog, in.Menu = m.idle.dialog(m.size.Cols), nil
 	}
 	if m.prune != nil {
 		in.Dialog, in.Menu = m.prune.dialog.Render(m.pruneArea()), nil

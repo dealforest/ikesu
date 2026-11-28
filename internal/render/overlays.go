@@ -245,6 +245,9 @@ func DialogRects(d *Dialog, area layout.Rect) (outer, cancel, confirm layout.Rec
 		confirm.X = x + 2
 		cancel = layout.Rect{}
 	}
+	if d.NoButtons {
+		confirm, cancel = layout.Rect{}, layout.Rect{}
+	}
 	return
 }
 
@@ -366,10 +369,12 @@ func drawDialog(f *Frame, d *Dialog, out *Output, area layout.Rect) {
 		f.Text(ix, iy+2+i, " "+d.Lines[i], uv.Style{Fg: f.Palette.Dim, Bg: f.Palette.PopupBG}, ix+iw)
 	}
 
-	if !d.ContinueOnly {
+	if !d.ContinueOnly && !d.NoButtons {
 		f.Text(cancel.X, cancel.Y, " esc "+d.Cancel+" ", uv.Style{Fg: f.Palette.Text, Bg: f.Palette.Surface, Attrs: uv.AttrBold}, cancel.X+cancel.W)
 	}
-	f.Text(confirm.X, confirm.Y, dialogConfirmLabel(d), uv.Style{Fg: f.Palette.SurfDim, Bg: f.Palette.Red, Attrs: uv.AttrBold}, confirm.X+confirm.W)
+	if !d.NoButtons {
+		f.Text(confirm.X, confirm.Y, dialogConfirmLabel(d), uv.Style{Fg: f.Palette.SurfDim, Bg: f.Palette.Red, Attrs: uv.AttrBold}, confirm.X+confirm.W)
+	}
 	out.DialogRect = outer
 	out.DialogCancel = cancel
 	out.DialogConfirm = confirm

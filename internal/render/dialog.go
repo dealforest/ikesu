@@ -5,6 +5,7 @@ type Dialog struct {
 	WorktreeCreate   bool
 	Checkout         string
 	ContinueOnly     bool
+	NoButtons        bool     // a progress box that takes no input draws no buttons
 	Actions          []string // explicit action rows with no default confirmation
 	RequiredLines    []string // action buttons need these lines to fit fully
 	MaxCols, MaxRows int      // client viewport, which can be smaller than the server snapshot

@@ -725,8 +725,15 @@ func runEndpointWithClock(session, version string, peer endpoint.Peer, clock gra
 
 	// Restore the saved session when session.json exists; otherwise start
 	// the initial shell. A corrupt file fails closed to a fresh state.
+	var releaseGuardPruning func()
 	if imported != nil {
-		if err := s.restoreLive(imported, apiSock); err != nil {
+		release, err := imported.holdGuardPruning()
+		if err == nil {
+			releaseGuardPruning = sync.OnceFunc(release)
+			defer releaseGuardPruning()
+			err = s.restoreLive(imported, apiSock)
+		}
+		if err != nil {
 			s.handedOff = true
 			s.sup.ReleaseHandoff()
 			s.cleanup()
@@ -754,15 +761,17 @@ func runEndpointWithClock(session, version string, peer endpoint.Peer, clock gra
 		close(appDone)
 	}()
 	if imported != nil {
+		var final handoffResult
 		if err := imported.Encoder.Encode(handoffResult{State: "running"}); err != nil {
 			s.handedOff = true
 			s.sup.ReleaseHandoff()
 			s.app.Do(s.app.RetireHandoff)
+		} else if err := imported.Control.SetReadDeadline(time.Now().Add(handoffFinalWait)); err == nil {
+			if err := imported.Decoder.Decode(&final); err != nil || final.State != "mail_input_times" {
+				final.MailInputTimes = nil
+			}
 		}
-		var final handoffResult
-		if err := imported.Decoder.Decode(&final); err != nil || final.State != "mail_input_times" {
-			final.MailInputTimes = nil
-		}
+		releaseGuardPruning()
 		s.sup.RestorePendingInputs(final.PendingInputs)
 		s.sup.RestoreMailInputTimes(final.MailInputTimes)
 		s.sup.RestoreIdleActivities(final.IdleActivities)
@@ -1098,6 +1107,8 @@ func (s *Server) attach(conn net.Conn) {
 		c.viewer.SetContinuousSidebarRows(endpoint.Allows(available, 1, hello.Methods, "sidebar_continuous"))
 		c.viewer.SetRightSidebarPlugins(endpoint.Allows(available, 1, hello.Methods, endpoint.RightSidebarPlugins) &&
 			endpoint.Allows(available, 1, s.endpointPeer.Methods, endpoint.RightSidebarPlugins))
+		c.viewer.SetSidebarPanelRules(endpoint.Allows(available, 1, hello.Methods, endpoint.SidebarPanelRules) &&
+			endpoint.Allows(available, 1, s.endpointPeer.Methods, endpoint.SidebarPanelRules))
 		if hello.Visible != nil && !*hello.Visible {
 			c.viewer.SetVisible(s.app, false)
 		}
@@ -1153,6 +1164,7 @@ func (s *Server) attach(conn net.Conn) {
 	defer s.dropConn(c)
 	pruneCtx, cancelPrune := context.WithCancel(context.Background())
 	defer cancelPrune()
+	var idleCancel context.CancelFunc // the running idle-pane memory sample
 	var pendingInput *clientMsg
 	var bufferedInputErr error
 	for {
@@ -1187,10 +1199,23 @@ func (s *Server) attach(conn net.Conn) {
 		case endpoint.PruneScan, endpoint.PruneExec:
 			s.pruneDisplayRequest(pruneCtx, c, m)
 		case "idle_panes":
+			// A newer request (the dialog reopened) or a disconnect stops the
+			// previous memory sample, so at most one ps runs per display.
+			if idleCancel != nil {
+				idleCancel()
+			}
+			idleCtx, cancel := context.WithCancel(pruneCtx)
+			idleCancel = cancel
+			request := m.IdleRequest
 			s.app.Do(func() {
 				list := c.viewer.IdlePanes(s.app)
 				list.ServerGeneration = s.generation
-				c.post(clientMsg{Type: "idle_panes_result", IdleRequest: m.IdleRequest, IdlePanes: &list})
+				roots := s.idlePaneRoots(list)
+				// One ps run outside the app loop; the list goes out either way.
+				go func() {
+					measureIdleMemory(idleCtx, roots, &list)
+					c.post(clientMsg{Type: "idle_panes_result", IdleRequest: request, IdlePanes: &list})
+				}()
 			})
 		case "idle_delete":
 			s.app.Do(func() {
